@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "syndata"
+version = "0.1.0"
+description = "Schema-driven synthetic data generator inspired by reasoning-first taxonomy coverage."
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.27.0",
+  "jsonschema>=4.22.0",
+  "jsonpath-ng>=1.6.1",
+  "numpy>=1.26.0",
+  "openai>=1.50.0",
+  "PyYAML>=6.0.1",
+  "scikit-learn>=1.4.0",
+  "sentence-transformers>=2.7.0",
+  "tqdm>=4.66.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "pytest-asyncio>=0.23.0",
+]
+
+[project.scripts]
+syndata = "syndata.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["syndata*"]

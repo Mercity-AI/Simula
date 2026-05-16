@@ -1,0 +1,1835 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Syndata Pipeline Explainer</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18202f;
+      --muted: #617089;
+      --bg: #f6f8fb;
+      --paper: #ffffff;
+      --line: #d9e0eb;
+      --blue: #2563eb;
+      --blue-soft: #dbeafe;
+      --green: #087f5b;
+      --green-soft: #dff7ec;
+      --coral: #c2410c;
+      --coral-soft: #ffedd5;
+      --violet: #6d28d9;
+      --violet-soft: #ede9fe;
+      --gold: #a16207;
+      --gold-soft: #fef3c7;
+      --shadow: 0 18px 48px rgba(25, 34, 52, 0.12);
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(120deg, rgba(219, 234, 254, 0.8), transparent 38%),
+        linear-gradient(240deg, rgba(255, 237, 213, 0.72), transparent 36%),
+        var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+
+    button, select {
+      color: inherit;
+      font: inherit;
+    }
+
+    .shell {
+      width: min(1440px, calc(100vw - 40px));
+      margin: 0 auto;
+    }
+
+    header {
+      padding: 34px 0 22px;
+    }
+
+    .topline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 750;
+    }
+
+    .mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 7px;
+      background:
+        linear-gradient(135deg, var(--blue), #0f766e 58%, var(--coral));
+      box-shadow: 0 10px 24px rgba(37, 99, 235, 0.2);
+    }
+
+    .mode-pill {
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.78);
+      border-radius: 999px;
+      padding: 7px 12px;
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    h1 {
+      max-width: 960px;
+      margin: 0;
+      font-size: clamp(32px, 5vw, 74px);
+      line-height: 0.96;
+      letter-spacing: 0;
+    }
+
+    .lede {
+      max-width: 880px;
+      margin: 18px 0 0;
+      color: #3d4b63;
+      font-size: clamp(17px, 2vw, 21px);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      gap: 22px;
+      align-items: start;
+      padding: 8px 0 42px;
+    }
+
+    nav {
+      position: sticky;
+      top: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.86);
+      box-shadow: var(--shadow);
+      padding: 12px;
+    }
+
+    .nav-title {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 760;
+      margin: 4px 4px 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .nav-btn {
+      width: 100%;
+      min-height: 42px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      padding: 9px 10px;
+      text-align: left;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .nav-btn:hover,
+    .nav-btn.active {
+      background: #eef4ff;
+    }
+
+    .nav-num {
+      width: 24px;
+      height: 24px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 999px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 760;
+      flex: 0 0 auto;
+    }
+
+    main {
+      display: grid;
+      gap: 22px;
+    }
+
+    section {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.9);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 20px 22px 16px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, #ffffff, #f8fafc);
+    }
+
+    .section-head h2 {
+      margin: 0;
+      font-size: 23px;
+      letter-spacing: 0;
+    }
+
+    .section-head p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      max-width: 820px;
+    }
+
+    .tag {
+      align-self: start;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 9px;
+      color: var(--muted);
+      background: var(--paper);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .content {
+      padding: 22px;
+    }
+
+    .hierarchy-wrap {
+      display: grid;
+      grid-template-columns: minmax(680px, 1.25fr) minmax(320px, 0.75fr);
+      gap: 18px;
+      align-items: start;
+      overflow-x: auto;
+    }
+
+    .hierarchy {
+      min-width: 680px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(180deg, rgba(37, 99, 235, 0.05), transparent 38%),
+        #ffffff;
+      padding: 18px;
+    }
+
+    .h-level {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      position: relative;
+    }
+
+    .h-level + .h-level {
+      margin-top: 34px;
+    }
+
+    .h-level + .h-level::before {
+      content: "";
+      position: absolute;
+      top: -25px;
+      left: 50%;
+      width: 2px;
+      height: 20px;
+      background: #c6d3e4;
+      transform: translateX(-50%);
+    }
+
+    .h-node {
+      min-width: 150px;
+      max-width: 210px;
+      min-height: 78px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px;
+      text-align: left;
+      cursor: pointer;
+      box-shadow: 0 10px 22px rgba(25, 34, 52, 0.08);
+      transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+    }
+
+    .h-node:hover,
+    .h-node.active {
+      transform: translateY(-2px);
+      border-color: var(--blue);
+      background: #f7fbff;
+    }
+
+    .h-node strong {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+
+    .h-node small {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .h-node.config { border-top: 4px solid var(--violet); }
+    .h-node.strategic { border-top: 4px solid var(--blue); }
+    .h-node.bulk { border-top: 4px solid var(--green); }
+    .h-node.critic { border-top: 4px solid var(--coral); }
+    .h-node.artifact { border-top: 4px solid var(--gold); }
+
+    .h-fan {
+      position: relative;
+    }
+
+    .h-fan::before {
+      content: "";
+      position: absolute;
+      top: -18px;
+      left: 14%;
+      right: 14%;
+      height: 2px;
+      background: #c6d3e4;
+    }
+
+    .h-fan .h-node::before {
+      content: "";
+      position: absolute;
+      top: -18px;
+      width: 2px;
+      height: 18px;
+      background: #c6d3e4;
+    }
+
+    .h-fan .h-node {
+      position: relative;
+    }
+
+    .h-detail {
+      position: sticky;
+      top: 16px;
+      border: 1px solid #bfdbfe;
+      border-radius: var(--radius);
+      background: #eff6ff;
+      padding: 16px;
+    }
+
+    .h-detail h3 {
+      margin: 0 0 8px;
+      font-size: 19px;
+    }
+
+    .h-detail p {
+      margin: 0 0 12px;
+      color: #31517c;
+    }
+
+    .h-detail pre {
+      max-height: 280px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+      padding: 16px;
+    }
+
+    .panel h3 {
+      margin: 0 0 8px;
+      font-size: 17px;
+    }
+
+    .panel p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .role {
+      min-height: 230px;
+      display: grid;
+      align-content: start;
+      gap: 11px;
+    }
+
+    .role .badge {
+      width: fit-content;
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    .strategic .badge { background: var(--blue-soft); color: var(--blue); }
+    .bulk .badge { background: var(--green-soft); color: var(--green); }
+    .critic .badge { background: var(--coral-soft); color: var(--coral); }
+
+    .mini-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .mini-item {
+      border-left: 3px solid var(--line);
+      padding-left: 10px;
+      color: #344258;
+      font-size: 14px;
+    }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(8, minmax(120px, 1fr));
+      gap: 10px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+
+    .step-card {
+      min-height: 118px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      padding: 12px;
+      cursor: pointer;
+      position: relative;
+      transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+    }
+
+    .step-card:hover,
+    .step-card.active {
+      transform: translateY(-2px);
+      border-color: rgba(37, 99, 235, 0.46);
+      box-shadow: 0 12px 28px rgba(37, 99, 235, 0.13);
+    }
+
+    .step-card b {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    .step-card span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .step-num {
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      border-radius: 999px;
+      background: var(--blue-soft);
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 10px;
+    }
+
+    .explain-box {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: 0.82fr 1.18fr;
+      gap: 16px;
+      align-items: start;
+    }
+
+    .callout {
+      border: 1px solid #bfdbfe;
+      border-radius: var(--radius);
+      background: #eff6ff;
+      padding: 16px;
+    }
+
+    .callout h3 {
+      margin: 0 0 8px;
+      font-size: 18px;
+    }
+
+    .callout p {
+      margin: 0;
+      color: #31517c;
+    }
+
+    pre {
+      margin: 0;
+      max-height: 430px;
+      overflow: auto;
+      border: 1px solid #d1d8e5;
+      border-radius: var(--radius);
+      background: #0f172a;
+      color: #e5edf8;
+      padding: 15px;
+      font-size: 12px;
+      line-height: 1.48;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    .tree-board {
+      display: grid;
+      grid-template-columns: minmax(280px, 0.8fr) minmax(360px, 1.2fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .tree-stage {
+      min-height: 560px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(90deg, rgba(37, 99, 235, 0.06), transparent 44%),
+        #fff;
+      padding: 18px;
+      overflow-x: auto;
+    }
+
+    .tree {
+      min-width: 610px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .node {
+      width: fit-content;
+      min-width: 180px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      padding: 9px 11px;
+      cursor: pointer;
+      box-shadow: 0 7px 16px rgba(25, 34, 52, 0.08);
+      transition: border-color 140ms ease, transform 140ms ease, background 140ms ease;
+    }
+
+    .node:hover,
+    .node.active {
+      transform: translateY(-1px);
+      border-color: var(--blue);
+      background: #f8fbff;
+    }
+
+    .node strong {
+      display: block;
+      font-size: 14px;
+    }
+
+    .node small {
+      color: var(--muted);
+    }
+
+    .children {
+      display: grid;
+      gap: 10px;
+      margin-left: 34px;
+      padding-left: 18px;
+      border-left: 2px solid #d7e1ee;
+    }
+
+    .branch-row {
+      display: flex;
+      gap: 14px;
+      align-items: start;
+    }
+
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .tab {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      padding: 7px 12px;
+      cursor: pointer;
+      color: #334155;
+    }
+
+    .tab.active {
+      border-color: var(--blue);
+      background: var(--blue-soft);
+      color: var(--blue);
+      font-weight: 760;
+    }
+
+    .compare {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .diagram-flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 10px;
+      align-items: stretch;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+
+    .flow-box {
+      min-height: 140px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      padding: 13px;
+      display: grid;
+      align-content: start;
+      gap: 8px;
+    }
+
+    .flow-box strong {
+      font-size: 15px;
+    }
+
+    .flow-box small {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+
+    .chip {
+      border-radius: 999px;
+      padding: 5px 8px;
+      background: #eef2f7;
+      color: #40506a;
+      font-size: 12px;
+    }
+
+    .chip.blue { background: var(--blue-soft); color: var(--blue); }
+    .chip.green { background: var(--green-soft); color: var(--green); }
+    .chip.coral { background: var(--coral-soft); color: var(--coral); }
+    .chip.gold { background: var(--gold-soft); color: var(--gold); }
+    .chip.violet { background: var(--violet-soft); color: var(--violet); }
+
+    details {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      overflow: hidden;
+    }
+
+    details + details { margin-top: 10px; }
+
+    summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 14px 16px;
+      font-weight: 760;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    summary::-webkit-details-marker { display: none; }
+    summary::after { content: "+"; color: var(--muted); }
+    details[open] summary::after { content: "-"; }
+
+    .detail-body {
+      padding: 0 16px 16px;
+      color: var(--muted);
+    }
+
+    .prompt-picker {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      gap: 16px;
+    }
+
+    .prompt-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .prompt-btn {
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      padding: 8px 10px;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .prompt-btn:hover,
+    .prompt-btn.active {
+      background: #f0f7ff;
+      border-color: var(--blue);
+    }
+
+    .footer-note {
+      padding: 4px 0 36px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 1080px) {
+      .layout,
+      .tree-board,
+      .explain-box,
+      .prompt-picker,
+      .hierarchy-wrap {
+        grid-template-columns: 1fr;
+      }
+
+      nav {
+        position: static;
+      }
+
+      .h-detail {
+        position: static;
+      }
+
+      .grid-3,
+      .grid-2,
+      .compare {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 680px) {
+      .shell { width: min(100vw - 24px, 1440px); }
+      .section-head {
+        display: block;
+      }
+      .tag {
+        display: inline-block;
+        margin-top: 12px;
+      }
+      .content,
+      .section-head {
+        padding-left: 16px;
+        padding-right: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="shell">
+    <div class="topline">
+      <div class="brand"><span class="mark"></span><span>Syndata Pipeline Explainer</span></div>
+      <div class="mode-pill">Standalone HTML · Example-driven · Interactive</div>
+    </div>
+    <h1>From dataset idea to final synthetic records</h1>
+    <p class="lede">This walkthrough uses one concrete e-commerce support-ticket example to explain model roles, taxonomy trees, sampling strategies, taxonomy mixes, meta-prompts, record generation, critique, and final trimming.</p>
+  </header>
+
+  <div class="shell layout">
+    <nav aria-label="Page sections">
+      <div class="nav-title">Jump To</div>
+      <button class="nav-btn active" data-target="hierarchy"><span class="nav-num">1</span><span>Hierarchy diagram</span></button>
+      <button class="nav-btn" data-target="map"><span class="nav-num">2</span><span>Whole pipeline</span></button>
+      <button class="nav-btn" data-target="roles"><span class="nav-num">3</span><span>Model roles</span></button>
+      <button class="nav-btn" data-target="taxonomy"><span class="nav-num">4</span><span>Taxonomy tree</span></button>
+      <button class="nav-btn" data-target="strategy"><span class="nav-num">5</span><span>Strategy vs mix</span></button>
+      <button class="nav-btn" data-target="prompts"><span class="nav-num">6</span><span>Prompt catalog</span></button>
+      <button class="nav-btn" data-target="row"><span class="nav-num">7</span><span>One row journey</span></button>
+      <button class="nav-btn" data-target="settings"><span class="nav-num">8</span><span>Config knobs</span></button>
+    </nav>
+
+    <main>
+      <section id="hierarchy">
+        <div class="section-head">
+          <div>
+            <h2>Hierarchical Diagram</h2>
+            <p>This is the whole system as a hierarchy: config at the top, planning below it, per-row generation below that, then saved artifacts and evaluation.</p>
+          </div>
+          <span class="tag">actual diagram · click nodes</span>
+        </div>
+        <div class="content">
+          <div class="hierarchy-wrap">
+            <div class="hierarchy" aria-label="Syndata hierarchical pipeline diagram">
+              <div class="h-level">
+                <button class="h-node config active" type="button" data-hnode="config">
+                  <strong>YAML Config</strong>
+                  <small>description, schema, model roles, taxonomy depth, target size</small>
+                </button>
+              </div>
+
+              <div class="h-level">
+                <button class="h-node strategic" type="button" data-hnode="taxonomy">
+                  <strong>Taxonomy Plan</strong>
+                  <small>coverage space built as one tree per factor</small>
+                </button>
+              </div>
+
+              <div class="h-level h-fan">
+                <button class="h-node strategic" type="button" data-hnode="factors">
+                  <strong>Factors</strong>
+                  <small>issue_type, urgency, customer_tone</small>
+                </button>
+                <button class="h-node strategic" type="button" data-hnode="nodes">
+                  <strong>Node Expansion</strong>
+                  <small>shipping → delayed_delivery, lost_package</small>
+                </button>
+                <button class="h-node strategic" type="button" data-hnode="strategies">
+                  <strong>Sampling Strategies</strong>
+                  <small>weighted recipes for useful combinations</small>
+                </button>
+              </div>
+
+              <div class="h-level">
+                <button class="h-node bulk" type="button" data-hnode="mix">
+                  <strong>Taxonomy Mix</strong>
+                  <small>exact sampled lineage for one row</small>
+                </button>
+              </div>
+
+              <div class="h-level h-fan">
+                <button class="h-node bulk" type="button" data-hnode="metaprompt">
+                  <strong>Meta-Prompt</strong>
+                  <small>turns lineage into a concrete generation instruction</small>
+                </button>
+                <button class="h-node bulk" type="button" data-hnode="complexify">
+                  <strong>Complexify</strong>
+                  <small>optional harder instruction based on complexity_ratio</small>
+                </button>
+                <button class="h-node bulk" type="button" data-hnode="record">
+                  <strong>Record Generation</strong>
+                  <small>actual JSON record or free-text output</small>
+                </button>
+              </div>
+
+              <div class="h-level h-fan">
+                <button class="h-node bulk" type="button" data-hnode="repair">
+                  <strong>JSON Repair</strong>
+                  <small>only if JSON parse/schema validation fails</small>
+                </button>
+                <button class="h-node critic" type="button" data-hnode="critique">
+                  <strong>Critic Loop</strong>
+                  <small>accept, reject, explain, refine</small>
+                </button>
+              </div>
+
+              <div class="h-level h-fan">
+                <button class="h-node artifact" type="button" data-hnode="raw">
+                  <strong>Raw JSONL</strong>
+                  <small>every attempted row, accepted or rejected</small>
+                </button>
+                <button class="h-node artifact" type="button" data-hnode="accepted">
+                  <strong>Accepted JSONL</strong>
+                  <small>rows that passed validation and critic</small>
+                </button>
+                <button class="h-node artifact" type="button" data-hnode="final">
+                  <strong>Final JSONL</strong>
+                  <small>deduped, coverage-aware trimmed dataset</small>
+                </button>
+                <button class="h-node critic" type="button" data-hnode="eval">
+                  <strong>Eval Report</strong>
+                  <small>coverage, dedupe, optional complexity/diversity</small>
+                </button>
+              </div>
+            </div>
+
+            <div class="h-detail">
+              <h3 id="hTitle">YAML Config</h3>
+              <p id="hText">The config is the root of the whole run. It decides the dataset description, whether output is JSON or text, which model role handles each job, how deep taxonomy expansion goes, and how many rows to generate.</p>
+              <pre><code id="hCode">description: Generate synthetic customer support tickets.
+schema: { ... }
+models:
+  strategic: { model: "..." }
+  bulk: { model: "..." }
+  critic: { model: "..." }</code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="map">
+        <div class="section-head">
+          <div>
+            <h2>Whole Pipeline Map</h2>
+            <p>Click a step to see what the code is trying to achieve, which model role is used, and what the LLM usually outputs.</p>
+          </div>
+          <span class="tag">description + schema → final JSONL</span>
+        </div>
+        <div class="content">
+          <div class="pipeline" id="pipeline"></div>
+          <div class="explain-box">
+            <div class="callout">
+              <h3 id="stepTitle">1. Load config</h3>
+              <p id="stepText">The YAML file is merged with defaults, validated, and converted into a Config object. This decides schema mode, model roles, taxonomy depth, target size, concurrency, and evaluation behavior.</p>
+            </div>
+            <pre><code id="stepCode"></code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="roles">
+        <div class="section-head">
+          <div>
+            <h2>Model Roles</h2>
+            <p>The roles are job labels. They can point to the same model in YAML, but the code uses them for different kinds of thinking.</p>
+          </div>
+          <span class="tag">strategic · bulk · critic</span>
+        </div>
+        <div class="content">
+          <div class="grid-3">
+            <div class="panel role strategic">
+              <span class="badge">strategic</span>
+              <h3>The planner</h3>
+              <p>Designs the coverage space before generation starts.</p>
+              <div class="mini-list">
+                <div class="mini-item">Discovers top-level factors like issue type, urgency, tone.</div>
+                <div class="mini-item">Expands taxonomy nodes into child categories.</div>
+                <div class="mini-item">Refines child lists to reduce duplication.</div>
+                <div class="mini-item">Creates sampling strategies from the taxonomy.</div>
+              </div>
+            </div>
+            <div class="panel role bulk">
+              <span class="badge">bulk</span>
+              <h3>The producer</h3>
+              <p>Turns sampled requirements into actual synthetic records.</p>
+              <div class="mini-list">
+                <div class="mini-item">Creates meta-prompts from a taxonomy mix.</div>
+                <div class="mini-item">Optionally complexifies a meta-prompt.</div>
+                <div class="mini-item">Generates JSON records or free-text outputs.</div>
+                <div class="mini-item">Repairs invalid JSON and refines rejected rows.</div>
+              </div>
+            </div>
+            <div class="panel role critic">
+              <span class="badge">critic</span>
+              <h3>The judge</h3>
+              <p>Checks quality and optional evaluation judgments.</p>
+              <div class="mini-list">
+                <div class="mini-item">Accepts or rejects a generated row semantically.</div>
+                <div class="mini-item">Explains why a row failed.</div>
+                <div class="mini-item">Optionally reassigns rows to taxonomy nodes.</div>
+                <div class="mini-item">Optionally scores relative complexity.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="taxonomy">
+        <div class="section-head">
+          <div>
+            <h2>Taxonomy Building</h2>
+            <p>A taxonomy is a set of trees. Each tree is one factor, meaning one axis of variation the dataset should cover.</p>
+          </div>
+          <span class="tag">tree per factor</span>
+        </div>
+        <div class="content">
+          <div class="tree-board">
+            <div>
+              <div class="tabs" id="factorTabs"></div>
+              <div class="callout">
+                <h3 id="treeTitle">issue_type</h3>
+                <p id="treeText">The problem being reported. Click nodes in the tree to see the JSON shape that gets stored.</p>
+              </div>
+              <div style="height: 14px"></div>
+              <details open>
+                <summary>What breadth-first expansion means</summary>
+                <div class="detail-body">
+                  First the model expands every root into level-1 children. Only after that does it expand those level-1 children into level-2 children. This keeps the taxonomy balanced instead of overdeveloping one branch early.
+                </div>
+              </details>
+              <details>
+                <summary>What best_of_n means</summary>
+                <div class="detail-body">
+                  For each node, the code can ask for several child proposals, combine them, then ask the model to refine the list. This gives the taxonomy critic more raw ideas to choose from.
+                </div>
+              </details>
+            </div>
+            <div class="tree-stage">
+              <div class="tree" id="tree"></div>
+            </div>
+          </div>
+          <div class="explain-box">
+            <div class="callout">
+              <h3>Selected node JSON</h3>
+              <p>Taxonomy nodes are plain JSON objects with name, description, level, path, and children.</p>
+            </div>
+            <pre><code id="nodeJson"></code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="strategy">
+        <div class="section-head">
+          <div>
+            <h2>Strategy vs Taxonomy Mix</h2>
+            <p>The strategy is the reusable sampling recipe. The taxonomy mix is the exact sampled combination for one generated row.</p>
+          </div>
+          <span class="tag">recipe vs one sample</span>
+        </div>
+        <div class="content">
+          <div class="compare">
+            <div class="panel">
+              <h3>Sampling strategy</h3>
+              <p>A weighted policy that says which taxonomy roots/subtrees should be sampled together.</p>
+              <div style="height: 12px"></div>
+              <pre><code>{
+  "id": "high_urgency_shipping",
+  "description": "Focus on urgent shipping problems.",
+  "taxonomy_roots": [
+    "issue_type.shipping",
+    "urgency.high",
+    "customer_tone"
+  ],
+  "weight": 0.3
+}</code></pre>
+            </div>
+            <div class="panel">
+              <h3>Taxonomy mix</h3>
+              <p>The actual per-row sampled nodes after the strategy is chosen.</p>
+              <div style="height: 12px"></div>
+              <pre><code>[
+  {
+    "factor": "issue_type",
+    "node": "delayed_delivery",
+    "path": ["issue_type", "shipping", "delayed_delivery"]
+  },
+  {
+    "factor": "urgency",
+    "node": "high",
+    "path": ["urgency", "high"]
+  },
+  {
+    "factor": "customer_tone",
+    "node": "angry",
+    "path": ["customer_tone", "angry"]
+  }
+]</code></pre>
+            </div>
+          </div>
+          <div style="height: 16px"></div>
+          <div class="diagram-flow">
+            <div class="flow-box">
+              <strong>Full taxonomy</strong>
+              <small>All possible factors and category trees.</small>
+              <div class="chip-row"><span class="chip blue">issue_type</span><span class="chip green">urgency</span><span class="chip coral">tone</span></div>
+            </div>
+            <div class="flow-box">
+              <strong>Pick strategy</strong>
+              <small>Weighted random choice.</small>
+              <div class="chip-row"><span class="chip gold">high_urgency_shipping</span></div>
+            </div>
+            <div class="flow-box">
+              <strong>Apply roots</strong>
+              <small>Limit sampling to selected factor paths.</small>
+              <div class="chip-row"><span class="chip blue">issue_type.shipping</span><span class="chip green">urgency.high</span></div>
+            </div>
+            <div class="flow-box">
+              <strong>Sample descendants</strong>
+              <small>Choose concrete nodes.</small>
+              <div class="chip-row"><span class="chip blue">delayed_delivery</span><span class="chip coral">angry</span></div>
+            </div>
+            <div class="flow-box">
+              <strong>Save mix</strong>
+              <small>Attach lineage to the row forever.</small>
+              <div class="chip-row"><span class="chip violet">taxonomy_mix</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="prompts">
+        <div class="section-head">
+          <div>
+            <h2>Prompt Catalog</h2>
+            <p>These are simplified but structurally faithful examples of the prompts used throughout the pipeline.</p>
+          </div>
+          <span class="tag">input → required JSON output</span>
+        </div>
+        <div class="content">
+          <div class="prompt-picker">
+            <div class="prompt-list" id="promptList"></div>
+            <pre><code id="promptCode"></code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="row">
+        <div class="section-head">
+          <div>
+            <h2>One Row Journey</h2>
+            <p>This is the per-record path: sampled lineage becomes a meta-prompt, the meta-prompt becomes a record, and the critic decides whether it survives.</p>
+          </div>
+          <span class="tag">one generated candidate</span>
+        </div>
+        <div class="content">
+          <div class="diagram-flow">
+            <div class="flow-box">
+              <strong>Strategy</strong>
+              <small>high_urgency_shipping</small>
+              <div class="chip-row"><span class="chip gold">weight 0.3</span></div>
+            </div>
+            <div class="flow-box">
+              <strong>Mix</strong>
+              <small>delayed_delivery + high + angry</small>
+              <div class="chip-row"><span class="chip blue">lineage</span></div>
+            </div>
+            <div class="flow-box">
+              <strong>Meta-prompt</strong>
+              <small>Concrete instruction for this one row.</small>
+              <div class="chip-row"><span class="chip green">bulk model</span></div>
+            </div>
+            <div class="flow-box">
+              <strong>Record</strong>
+              <small>JSON matching the schema.</small>
+              <div class="chip-row"><span class="chip violet">schema-valid</span></div>
+            </div>
+            <div class="flow-box">
+              <strong>Critic</strong>
+              <small>Accept, reject, or refine.</small>
+              <div class="chip-row"><span class="chip coral">accepted</span></div>
+            </div>
+          </div>
+          <div style="height: 16px"></div>
+          <pre><code>{
+  "id": "item-17-a8c31f2b",
+  "attempt_index": 17,
+  "record": {
+    "customer_message": "I paid extra for express shipping and my order is still not here three days after the promised date. I need this resolved today or I want a refund.",
+    "category": "shipping_delay",
+    "urgency": "high"
+  },
+  "output_format": "json",
+  "taxonomy_mix": [
+    {
+      "factor": "issue_type",
+      "node": "delayed_delivery",
+      "level": 2,
+      "path": ["issue_type", "shipping", "delayed_delivery"]
+    },
+    {
+      "factor": "urgency",
+      "node": "high",
+      "level": 1,
+      "path": ["urgency", "high"]
+    },
+    {
+      "factor": "customer_tone",
+      "node": "angry",
+      "level": 1,
+      "path": ["customer_tone", "angry"]
+    }
+  ],
+  "strategy_id": "high_urgency_shipping",
+  "meta_prompt": "Create a high-urgency support ticket from an angry customer whose express-shipping order is three days late and who wants an immediate refund or replacement.",
+  "complexified": true,
+  "generator_model": "openai-compatible-model",
+  "critic_verdicts": [
+    {
+      "verdict": "accept",
+      "explanation": "The row matches delayed delivery, high urgency, angry tone, and the schema."
+    }
+  ],
+  "schema_valid": true,
+  "accepted": true,
+  "rejection_reason": null,
+  "created_at": "2026-04-28T00:00:00+00:00"
+}</code></pre>
+        </div>
+      </section>
+
+      <section id="settings">
+        <div class="section-head">
+          <div>
+            <h2>Config Knobs And Current Limits</h2>
+            <p>Some behaviors are user-configurable today. A few reasonable knobs, like dedupe n-gram size and threshold, are currently hardcoded.</p>
+          </div>
+          <span class="tag">what users can tune</span>
+        </div>
+        <div class="content">
+          <div class="grid-2">
+            <div class="panel">
+              <h3>Configurable now</h3>
+              <div class="mini-list">
+                <div class="mini-item"><code>taxonomy.depth</code>: how many levels each factor tree gets.</div>
+                <div class="mini-item"><code>taxonomy.best_of_n</code>: how many raw child proposals are generated before refinement.</div>
+                <div class="mini-item"><code>taxonomy.children_per_node</code>: requested child count per expansion.</div>
+                <div class="mini-item"><code>generation.complexity_ratio</code>: probability that a row's meta-prompt gets complexified.</div>
+                <div class="mini-item"><code>generation.overgenerate_ratio</code>: how many extra attempts to make before final trimming.</div>
+                <div class="mini-item"><code>evaluation.dedupe</code>: whether dedupe runs.</div>
+              </div>
+            </div>
+            <div class="panel">
+              <h3>Hardcoded today</h3>
+              <div class="mini-list">
+                <div class="mini-item">Dedupe uses 13-gram overlap by default.</div>
+                <div class="mini-item">Dedupe threshold defaults to 0.8 Jaccard similarity.</div>
+                <div class="mini-item">JSON repair currently gets one tightly scoped repair attempt.</div>
+                <div class="mini-item">Coverage-aware trimming greedily maximizes new taxonomy paths.</div>
+              </div>
+              <div style="height: 12px"></div>
+              <pre><code># Possible future config shape:
+evaluation:
+  dedupe: true
+  dedupe_ngram_size: 13
+  dedupe_threshold: 0.8</code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="footer-note">
+        Built as a static file. No external scripts, no API calls, no model calls.
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const hierarchyDetails = {
+      config: {
+        title: "YAML Config",
+        text: "The config is the root of the whole run. It decides the dataset description, whether output is JSON or text, which model role handles each job, how deep taxonomy expansion goes, and how many rows to generate.",
+        code: `description: Generate synthetic customer support tickets.
+schema: { ... }
+models:
+  strategic: { model: "..." }
+  bulk: { model: "..." }
+  critic: { model: "..." }`
+      },
+      taxonomy: {
+        title: "Taxonomy Plan",
+        text: "The taxonomy is the planned coverage space. It is not one row. It is the map of what kinds of rows should exist.",
+        code: `taxonomy.json
+{
+  "description": "Generate synthetic customer support tickets...",
+  "factors": [
+    { "name": "issue_type", "children": [...] },
+    { "name": "urgency", "children": [...] },
+    { "name": "customer_tone", "children": [...] }
+  ]
+}`
+      },
+      factors: {
+        title: "Factors",
+        text: "A factor is one axis of variation. Each factor becomes its own tree. For support tickets, useful factors are issue type, urgency, and customer tone.",
+        code: `{
+  "factors": [
+    {"name": "issue_type", "description": "The problem being reported"},
+    {"name": "urgency", "description": "How time-sensitive it is"},
+    {"name": "customer_tone", "description": "How the customer sounds"}
+  ]
+}`
+      },
+      nodes: {
+        title: "Node Expansion",
+        text: "The strategic model expands a factor tree breadth-first. It first makes level-1 children, then expands those into level-2 children.",
+        code: `issue_type
+  shipping
+    delayed_delivery
+    lost_package
+  payment
+    double_charge
+    refund_pending
+
+Node JSON:
+{
+  "name": "delayed_delivery",
+  "level": 2,
+  "path": ["issue_type", "shipping", "delayed_delivery"]
+}`
+      },
+      strategies: {
+        title: "Sampling Strategies",
+        text: "A strategy is a reusable recipe. It tells the sampler which taxonomy roots or subtrees should be combined more often.",
+        code: `{
+  "id": "high_urgency_shipping",
+  "taxonomy_roots": [
+    "issue_type.shipping",
+    "urgency.high",
+    "customer_tone"
+  ],
+  "weight": 0.3
+}`
+      },
+      mix: {
+        title: "Taxonomy Mix",
+        text: "A mix is the exact sampled lineage for one row. Strategy is the recipe; mix is the concrete sampled combination.",
+        code: `[
+  {"factor": "issue_type", "node": "delayed_delivery"},
+  {"factor": "urgency", "node": "high"},
+  {"factor": "customer_tone", "node": "angry"}
+]`
+      },
+      metaprompt: {
+        title: "Meta-Prompt",
+        text: "The bulk model converts the structured mix into a natural-language instruction that is specific enough to generate a good record.",
+        code: `{
+  "meta_prompts": [
+    "Create a high-urgency support ticket from an angry customer whose express-shipping order is three days late.",
+    "Generate an urgent complaint about tracking not updating after the delivery deadline."
+  ]
+}`
+      },
+      complexify: {
+        title: "Complexify",
+        text: "Based on generation.complexity_ratio, some meta-prompts are made harder while preserving the sampled requirements.",
+        code: `Before:
+Create a high-urgency ticket about delayed delivery.
+
+After:
+Create a high-urgency ticket where the customer paid for express shipping, tracking has not updated for four days, and the item is needed tomorrow.`
+      },
+      record: {
+        title: "Record Generation",
+        text: "The bulk model creates the actual output. In schema mode, this must be JSON that validates against the configured schema.",
+        code: `{
+  "customer_message": "I paid extra for express shipping and my order is still not here three days after the promised date.",
+  "category": "shipping_delay",
+  "urgency": "high"
+}`
+      },
+      repair: {
+        title: "JSON Repair",
+        text: "If the generated JSON does not parse or fails schema validation, the bulk model gets one narrow repair prompt.",
+        code: `Bad response:
+Here is the ticket: urgency is very high...
+
+Repair prompt asks:
+Return a corrected JSON record only.
+
+Repaired:
+{"customer_message": "...", "category": "shipping_delay", "urgency": "high"}`
+      },
+      critique: {
+        title: "Critic Loop",
+        text: "The critic checks whether the generated row actually satisfies the meta-prompt. If rejected, the bulk model refines it and the critic checks again.",
+        code: `{
+  "verdict": "reject",
+  "explanation": "The row is about shipping, but does not show high urgency."
+}`
+      },
+      raw: {
+        title: "dataset.raw.jsonl",
+        text: "Raw contains every attempt. Accepted rows, rejected rows, and error rows all remain visible for debugging.",
+        code: `{"id":"item-0-...","accepted":true,...}
+{"id":"item-1-...","accepted":false,"rejection_reason":"...",...}`
+      },
+      accepted: {
+        title: "dataset.accepted.jsonl",
+        text: "Accepted contains only rows that passed schema validation and semantic critique.",
+        code: `{"id":"item-0-...","accepted":true,"schema_valid":true,...}`
+      },
+      final: {
+        title: "dataset.final.jsonl",
+        text: "Final is built from accepted rows after dedupe and coverage-aware trimming. It tries to preserve rows that cover more unseen taxonomy paths.",
+        code: `accepted rows
+  ↓ dedupe
+  ↓ coverage-aware trim to target_size
+dataset.final.jsonl`
+      },
+      eval: {
+        title: "eval_report.json",
+        text: "Evaluation is separate from generation. It can report dedupe removals, taxonomy coverage, optional reassignment coverage, diversity, and complexity.",
+        code: `{
+  "count": 100,
+  "coverage": {
+    "issue_type": {
+      "2": {"covered": 8, "total": 10, "ratio": 0.8}
+    }
+  }
+}`
+      }
+    };
+
+    const hTitle = document.getElementById("hTitle");
+    const hText = document.getElementById("hText");
+    const hCode = document.getElementById("hCode");
+
+    function selectHierarchyNode(key) {
+      const detail = hierarchyDetails[key];
+      hTitle.textContent = detail.title;
+      hText.textContent = detail.text;
+      hCode.textContent = detail.code;
+      document.querySelectorAll(".h-node").forEach(node => {
+        node.classList.toggle("active", node.dataset.hnode === key);
+      });
+    }
+
+    document.querySelectorAll(".h-node").forEach(node => {
+      node.addEventListener("click", () => selectHierarchyNode(node.dataset.hnode));
+    });
+
+    const pipelineSteps = [
+      {
+        title: "1. Load config",
+        short: "Merge YAML with defaults.",
+        text: "The YAML file is merged with defaults, validated, and converted into a Config object. This decides schema mode, model roles, taxonomy depth, target size, concurrency, and evaluation behavior.",
+        code: `project:
+  name: support_tickets
+  output_dir: runs/support_tickets
+  seed: 42
+
+description: Generate synthetic customer support tickets for an e-commerce company.
+
+generation:
+  target_size: 100
+  overgenerate_ratio: 1.3
+  complexity_ratio: 0.3`
+      },
+      {
+        title: "2. Discover factors",
+        short: "Find coverage axes.",
+        text: "The strategic model identifies the major axes of variation. Each factor becomes one taxonomy tree.",
+        code: `Prompt asks:
+Identify 3-6 prime factors of variation.
+
+LLM outputs:
+{
+  "factors": [
+    {"name": "issue_type", "description": "The customer problem being reported"},
+    {"name": "urgency", "description": "How time-sensitive the issue is"},
+    {"name": "customer_tone", "description": "The customer's emotional style"}
+  ]
+}`
+      },
+      {
+        title: "3. Expand taxonomy",
+        short: "Build trees breadth-first.",
+        text: "For each factor, the strategic model expands nodes into children. It expands level 1 across the tree, then level 2, and so on.",
+        code: `issue_type
+  shipping
+    delayed_delivery
+    lost_package
+  payment
+    double_charge
+    refund_pending
+
+Each node stores:
+{
+  "name": "delayed_delivery",
+  "level": 2,
+  "path": ["issue_type", "shipping", "delayed_delivery"],
+  "children": []
+}`
+      },
+      {
+        title: "4. Create strategies",
+        short: "Make sampling recipes.",
+        text: "The strategic model creates weighted policies for sampling useful parts of the taxonomy together.",
+        code: `{
+  "id": "high_urgency_shipping",
+  "taxonomy_roots": [
+    "issue_type.shipping",
+    "urgency.high",
+    "customer_tone"
+  ],
+  "weight": 0.3
+}`
+      },
+      {
+        title: "5. Sample mix",
+        short: "Choose row lineage.",
+        text: "For one attempt, the code chooses a strategy and samples concrete nodes from the matching taxonomy subtrees.",
+        code: `[
+  {"factor": "issue_type", "node": "delayed_delivery"},
+  {"factor": "urgency", "node": "high"},
+  {"factor": "customer_tone", "node": "angry"}
+]`
+      },
+      {
+        title: "6. Make meta-prompt",
+        short: "Turn lineage into instruction.",
+        text: "The bulk model turns the sampled taxonomy mix into concrete instructions for generating one record.",
+        code: `{
+  "meta_prompts": [
+    "Create a high-urgency support ticket from an angry customer whose express-shipping order is three days late.",
+    "Generate an urgent complaint about tracking not updating after the delivery deadline."
+  ]
+}`
+      },
+      {
+        title: "7. Generate and critique",
+        short: "Make, validate, judge.",
+        text: "The bulk model generates the record. JSON output is validated and optionally repaired. The critic model accepts or rejects the result; rejected rows may be refined.",
+        code: `Generated record:
+{
+  "customer_message": "I paid extra for express shipping...",
+  "category": "shipping_delay",
+  "urgency": "high"
+}
+
+Critic:
+{
+  "verdict": "accept",
+  "explanation": "Matches the sampled requirements and schema."
+}`
+      },
+      {
+        title: "8. Finalize dataset",
+        short: "Dedupe and trim.",
+        text: "Accepted rows are deduped, then coverage-aware trimming chooses rows that add the most unseen taxonomy paths.",
+        code: `Artifacts:
+dataset.raw.jsonl       every attempt
+dataset.accepted.jsonl  accepted rows
+dataset.final.jsonl     deduped and coverage-trimmed rows
+eval_report.json        evaluation output`
+      }
+    ];
+
+    const taxonomyData = {
+      issue_type: {
+        description: "The problem being reported.",
+        tree: {
+          name: "issue_type",
+          description: "The customer problem being reported",
+          level: 0,
+          path: ["issue_type"],
+          children: [
+            {
+              name: "shipping",
+              description: "Delivery, address, tracking, or carrier issues",
+              level: 1,
+              path: ["issue_type", "shipping"],
+              children: [
+                { name: "delayed_delivery", description: "The order is late or missed the expected date", level: 2, path: ["issue_type", "shipping", "delayed_delivery"], children: [] },
+                { name: "lost_package", description: "Tracking suggests the package is missing", level: 2, path: ["issue_type", "shipping", "lost_package"], children: [] },
+                { name: "tracking_stalled", description: "Tracking has not updated for several days", level: 2, path: ["issue_type", "shipping", "tracking_stalled"], children: [] }
+              ]
+            },
+            {
+              name: "payment",
+              description: "Checkout, charge, billing, or refund issues",
+              level: 1,
+              path: ["issue_type", "payment"],
+              children: [
+                { name: "double_charge", description: "The customer was charged more than once", level: 2, path: ["issue_type", "payment", "double_charge"], children: [] },
+                { name: "refund_pending", description: "A refund has not arrived yet", level: 2, path: ["issue_type", "payment", "refund_pending"], children: [] }
+              ]
+            },
+            {
+              name: "product_quality",
+              description: "Damaged, defective, incorrect, or missing products",
+              level: 1,
+              path: ["issue_type", "product_quality"],
+              children: [
+                { name: "damaged_item", description: "The product arrived broken or unusable", level: 2, path: ["issue_type", "product_quality", "damaged_item"], children: [] },
+                { name: "wrong_item", description: "The delivered product does not match the order", level: 2, path: ["issue_type", "product_quality", "wrong_item"], children: [] }
+              ]
+            }
+          ]
+        }
+      },
+      urgency: {
+        description: "How time-sensitive the issue is.",
+        tree: {
+          name: "urgency",
+          description: "How quickly the customer needs resolution",
+          level: 0,
+          path: ["urgency"],
+          children: [
+            { name: "low", description: "Can be handled later without serious impact", level: 1, path: ["urgency", "low"], children: [] },
+            { name: "medium", description: "Needs attention but is not immediately critical", level: 1, path: ["urgency", "medium"], children: [] },
+            { name: "high", description: "Requires immediate help or has a near deadline", level: 1, path: ["urgency", "high"], children: [] }
+          ]
+        }
+      },
+      customer_tone: {
+        description: "The emotional style of the customer's message.",
+        tree: {
+          name: "customer_tone",
+          description: "How the customer sounds in the message",
+          level: 0,
+          path: ["customer_tone"],
+          children: [
+            { name: "calm", description: "Polite and composed", level: 1, path: ["customer_tone", "calm"], children: [] },
+            { name: "confused", description: "Uncertain and asking for clarification", level: 1, path: ["customer_tone", "confused"], children: [] },
+            { name: "angry", description: "Upset, impatient, or confrontational", level: 1, path: ["customer_tone", "angry"], children: [] }
+          ]
+        }
+      }
+    };
+
+    const prompts = [
+      {
+        name: "factor_prompt",
+        role: "strategic",
+        code: `Dataset description:
+Generate synthetic customer support tickets for an e-commerce company.
+
+Identify 3-6 prime factors of variation that should be covered when generating this dataset.
+Return JSON:
+{"factors": [{"name": "...", "description": "..."}]}`
+      },
+      {
+        name: "expand_prompt",
+        role: "strategic",
+        code: `Dataset description:
+Generate synthetic customer support tickets...
+
+Factor:
+{"name": "issue_type", "description": "The customer problem being reported"}
+
+Current node:
+{"name": "shipping", "level": 1, "path": ["issue_type", "shipping"]}
+
+Expansion plan:
+Expand into concrete customer-facing scenarios.
+
+Propose 4 useful, non-overlapping child nodes.
+Return JSON:
+{"children": [{"name": "...", "description": "..."}]}`
+      },
+      {
+        name: "strategy_prompt",
+        role: "strategic",
+        code: `Dataset description:
+Generate synthetic customer support tickets...
+
+Taxonomy:
+{ ...full taxonomy tree... }
+
+Create 2-5 sampling strategies. Each strategy lists compatible taxonomy roots and a weight.
+Return JSON:
+{"strategies": [{"id": "general", "description": "...", "taxonomy_roots": ["..."], "weight": 1.0}]}`
+      },
+      {
+        name: "meta_prompt_prompt",
+        role: "bulk",
+        code: `Dataset description:
+Generate synthetic customer support tickets...
+
+Output JSON Schema:
+{ ...schema... }
+
+Sampled taxonomy requirements:
+[
+  {"factor": "issue_type", "node": "delayed_delivery"},
+  {"factor": "urgency", "node": "high"},
+  {"factor": "customer_tone", "node": "angry"}
+]
+
+Generate 3 diverse meta-prompts. Each meta-prompt should tell a generator exactly what record to create.
+Return JSON:
+{"meta_prompts": ["...", "..."]}`
+      },
+      {
+        name: "complexify_prompt",
+        role: "bulk",
+        code: `Dataset description:
+Generate synthetic customer support tickets...
+
+Meta-prompt:
+Create a high-urgency support ticket about delayed delivery.
+
+Make this meta-prompt more complex while preserving the original requirements.
+Return JSON:
+{"meta_prompt": "..."}`
+      },
+      {
+        name: "generate_record_prompt",
+        role: "bulk",
+        code: `Dataset description:
+Generate synthetic customer support tickets...
+
+Output JSON Schema:
+{ ...schema... }
+
+Meta-prompt:
+Create a high-urgency support ticket from an angry customer whose express-shipping order is three days late.
+
+Generate exactly one synthetic data record matching the schema. Return the record as JSON only.`
+      },
+      {
+        name: "critique_prompt",
+        role: "critic",
+        code: `Dataset description:
+Generate synthetic customer support tickets...
+
+Schema:
+{ ...schema... }
+
+Meta-prompt:
+Create a high-urgency support ticket from an angry customer...
+
+Generated record:
+{"customer_message": "...", "category": "shipping_delay", "urgency": "high"}
+
+Does the record satisfy the meta-prompt and schema intent? Explain briefly.
+Return JSON:
+{"verdict": "accept" | "reject", "explanation": "..."}`
+      },
+      {
+        name: "refine_record_prompt",
+        role: "bulk",
+        code: `Schema:
+{ ...schema... }
+
+Meta-prompt:
+Create a high-urgency support ticket from an angry customer...
+
+Rejected record:
+{"customer_message": "...", "category": "shipping_delay", "urgency": "medium"}
+
+Critique:
+The row should show high urgency.
+
+Revise the record to satisfy the meta-prompt and schema. Return JSON only.`
+      }
+    ];
+
+    const pipeline = document.getElementById("pipeline");
+    const stepTitle = document.getElementById("stepTitle");
+    const stepText = document.getElementById("stepText");
+    const stepCode = document.getElementById("stepCode");
+
+    function selectStep(index) {
+      const step = pipelineSteps[index];
+      stepTitle.textContent = step.title;
+      stepText.textContent = step.text;
+      stepCode.textContent = step.code;
+      document.querySelectorAll(".step-card").forEach((card, idx) => {
+        card.classList.toggle("active", idx === index);
+      });
+    }
+
+    pipelineSteps.forEach((step, index) => {
+      const card = document.createElement("button");
+      card.className = "step-card";
+      card.type = "button";
+      card.innerHTML = `<span class="step-num">${index + 1}</span><b>${step.title.replace(/^\d+\.\s*/, "")}</b><span>${step.short}</span>`;
+      card.addEventListener("click", () => selectStep(index));
+      pipeline.appendChild(card);
+    });
+    selectStep(0);
+
+    const factorTabs = document.getElementById("factorTabs");
+    const tree = document.getElementById("tree");
+    const treeTitle = document.getElementById("treeTitle");
+    const treeText = document.getElementById("treeText");
+    const nodeJson = document.getElementById("nodeJson");
+
+    function nodeToDisplayJson(node) {
+      return JSON.stringify({
+        name: node.name,
+        description: node.description,
+        level: node.level,
+        path: node.path,
+        children: node.children
+      }, null, 2);
+    }
+
+    function renderNode(node) {
+      const wrap = document.createElement("div");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "node";
+      button.innerHTML = `<strong>${node.name}</strong><small>level ${node.level} · ${node.path.join(" / ")}</small>`;
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".node").forEach(n => n.classList.remove("active"));
+        button.classList.add("active");
+        nodeJson.textContent = nodeToDisplayJson(node);
+      });
+      wrap.appendChild(button);
+      if (node.children && node.children.length) {
+        const children = document.createElement("div");
+        children.className = "children";
+        node.children.forEach(child => children.appendChild(renderNode(child)));
+        wrap.appendChild(children);
+      }
+      return wrap;
+    }
+
+    function renderFactor(key) {
+      const data = taxonomyData[key];
+      treeTitle.textContent = key;
+      treeText.textContent = data.description;
+      tree.innerHTML = "";
+      tree.appendChild(renderNode(data.tree));
+      nodeJson.textContent = nodeToDisplayJson(data.tree);
+      document.querySelectorAll(".tab").forEach(tab => {
+        tab.classList.toggle("active", tab.dataset.factor === key);
+      });
+    }
+
+    Object.keys(taxonomyData).forEach(key => {
+      const tab = document.createElement("button");
+      tab.type = "button";
+      tab.className = "tab";
+      tab.dataset.factor = key;
+      tab.textContent = key;
+      tab.addEventListener("click", () => renderFactor(key));
+      factorTabs.appendChild(tab);
+    });
+    renderFactor("issue_type");
+
+    const promptList = document.getElementById("promptList");
+    const promptCode = document.getElementById("promptCode");
+
+    function selectPrompt(index) {
+      promptCode.textContent = prompts[index].code;
+      document.querySelectorAll(".prompt-btn").forEach((button, idx) => {
+        button.classList.toggle("active", idx === index);
+      });
+    }
+
+    prompts.forEach((prompt, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "prompt-btn";
+      button.innerHTML = `<strong>${prompt.name}</strong><br><span class="chip ${prompt.role === "strategic" ? "blue" : prompt.role === "bulk" ? "green" : "coral"}">${prompt.role}</span>`;
+      button.addEventListener("click", () => selectPrompt(index));
+      promptList.appendChild(button);
+    });
+    selectPrompt(0);
+
+    const navButtons = document.querySelectorAll(".nav-btn");
+    navButtons.forEach(button => {
+      button.addEventListener("click", () => {
+        const section = document.getElementById(button.dataset.target);
+        section.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+
+    const sections = [...document.querySelectorAll("main section")];
+    const observer = new IntersectionObserver(entries => {
+      const visible = entries
+        .filter(entry => entry.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (!visible) return;
+      navButtons.forEach(button => {
+        button.classList.toggle("active", button.dataset.target === visible.target.id);
+      });
+    }, { threshold: [0.22, 0.4, 0.6] });
+    sections.forEach(section => observer.observe(section));
+  </script>
+</body>
+</html>

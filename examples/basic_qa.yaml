@@ -1,0 +1,45 @@
+project:
+  name: "basic_qa"
+  output_dir: "runs/basic_qa"
+  seed: 7
+
+description: "A small dataset of concise question-answer pairs about practical machine learning concepts."
+
+schema:
+  type: object
+  required: ["input", "output"]
+  properties:
+    input:
+      type: string
+    output:
+      type: string
+
+models:
+  strategic:
+    base_url: "fake"
+    model: "fake"
+  bulk:
+    base_url: "fake"
+    model: "fake"
+  critic:
+    base_url: "fake"
+    model: "fake"
+
+taxonomy:
+  depth: 2
+  best_of_n: 1
+  review_mode: "auto_accept"
+  children_per_node: 2
+
+generation:
+  target_size: 5
+  overgenerate_ratio: 1.4
+  scenarios_per_mix: 2
+  complexity_ratio: 0.2
+  max_refine_attempts: 1
+  concurrency: 1
+
+evaluation:
+  dedupe: true
+  coverage: true
+  complexity: false

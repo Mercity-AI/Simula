@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Taxonomy Viewer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1020;
+      --panel: rgba(15, 23, 42, 0.82);
+      --panel-strong: rgba(17, 24, 39, 0.96);
+      --line: rgba(148, 163, 184, 0.22);
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --accent: #38bdf8;
+      --accent-2: #a78bfa;
+      --green: #34d399;
+      --amber: #fbbf24;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.22), transparent 28rem),
+        radial-gradient(circle at 80% 10%, rgba(167, 139, 250, 0.18), transparent 24rem),
+        linear-gradient(135deg, #090d1a 0%, #101827 55%, #07111f 100%);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    .glass {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.25);
+      backdrop-filter: blur(18px);
+    }
+
+    .btn {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      color: #dbeafe;
+      background: rgba(15, 23, 42, 0.72);
+      padding: 8px 12px;
+      cursor: pointer;
+      transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+    }
+
+    .btn:hover,
+    .btn:focus-visible {
+      border-color: rgba(56, 189, 248, 0.75);
+      background: rgba(30, 41, 59, 0.92);
+      outline: none;
+      transform: translateY(-1px);
+    }
+
+    .btn.active {
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.24), rgba(167, 139, 250, 0.22));
+      border-color: rgba(56, 189, 248, 0.68);
+      color: white;
+    }
+
+    .input {
+      min-height: 40px;
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(2, 6, 23, 0.52);
+      color: var(--text);
+      padding: 8px 11px;
+      outline: none;
+    }
+
+    .input:focus {
+      border-color: rgba(56, 189, 248, 0.78);
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12);
+    }
+
+    .dropzone {
+      border: 1px dashed rgba(148, 163, 184, 0.42);
+      background: rgba(2, 6, 23, 0.32);
+      transition: border-color 140ms ease, background 140ms ease;
+    }
+
+    .dropzone.dragging {
+      border-color: rgba(56, 189, 248, 0.85);
+      background: rgba(56, 189, 248, 0.1);
+    }
+
+    .stat {
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(15, 23, 42, 0.72), rgba(15, 23, 42, 0.48));
+      border-radius: 14px;
+      padding: 14px;
+    }
+
+    .stat b {
+      display: block;
+      font-size: 24px;
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .stat span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .factor-card {
+      border: 1px solid var(--line);
+      background: rgba(15, 23, 42, 0.68);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+
+    .factor-head {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(90deg, rgba(56, 189, 248, 0.1), rgba(167, 139, 250, 0.08));
+    }
+
+    details {
+      border-left: 1px solid rgba(148, 163, 184, 0.18);
+      margin-left: 11px;
+      padding-left: 15px;
+    }
+
+    details.root {
+      border-left: 0;
+      margin-left: 0;
+      padding-left: 0;
+    }
+
+    summary {
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 36px;
+      padding: 4px 0;
+    }
+
+    summary::-webkit-details-marker { display: none; }
+
+    .twisty {
+      width: 20px;
+      height: 20px;
+      flex: 0 0 20px;
+      border: 1px solid rgba(148, 163, 184, 0.26);
+      border-radius: 7px;
+      display: inline-grid;
+      place-items: center;
+      color: var(--muted);
+      font-size: 13px;
+      background: rgba(15, 23, 42, 0.85);
+    }
+
+    details[open] > summary .twisty {
+      color: #e0f2fe;
+      border-color: rgba(56, 189, 248, 0.55);
+      background: rgba(56, 189, 248, 0.14);
+    }
+
+    details[open] > summary .twisty::before { content: "-"; }
+    details:not([open]) > summary .twisty::before { content: "+"; }
+    .leaf .twisty::before { content: ""; }
+
+    .level-pill {
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 999px;
+      color: #bfdbfe;
+      background: rgba(59, 130, 246, 0.12);
+      padding: 2px 7px;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .desc {
+      margin: -1px 0 9px 29px;
+      color: #cbd5e1;
+      font-size: 13px;
+      max-width: 95ch;
+    }
+
+    .path {
+      margin: 0 0 10px 29px;
+      color: #94a3b8;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+
+    .hidden { display: none !important; }
+
+    mark {
+      background: rgba(251, 191, 36, 0.34);
+      color: #fef3c7;
+      border-radius: 4px;
+      padding: 0 2px;
+    }
+
+    #graph svg {
+      width: 100%;
+      min-height: 620px;
+      display: block;
+    }
+
+    .graph-link {
+      stroke: rgba(148, 163, 184, 0.28);
+      stroke-width: 1.5;
+      fill: none;
+    }
+
+    .graph-node {
+      cursor: pointer;
+      transition: opacity 140ms ease;
+    }
+
+    .graph-node circle {
+      stroke: rgba(255, 255, 255, 0.72);
+      stroke-width: 1;
+    }
+
+    .graph-node text {
+      fill: #e5e7eb;
+      font-size: 11px;
+      paint-order: stroke;
+      stroke: rgba(2, 6, 23, 0.82);
+      stroke-width: 4px;
+      stroke-linejoin: round;
+    }
+
+    .graph-node.dim,
+    .graph-link.dim {
+      opacity: 0.12;
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-size: 12px;
+      color: #d1d5db;
+    }
+
+    @media (max-width: 980px) {
+      #graph svg { min-height: 460px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="mx-auto w-[min(1440px,calc(100vw-28px))] py-6 md:py-8">
+    <header class="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+      <div>
+        <div class="mb-2 inline-flex items-center gap-2 rounded-full border border-sky-400/30 bg-sky-400/10 px-3 py-1 text-xs font-medium text-sky-100">
+          Local JSON / JSONL taxonomy inspector
+        </div>
+        <h1 class="text-3xl font-semibold tracking-normal text-white md:text-4xl">Taxonomy Viewer</h1>
+        <p class="mt-2 max-w-3xl text-sm text-slate-300">Open a generated taxonomy, scan the hierarchy, search across paths, and use the graph panel for a quick shape check.</p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <button id="treeTab" class="btn active" type="button">Tree</button>
+        <button id="graphTab" class="btn" type="button">Graph</button>
+        <button id="rawTab" class="btn" type="button">Raw JSON</button>
+      </div>
+    </header>
+
+    <section class="glass mb-4 rounded-2xl p-4">
+      <div id="dropzone" class="dropzone rounded-xl p-4">
+        <div class="grid gap-3 lg:grid-cols-[minmax(260px,1fr)_minmax(240px,360px)_auto_auto] lg:items-center">
+          <label class="block">
+            <span class="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Select file</span>
+            <input id="fileInput" class="input file:mr-3 file:rounded-lg file:border-0 file:bg-sky-400/15 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-sky-100" type="file" accept=".json,.jsonl,application/json">
+          </label>
+          <label class="block">
+            <span class="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Search</span>
+            <input id="searchInput" class="input" type="search" placeholder="name, description, path">
+          </label>
+          <button id="expandBtn" class="btn mt-5 lg:mt-6" type="button">Expand all</button>
+          <button id="collapseBtn" class="btn mt-0 lg:mt-6" type="button">Collapse all</button>
+        </div>
+        <p id="dropHint" class="mt-3 text-xs text-slate-400">You can also drag a taxonomy file onto this panel.</p>
+      </div>
+    </section>
+
+    <section class="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5" aria-label="Taxonomy summary">
+      <div class="stat"><b id="factorCount">0</b><span>Factors</span></div>
+      <div class="stat"><b id="nodeCount">0</b><span>Total nodes</span></div>
+      <div class="stat"><b id="leafCount">0</b><span>Leaf nodes</span></div>
+      <div class="stat"><b id="maxDepth">0</b><span>Max depth</span></div>
+      <div class="stat"><b id="branching">0</b><span>Avg children</span></div>
+    </section>
+
+    <div id="error" class="mb-4 hidden rounded-xl border border-red-400/35 bg-red-500/10 p-4 text-sm text-red-100"></div>
+
+    <section id="description" class="glass mb-4 hidden rounded-2xl p-5"></section>
+
+    <section id="treeView" class="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(420px,0.95fr)]">
+      <div id="content" class="space-y-4">
+        <div class="glass rounded-2xl p-5 text-slate-300">No file selected yet.</div>
+      </div>
+      <aside class="glass rounded-2xl p-4">
+        <div class="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <h2 class="text-base font-semibold text-white">Graph Preview</h2>
+            <p class="text-xs text-slate-400">Click graph nodes to highlight matching tree entries.</p>
+          </div>
+          <select id="factorSelect" class="input max-w-[220px] text-sm"></select>
+        </div>
+        <div id="graph" class="overflow-auto rounded-xl border border-slate-700/60 bg-slate-950/55"></div>
+      </aside>
+    </section>
+
+    <section id="graphView" class="glass hidden rounded-2xl p-4">
+      <div class="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <h2 class="text-base font-semibold text-white">Graph View</h2>
+          <p class="text-xs text-slate-400">A compact map of the selected factor. Search dims unrelated nodes.</p>
+        </div>
+        <select id="factorSelectWide" class="input max-w-[280px] text-sm"></select>
+      </div>
+      <div id="graphWide" class="overflow-auto rounded-xl border border-slate-700/60 bg-slate-950/55"></div>
+    </section>
+
+    <section id="rawView" class="glass hidden rounded-2xl p-4">
+      <pre id="rawJson">No file selected yet.</pre>
+    </section>
+  </main>
+
+  <script>
+    const els = {
+      fileInput: document.getElementById("fileInput"),
+      searchInput: document.getElementById("searchInput"),
+      expandBtn: document.getElementById("expandBtn"),
+      collapseBtn: document.getElementById("collapseBtn"),
+      treeTab: document.getElementById("treeTab"),
+      graphTab: document.getElementById("graphTab"),
+      rawTab: document.getElementById("rawTab"),
+      treeView: document.getElementById("treeView"),
+      graphView: document.getElementById("graphView"),
+      rawView: document.getElementById("rawView"),
+      error: document.getElementById("error"),
+      description: document.getElementById("description"),
+      content: document.getElementById("content"),
+      rawJson: document.getElementById("rawJson"),
+      factorCount: document.getElementById("factorCount"),
+      nodeCount: document.getElementById("nodeCount"),
+      leafCount: document.getElementById("leafCount"),
+      maxDepth: document.getElementById("maxDepth"),
+      branching: document.getElementById("branching"),
+      graph: document.getElementById("graph"),
+      graphWide: document.getElementById("graphWide"),
+      factorSelect: document.getElementById("factorSelect"),
+      factorSelectWide: document.getElementById("factorSelectWide"),
+      dropzone: document.getElementById("dropzone")
+    };
+
+    let state = {
+      data: null,
+      fileName: "",
+      factors: [],
+      activeFactorIndex: 0,
+      graphNodeById: new Map()
+    };
+
+    els.fileInput.addEventListener("change", async (event) => {
+      const file = event.target.files[0];
+      if (file) await loadFile(file);
+    });
+    els.searchInput.addEventListener("input", () => {
+      if (state.data) renderTree();
+      applySearch(els.searchInput.value);
+      renderGraphs();
+    });
+    els.expandBtn.addEventListener("click", () => setAllDetails(true));
+    els.collapseBtn.addEventListener("click", () => setAllDetails(false));
+    els.treeTab.addEventListener("click", () => setView("tree"));
+    els.graphTab.addEventListener("click", () => setView("graph"));
+    els.rawTab.addEventListener("click", () => setView("raw"));
+    els.factorSelect.addEventListener("change", syncSelectedFactor);
+    els.factorSelectWide.addEventListener("change", syncSelectedFactor);
+
+    ["dragenter", "dragover"].forEach((name) => {
+      els.dropzone.addEventListener(name, (event) => {
+        event.preventDefault();
+        els.dropzone.classList.add("dragging");
+      });
+    });
+    ["dragleave", "drop"].forEach((name) => {
+      els.dropzone.addEventListener(name, (event) => {
+        event.preventDefault();
+        els.dropzone.classList.remove("dragging");
+      });
+    });
+    els.dropzone.addEventListener("drop", async (event) => {
+      const file = event.dataTransfer.files[0];
+      if (file) await loadFile(file);
+    });
+
+    async function loadFile(file) {
+      try {
+        const parsed = parseInput(await file.text());
+        render(parsed, file.name);
+      } catch (error) {
+        showError(error.message || String(error));
+      }
+    }
+
+    function parseInput(text) {
+      const trimmed = text.trim();
+      if (!trimmed) throw new Error("The selected file is empty.");
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        const lines = trimmed.split(/\r?\n/).filter(Boolean);
+        const parsedLines = lines.map((line, index) => {
+          try {
+            return JSON.parse(line);
+          } catch {
+            throw new Error(`Invalid JSON on line ${index + 1}.`);
+          }
+        });
+        return parsedLines.length === 1 ? parsedLines[0] : { description: "JSONL file", factors: parsedLines };
+      }
+    }
+
+    function render(data, fileName) {
+      state.data = data;
+      state.fileName = fileName;
+      state.factors = normalizeFactors(data);
+      state.activeFactorIndex = 0;
+      hideError();
+
+      const stats = collectStats(state.factors);
+      els.factorCount.textContent = state.factors.length;
+      els.nodeCount.textContent = stats.nodes;
+      els.leafCount.textContent = stats.leaves;
+      els.maxDepth.textContent = stats.depth;
+      els.branching.textContent = stats.parents ? (stats.childEdges / stats.parents).toFixed(1) : "0";
+      els.rawJson.textContent = JSON.stringify(data, null, 2);
+
+      renderDescription(data, fileName);
+      renderFactorSelectors();
+      renderTree();
+      renderGraphs();
+      applySearch(els.searchInput.value);
+    }
+
+    function normalizeFactors(data) {
+      if (Array.isArray(data)) return data;
+      if (Array.isArray(data.factors)) return data.factors;
+      if (Array.isArray(data.taxonomy)) return data.taxonomy;
+      if (data && typeof data === "object") return [data];
+      return [];
+    }
+
+    function renderDescription(data, fileName) {
+      els.description.classList.toggle("hidden", !data.description);
+      if (!data.description) return;
+      els.description.innerHTML = `
+        <div class="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+          <div>
+            <p class="text-xs uppercase tracking-wide text-sky-200/80">Loaded file</p>
+            <h2 class="text-lg font-semibold text-white">${escapeHtml(fileName)}</h2>
+          </div>
+          <div class="max-w-5xl text-sm text-slate-300">${escapeHtml(data.description)}</div>
+        </div>
+      `;
+    }
+
+    function renderFactorSelectors() {
+      const options = state.factors.map((factor, index) => {
+        const label = factor.name || `Factor ${index + 1}`;
+        return `<option value="${index}">${escapeHtml(label)}</option>`;
+      }).join("");
+      els.factorSelect.innerHTML = options || `<option>No factors</option>`;
+      els.factorSelectWide.innerHTML = options || `<option>No factors</option>`;
+      els.factorSelect.value = String(state.activeFactorIndex);
+      els.factorSelectWide.value = String(state.activeFactorIndex);
+    }
+
+    function renderTree() {
+      els.content.innerHTML = "";
+      if (!state.factors.length) {
+        els.content.innerHTML = `<div class="glass rounded-2xl p-5 text-slate-300">No factors found. Use Raw JSON to inspect the file.</div>`;
+        return;
+      }
+      state.factors.forEach((factor, index) => els.content.appendChild(renderFactor(factor, index)));
+    }
+
+    function renderFactor(factor, index) {
+      const section = document.createElement("section");
+      section.className = "factor-card";
+      section.dataset.search = searchableText(factor);
+      section.dataset.factorIndex = index;
+
+      const title = document.createElement("div");
+      title.className = "factor-head";
+      const childCount = Array.isArray(factor.children) ? factor.children.length : 0;
+      title.innerHTML = `
+        <div class="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+          <div>
+            <h2 class="text-lg font-semibold text-white">${highlight(escapeHtml(factor.name || "Unnamed factor"))}</h2>
+            ${factor.description ? `<p class="mt-1 text-sm text-slate-300">${highlight(escapeHtml(factor.description))}</p>` : ""}
+          </div>
+          <span class="rounded-full border border-sky-400/30 bg-sky-400/10 px-3 py-1 text-xs text-sky-100">${childCount} branches</span>
+        </div>
+      `;
+
+      const tree = document.createElement("div");
+      tree.className = "p-4";
+      tree.appendChild(renderNode(factor, true));
+      section.append(title, tree);
+      return section;
+    }
+
+    function renderNode(node, isRoot = false) {
+      const hasChildren = Array.isArray(node.children) && node.children.length > 0;
+      const details = document.createElement("details");
+      details.open = true;
+      details.className = `${isRoot ? "root " : ""}${hasChildren ? "" : "leaf"}`;
+      details.dataset.search = searchableText(node);
+      details.dataset.nodePath = nodePath(node);
+
+      const summary = document.createElement("summary");
+      summary.innerHTML = `
+        <span class="twisty" aria-hidden="true"></span>
+        <span class="min-w-0 flex-1 overflow-wrap-anywhere font-medium text-slate-100">${highlight(escapeHtml(node.name || "Unnamed node"))}</span>
+        <span class="level-pill">L${node.level ?? inferLevel(node)}</span>
+      `;
+      details.appendChild(summary);
+
+      if (node.description) {
+        const desc = document.createElement("div");
+        desc.className = "desc";
+        desc.innerHTML = highlight(escapeHtml(node.description));
+        details.appendChild(desc);
+      }
+
+      if (Array.isArray(node.path) && node.path.length) {
+        const path = document.createElement("div");
+        path.className = "path";
+        path.innerHTML = highlight(escapeHtml(node.path.join(" / ")));
+        details.appendChild(path);
+      }
+
+      if (hasChildren) node.children.forEach((child) => details.appendChild(renderNode(child)));
+      return details;
+    }
+
+    function renderGraphs() {
+      renderGraph(els.graph, false);
+      renderGraph(els.graphWide, true);
+    }
+
+    function renderGraph(target, wide) {
+      const factor = state.factors[state.activeFactorIndex];
+      if (!factor) {
+        target.innerHTML = `<div class="p-5 text-sm text-slate-400">No graph yet.</div>`;
+        return;
+      }
+
+      const rows = flattenTree(factor);
+      const maxDepth = Math.max(...rows.map((row) => row.depth), 1);
+      const rowGap = wide ? 54 : 44;
+      const leftPad = 36;
+      const topPad = 34;
+      const width = Math.max(wide ? 980 : 620, (maxDepth + 1) * 210 + 80);
+      const height = Math.max(wide ? 560 : 620, rows.length * rowGap + topPad * 2);
+      const positions = new Map();
+
+      rows.forEach((row, index) => {
+        positions.set(row.id, {
+          x: leftPad + row.depth * 205,
+          y: topPad + index * rowGap
+        });
+      });
+
+      const query = els.searchInput.value.trim().toLowerCase();
+      const links = [];
+      rows.forEach((row) => {
+        if (row.parentId) links.push([row.parentId, row.id]);
+      });
+
+      const linkSvg = links.map(([from, to]) => {
+        const a = positions.get(from);
+        const b = positions.get(to);
+        const mid = (a.x + b.x) / 2;
+        const dim = query && !rowMatches(rows.find((row) => row.id === to), query);
+        return `<path class="graph-link ${dim ? "dim" : ""}" d="M${a.x + 10},${a.y} C${mid},${a.y} ${mid},${b.y} ${b.x - 10},${b.y}"></path>`;
+      }).join("");
+
+      const nodeSvg = rows.map((row) => {
+        const point = positions.get(row.id);
+        const dim = query && !rowMatches(row, query);
+        const color = levelColor(row.depth);
+        const label = truncate(row.node.name || "Unnamed", wide ? 42 : 28);
+        return `
+          <g class="graph-node ${dim ? "dim" : ""}" data-node-path="${escapeHtml(nodePath(row.node))}" transform="translate(${point.x}, ${point.y})">
+            <circle r="${row.depth === 0 ? 10 : 7}" fill="${color}"></circle>
+            <text x="16" y="4">${escapeHtml(label)}</text>
+          </g>
+        `;
+      }).join("");
+
+      target.innerHTML = `
+        <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Taxonomy graph">
+          ${linkSvg}
+          ${nodeSvg}
+        </svg>
+      `;
+
+      target.querySelectorAll(".graph-node").forEach((nodeEl) => {
+        nodeEl.addEventListener("click", () => focusTreeNode(nodeEl.dataset.nodePath));
+      });
+    }
+
+    function flattenTree(root) {
+      const rows = [];
+      let id = 0;
+      function visit(node, depth, parentId) {
+        const currentId = `n${id++}`;
+        rows.push({ id: currentId, parentId, node, depth, text: searchableText(node) });
+        (Array.isArray(node.children) ? node.children : []).forEach((child) => visit(child, depth + 1, currentId));
+      }
+      visit(root, 0, null);
+      return rows;
+    }
+
+    function focusTreeNode(path) {
+      setView("tree");
+      const target = document.querySelector(`details[data-node-path="${cssEscape(path)}"]`);
+      if (!target) return;
+      let parent = target.parentElement;
+      while (parent) {
+        if (parent.tagName === "DETAILS") parent.open = true;
+        parent = parent.parentElement;
+      }
+      target.open = true;
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      target.animate(
+        [{ background: "rgba(56, 189, 248, 0.18)" }, { background: "transparent" }],
+        { duration: 900, easing: "ease-out" }
+      );
+    }
+
+    function syncSelectedFactor(event) {
+      state.activeFactorIndex = Number(event.target.value) || 0;
+      els.factorSelect.value = String(state.activeFactorIndex);
+      els.factorSelectWide.value = String(state.activeFactorIndex);
+      renderGraphs();
+    }
+
+    function setView(view) {
+      const viewMap = { tree: els.treeView, graph: els.graphView, raw: els.rawView };
+      Object.entries(viewMap).forEach(([name, el]) => el.classList.toggle("hidden", name !== view));
+      els.treeTab.classList.toggle("active", view === "tree");
+      els.graphTab.classList.toggle("active", view === "graph");
+      els.rawTab.classList.toggle("active", view === "raw");
+      if (view === "graph") renderGraphs();
+    }
+
+    function collectStats(nodes) {
+      const stats = { nodes: 0, leaves: 0, depth: 0, parents: 0, childEdges: 0 };
+      nodes.forEach((node) => walk(node, 0, stats));
+      return stats;
+    }
+
+    function walk(node, depth, stats) {
+      stats.nodes += 1;
+      stats.depth = Math.max(stats.depth, Number.isFinite(node.level) ? node.level : depth);
+      const children = Array.isArray(node.children) ? node.children : [];
+      if (children.length) {
+        stats.parents += 1;
+        stats.childEdges += children.length;
+      } else {
+        stats.leaves += 1;
+      }
+      children.forEach((child) => walk(child, depth + 1, stats));
+    }
+
+    function searchableText(node) {
+      const parts = [node.name, node.description, Array.isArray(node.path) ? node.path.join(" ") : ""];
+      if (Array.isArray(node.children)) node.children.forEach((child) => parts.push(searchableText(child)));
+      return parts.filter(Boolean).join(" ").toLowerCase();
+    }
+
+    function applySearch(query) {
+      const needle = query.trim().toLowerCase();
+      document.querySelectorAll(".factor-card, details").forEach((el) => {
+        const match = !needle || (el.dataset.search && el.dataset.search.includes(needle));
+        el.classList.toggle("hidden", !match);
+        if (needle && match && el.tagName === "DETAILS") el.open = true;
+      });
+    }
+
+    function rowMatches(row, query) {
+      return row && row.text.includes(query);
+    }
+
+    function setAllDetails(open) {
+      document.querySelectorAll("details").forEach((details) => {
+        details.open = open;
+      });
+    }
+
+    function nodePath(node) {
+      if (Array.isArray(node.path) && node.path.length) return node.path.join("/");
+      return node.name || "unnamed";
+    }
+
+    function inferLevel(node) {
+      return Array.isArray(node.path) ? Math.max(0, node.path.length - 1) : 0;
+    }
+
+    function levelColor(level) {
+      return ["#38bdf8", "#a78bfa", "#34d399", "#fbbf24", "#fb7185"][level % 5];
+    }
+
+    function truncate(value, max) {
+      const text = String(value);
+      return text.length > max ? `${text.slice(0, max - 1)}...` : text;
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function cssEscape(value) {
+      if (window.CSS && CSS.escape) return CSS.escape(value);
+      return String(value).replace(/["\\]/g, "\\$&");
+    }
+
+    function highlight(value) {
+      const query = els.searchInput.value.trim();
+      if (!query) return value;
+      const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return value.replace(new RegExp(`(${escaped})`, "gi"), "<mark>$1</mark>");
+    }
+
+    function showError(message) {
+      els.error.textContent = message;
+      els.error.classList.remove("hidden");
+      els.content.innerHTML = `<div class="glass rounded-2xl p-5 text-red-100">Could not render the selected file.</div>`;
+    }
+
+    function hideError() {
+      els.error.classList.add("hidden");
+      els.error.textContent = "";
+    }
+  </script>
+</body>
+</html>

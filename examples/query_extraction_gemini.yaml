@@ -1,0 +1,127 @@
+project:
+  name: "query_extraction_gemini"
+  output_dir: "runs/query_extraction_gemini"
+  seed: 24
+
+description: >
+  Generate a diverse dataset for query deconstruction. Each example should contain a natural
+  user query that someone might type into a search box, assistant, filter box, catalog tool,
+  document system, booking tool, local search, support search, or other retrieval interface.
+  The target output is a static JSON-style extraction of the query into intent, search terms,
+  constraints, attributes, entities, filters, ranges, sorting preferences, exclusions, and
+  ambiguities when present. Do not overfocus on e-commerce; include many domains such as
+  travel, jobs, real estate, local services, documents, recipes, events, support tickets,
+  software packages, media, education, healthcare information, finance lookup, and general
+  knowledge search. All generated text must be in English.
+
+schema:
+  type: object
+  required: ["query", "extraction"]
+  properties:
+    query:
+      type: string
+    extraction:
+      type: object
+      required: ["intent", "search_terms", "attributes", "filters", "exclusions", "ambiguities"]
+      properties:
+        intent:
+          type: string
+        search_terms:
+          type: array
+          items:
+            type: string
+        attributes:
+          type: object
+          properties:
+            domain:
+              type: string
+            category:
+              type: string
+            entities:
+              type: array
+              items:
+                type: string
+            descriptors:
+              type: array
+              items:
+                type: string
+            quantities:
+              type: array
+              items:
+                type: string
+        filters:
+          type: object
+          properties:
+            location:
+              type: string
+            time:
+              type: string
+            price:
+              type: string
+            rating:
+              type: string
+            availability:
+              type: string
+            format:
+              type: string
+            sort:
+              type: string
+        exclusions:
+          type: array
+          items:
+            type: string
+        ambiguities:
+          type: array
+          items:
+            type: string
+
+models:
+  strategic:
+    base_url: "https://openrouter.ai/api/v1"
+    api_key_env: "OPENROUTER_API_KEY"
+    model: "google/gemini-3-flash-preview"
+    temperature: 0.4
+    max_tokens: 4096
+    min_interval_seconds: 0.0
+  bulk:
+    base_url: "https://openrouter.ai/api/v1"
+    api_key_env: "OPENROUTER_API_KEY"
+    model: "google/gemini-3-flash-preview"
+    temperature: 0.8
+    max_tokens: 4096
+    min_interval_seconds: 0.0
+  critic:
+    base_url: "https://openrouter.ai/api/v1"
+    api_key_env: "OPENROUTER_API_KEY"
+    model: "google/gemini-3-flash-preview"
+    temperature: 0.2
+    max_tokens: 2048
+    min_interval_seconds: 0.0
+
+taxonomy:
+  depth: 2
+  factors:
+    - name: "query_domain"
+      description: "The broad retrieval/search domain implied by the user's query."
+    - name: "query_intent"
+      description: "The user's underlying goal, such as finding, comparing, filtering, booking, troubleshooting, learning, or locating."
+    - name: "constraint_types"
+      description: "The kinds of constraints that should be extracted, including attributes, ranges, location, time, exclusions, sorting, and availability."
+    - name: "language_complexity"
+      description: "The linguistic shape of the query, including terse keyword queries, natural sentences, ambiguous phrasing, negation, and multi-constraint requests."
+  best_of_n: 2
+  review_mode: "auto_accept"
+  children_per_node: 3
+
+generation:
+  target_size: 500
+  overgenerate_ratio: 1.05
+  scenarios_per_mix: 3
+  complexity_ratio: 0.35
+  max_refine_attempts: 1
+  concurrency: 8
+
+evaluation:
+  dedupe: true
+  coverage: true
+  complexity: false
