@@ -74,6 +74,69 @@ def test_diversity_defaults(tmp_path: Path) -> None:
     assert cfg.data["evaluation"]["diversity"]["text_field"] is None
 
 
+def test_strategy_guidance_defaults_to_none_and_omits_block(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "description": "Generate examples.",
+                "project": {"output_dir": str(tmp_path / "run")},
+                "models": {
+                    "strategic": {"base_url": "fake", "model": "fake"},
+                    "bulk": {"base_url": "fake", "model": "fake"},
+                    "critic": {"base_url": "fake", "model": "fake"},
+                },
+            }
+        )
+    )
+    cfg = load_config(path)
+    assert cfg.data["strategy"]["guidance"] is None
+    rendered = cfg.prompts.strategy_prompt(cfg.description, {"factors": []}, cfg.data["strategy"].get("guidance"))
+    assert "User guidance" not in rendered
+
+
+def test_strategy_guidance_is_woven_into_prompt(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "description": "Generate examples.",
+                "project": {"output_dir": str(tmp_path / "run")},
+                "strategy": {"guidance": "Make billing the most common branch."},
+                "models": {
+                    "strategic": {"base_url": "fake", "model": "fake"},
+                    "bulk": {"base_url": "fake", "model": "fake"},
+                    "critic": {"base_url": "fake", "model": "fake"},
+                },
+            }
+        )
+    )
+    cfg = load_config(path)
+    rendered = cfg.prompts.strategy_prompt(cfg.description, {"factors": []}, cfg.data["strategy"].get("guidance"))
+    assert "User guidance" in rendered
+    assert "Make billing the most common branch." in rendered
+
+
+def test_strategy_guidance_rejects_non_string(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "description": "Generate examples.",
+                "project": {"output_dir": str(tmp_path / "run")},
+                "strategy": {"guidance": 123},
+                "models": {
+                    "strategic": {"base_url": "fake", "model": "fake"},
+                    "bulk": {"base_url": "fake", "model": "fake"},
+                    "critic": {"base_url": "fake", "model": "fake"},
+                },
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="strategy.guidance must be a string"):
+        load_config(path)
+
+
 def test_schema_subset_rejects_missing_array_items() -> None:
     with pytest.raises(ValueError):
         validate_schema_subset({"type": "array"})
@@ -87,7 +150,7 @@ def test_prompt_module_overrides_subset_and_falls_back(tmp_path: Path) -> None:
             [
                 'SYSTEM_JSON = "custom system"',
                 "",
-                "def strategy_prompt(description, taxonomy):",
+                "def strategy_prompt(description, taxonomy, guidance=None):",
                 '    return f"custom strategy for {description}: {len(taxonomy[\'factors\'])}"',
             ]
         )

@@ -64,7 +64,7 @@ async def build_strategies(cfg: Config, router: ModelRouter, taxonomy: dict[str,
         return existing["strategies"]
     response = await router.complete_json(
         "strategic",
-        cfg.prompts.strategy_prompt(cfg.description, taxonomy),
+        cfg.prompts.strategy_prompt(cfg.description, taxonomy, cfg.data["strategy"].get("guidance")),
         system=cfg.prompts.SYSTEM_JSON,
         task=TaskType.STRATEGY,
     )

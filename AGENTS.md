@@ -92,6 +92,7 @@ The config loader applies defaults from `syndata/config.py`. Required user-facin
 - `models`: `strategic`, `bulk`, `critic`
 - `prompts`: optional Python prompt module override
 - `taxonomy`: depth/factors/review behavior
+- `strategy`: optional free-text `guidance` woven into the strategy prompt
 - `generation`: target size, overgeneration, complexity ratio, retries, concurrency
 - `evaluation`: dedupe, coverage, complexity
 

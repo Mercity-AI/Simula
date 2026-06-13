@@ -137,6 +137,9 @@ taxonomy:
   review_mode: "auto_accept"
   children_per_node: 3
 
+strategy:
+  guidance: null
+
 generation:
   target_size: 50
   overgenerate_ratio: 1.2
@@ -182,7 +185,7 @@ Paths are resolved relative to the YAML file. The module may override any subset
 SYSTEM_JSON = "Return valid JSON only."
 
 
-def strategy_prompt(description, taxonomy):
+def strategy_prompt(description, taxonomy, guidance=None):
     return f"""
 Dataset description:
 {description}
@@ -196,6 +199,20 @@ Return JSON with a strategies array.
 ```
 
 Override functions must keep the same parameter names as their built-in counterparts in `syndata/prompts.py`. `syndata validate` imports the module and rejects missing files, import failures, non-string system prompts, and incompatible function signatures before any model call runs.
+
+### Strategy Guidance
+
+Strategies decide which taxonomy branches combine and how often each combination is sampled. To steer that without writing a prompt module, set free-text `strategy.guidance`:
+
+```yaml
+strategy:
+  guidance: |
+    - Make billing + calm + simple the most common combination.
+    - Never combine enterprise_sso with mobile_app; they don't coexist.
+    - Keep a dedicated strategy for furious + needs_escalation, even though it is rare.
+```
+
+The guidance is woven into the strategy prompt, so the generated `strategies.json` reflects your intent (root combinations and weights) before any bulk generation runs. Guidance is a nudge interpreted by the strategic model, not a hard constraint; for guarantees, edit `strategies.json` directly or override `strategy_prompt`. When unset (`null`), the built-in prompt is used unchanged.
 
 ### Schema Support
 

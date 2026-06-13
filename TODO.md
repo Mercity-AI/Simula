@@ -15,19 +15,30 @@ Reason: prompt wording is the main way users steer dataset style, quality criter
 
 ## Let Users Influence Strategy And Sampling Behavior
 
-The strategy step is meant to decide which taxonomy branches can be combined and how often they should be used, but users currently have limited direct control over that behavior. The model generates `strategies.json`, and users can edit that artifact, but the strategy prompt and sampling behavior are mostly fixed.
+### Done: Strategy Guidance (prompt-level control)
 
-Add a way for users to influence this through configurable prompts first, especially the strategy-generation prompt. This may be enough for many cases because users can say things like:
+Users can now set free-text `strategy.guidance` in config, which is woven into the
+strategy-generation prompt. This lets them say things like: prefer specific branches
+more often, avoid specific branches, combine factors only in certain ways, make
+particular domains/edge cases more common, or avoid unrealistic combinations. The
+guidance shapes the generated `strategies.json` (roots and weights) before any bulk
+generation runs. Guidance is optional and defaults to `null` (built-in prompt
+unchanged); `validate` rejects non-string guidance.
 
-- prefer specific branches more often
-- avoid specific branches
-- combine some taxonomy factors only in certain ways
-- make particular domains or edge cases more common
-- avoid unrealistic taxonomy combinations
+### Remaining: structured sampling knobs (only if prompts prove insufficient)
 
-Do not jump straight to a large sampling-rule DSL. Start with prompt/config control and keep the implementation compact. If prompt-level control proves insufficient, later consider small config knobs such as leaf-only sampling, branch weights, exclusions, or quotas.
+Prompt-level guidance is a nudge, not a guarantee. If users need hard control, consider
+small compact config knobs that plug into `sample_mix`/`choose_strategy` in
+`syndata/taxonomy.py`:
 
-Reason: synthetic data users often need targeted coverage, not just broad random coverage. The current strategy system points in that direction, but users need more say in how strategies are created and how taxonomy combinations are emphasized.
+- leaf-only sampling
+- explicit per-branch weights
+- exclusions (combinations that must never appear)
+- quotas (minimum/maximum share per branch)
+
+Do not jump straight to a large sampling-rule DSL. Keep any additions compact.
+
+Reason: synthetic data users often need targeted coverage, not just broad random coverage. Prompt guidance covers the common "emphasize/avoid" cases; structured knobs are only worth adding for guarantees the model cannot reliably honor on its own.
 
 ## Add LLM Sampling Policies For Generation
 

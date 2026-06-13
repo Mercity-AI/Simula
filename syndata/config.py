@@ -64,6 +64,7 @@ def default_config() -> dict[str, Any]:
         },
         "prompts": {"module": None},
         "taxonomy": {"depth": 2, "factors": None, "best_of_n": 2, "review_mode": "auto_accept", "children_per_node": 4},
+        "strategy": {"guidance": None},
         "generation": {
             "target_size": 50,
             "overgenerate_ratio": 1.3,
@@ -123,6 +124,11 @@ def validate_config(cfg: Config) -> None:
     review_mode = cfg.data["taxonomy"].get("review_mode")
     if review_mode not in {"auto_accept", "write_then_edit", "interactive_confirm"}:
         raise ValueError("taxonomy.review_mode must be auto_accept, write_then_edit, or interactive_confirm.")
+
+    # Strategy guidance is free-text steering woven into the strategy prompt; reject non-text early.
+    guidance = cfg.data.get("strategy", {}).get("guidance")
+    if guidance is not None and not isinstance(guidance, str):
+        raise ValueError("strategy.guidance must be a string when set.")
 
     # Evaluation modes are explicit because they change cost and whether model calls happen.
     coverage_mode = cfg.data["evaluation"].get("coverage_mode", "lineage")

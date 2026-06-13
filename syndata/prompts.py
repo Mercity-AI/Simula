@@ -206,15 +206,23 @@ Return JSON:
 """.strip()
 
 
-def strategy_prompt(description: str, taxonomy: dict[str, Any]) -> str:
+def strategy_prompt(description: str, taxonomy: dict[str, Any], guidance: str | None = None) -> str:
+    # Optional user guidance steers which roots combine and how weights emphasize/de-emphasize branches.
+    guidance_block = ""
+    if guidance and guidance.strip():
+        guidance_block = (
+            "\nUser guidance (honor these preferences when choosing taxonomy roots and weights):\n"
+            f"{guidance.strip()}\n"
+        )
     return f"""
 Dataset description:
 {description}
 
 Taxonomy:
 {json.dumps(taxonomy, ensure_ascii=False)}
-
+{guidance_block}
 Create 2-5 sampling strategies. Each strategy lists compatible taxonomy roots and a weight.
+A higher weight makes a strategy sampled more often; use weights to emphasize common combinations and de-emphasize rare ones.
 Return JSON:
 {{"strategies": [{{"id": "general", "description": "...", "taxonomy_roots": ["..."], "weight": 1.0}}]}}
 """.strip()
