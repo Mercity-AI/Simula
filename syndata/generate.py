@@ -6,7 +6,6 @@ import random
 import uuid
 from typing import Any
 
-from . import prompts
 from .config import Config
 from .evaluate import coverage_aware_trim, dedupe_rows, validate_record
 from .models import ModelRouter
@@ -171,8 +170,8 @@ async def _generate_one(
 async def _make_meta_prompt(cfg: Config, router: ModelRouter, mix: list[dict[str, Any]], rng: random.Random) -> tuple[str, bool]:
     response = await router.complete_json(
         "bulk",
-        prompts.meta_prompt_prompt(cfg.description, cfg.schema, mix, int(cfg.data["generation"]["scenarios_per_mix"])),
-        system=prompts.SYSTEM_JSON,
+        cfg.prompts.meta_prompt_prompt(cfg.description, cfg.schema, mix, int(cfg.data["generation"]["scenarios_per_mix"])),
+        system=cfg.prompts.SYSTEM_JSON,
         task=TaskType.META_PROMPT,
     )
     options = response.get("meta_prompts") or ["Generate one synthetic data point."]
@@ -183,8 +182,8 @@ async def _make_meta_prompt(cfg: Config, router: ModelRouter, mix: list[dict[str
     if complexified:
         response = await router.complete_json(
             "bulk",
-            prompts.complexify_prompt(cfg.description, meta_prompt),
-            system=prompts.SYSTEM_JSON,
+            cfg.prompts.complexify_prompt(cfg.description, meta_prompt),
+            system=cfg.prompts.SYSTEM_JSON,
             task=TaskType.COMPLEXIFY,
         )
         meta_prompt = response.get("meta_prompt", meta_prompt)
@@ -194,8 +193,8 @@ async def _make_meta_prompt(cfg: Config, router: ModelRouter, mix: list[dict[str
 async def _make_record(cfg: Config, router: ModelRouter, meta_prompt: str) -> tuple[Any, bool, str | None]:
     raw_response = await router.complete(
         "bulk",
-        prompts.generate_record_prompt(cfg.description, cfg.schema, meta_prompt),  # type: ignore[arg-type]
-        system=prompts.SYSTEM_JSON,
+        cfg.prompts.generate_record_prompt(cfg.description, cfg.schema, meta_prompt),  # type: ignore[arg-type]
+        system=cfg.prompts.SYSTEM_JSON,
         task=TaskType.GENERATE,
     )
     try:
@@ -210,8 +209,8 @@ async def _make_record(cfg: Config, router: ModelRouter, meta_prompt: str) -> tu
     try:
         repaired = await router.complete_json(
             "bulk",
-            prompts.repair_json_prompt(cfg.schema, raw_response, error or "schema validation failed"),  # type: ignore[arg-type]
-            system=prompts.SYSTEM_JSON,
+            cfg.prompts.repair_json_prompt(cfg.schema, raw_response, error or "schema validation failed"),  # type: ignore[arg-type]
+            system=cfg.prompts.SYSTEM_JSON,
             task=TaskType.REPAIR,
         )
         valid, repair_error = validate_record(cfg.schema, repaired)
@@ -223,8 +222,8 @@ async def _make_record(cfg: Config, router: ModelRouter, meta_prompt: str) -> tu
 async def _make_text(cfg: Config, router: ModelRouter, meta_prompt: str) -> tuple[str, bool, str | None]:
     text = await router.complete(
         "bulk",
-        prompts.generate_text_prompt(cfg.description, meta_prompt),
-        system=prompts.SYSTEM_TEXT,
+        cfg.prompts.generate_text_prompt(cfg.description, meta_prompt),
+        system=cfg.prompts.SYSTEM_TEXT,
         task=TaskType.GENERATE,
     )
     return text.strip(), True, None
@@ -242,15 +241,15 @@ async def _critic_loop(
         if cfg.is_schema_free:
             critique = await router.complete_json(
                 "critic",
-                prompts.critique_text_prompt(cfg.description, meta_prompt, str(current)),
-                system=prompts.SYSTEM_JSON,
+                cfg.prompts.critique_text_prompt(cfg.description, meta_prompt, str(current)),
+                system=cfg.prompts.SYSTEM_JSON,
                 task=TaskType.SEMANTIC_CRITIC,
             )
         else:
             critique = await router.complete_json(
                 "critic",
-                prompts.critique_prompt(cfg.description, cfg.schema, meta_prompt, current),  # type: ignore[arg-type]
-                system=prompts.SYSTEM_JSON,
+                cfg.prompts.critique_prompt(cfg.description, cfg.schema, meta_prompt, current),  # type: ignore[arg-type]
+                system=cfg.prompts.SYSTEM_JSON,
                 task=TaskType.SEMANTIC_CRITIC,
             )
         verdicts.append(critique)
@@ -263,16 +262,16 @@ async def _critic_loop(
                 current = (
                     await router.complete(
                         "bulk",
-                        prompts.refine_text_prompt(cfg.description, meta_prompt, str(current), critique.get("explanation", "")),
-                        system=prompts.SYSTEM_TEXT,
+                        cfg.prompts.refine_text_prompt(cfg.description, meta_prompt, str(current), critique.get("explanation", "")),
+                        system=cfg.prompts.SYSTEM_TEXT,
                         task=TaskType.REFINE,
                     )
                 ).strip()
             else:
                 current = await router.complete_json(
                     "bulk",
-                    prompts.refine_record_prompt(cfg.schema, meta_prompt, current, critique.get("explanation", "")),  # type: ignore[arg-type]
-                    system=prompts.SYSTEM_JSON,
+                    cfg.prompts.refine_record_prompt(cfg.schema, meta_prompt, current, critique.get("explanation", "")),  # type: ignore[arg-type]
+                    system=cfg.prompts.SYSTEM_JSON,
                     task=TaskType.REFINE,
                 )
                 valid, error = validate_record(cfg.schema, current)

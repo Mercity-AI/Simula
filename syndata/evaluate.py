@@ -9,7 +9,6 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from . import prompts
 from .config import Config
 from .diversity import embedding_diversity
 from .models import ModelRouter
@@ -159,8 +158,8 @@ async def complexity_scores(cfg: Config, router: ModelRouter, rows: list[dict[st
         payload = [{"id": row["id"], "record": row["record"]} for row in batch]
         response = await router.complete_json(
             "critic",
-            prompts.complexity_prompt(cfg.description, payload),
-            system=prompts.SYSTEM_JSON,
+            cfg.prompts.complexity_prompt(cfg.description, payload),
+            system=cfg.prompts.SYSTEM_JSON,
             task=TaskType.COMPLEXITY_SCORE,
         )
         return {str(s["id"]): float(s["score"]) for s in response.get("scores", []) if "id" in s and "score" in s}
@@ -208,8 +207,8 @@ async def reassignment_coverage(
             text = record_to_text(row.get("record"), text_field)
             response = await router.complete_json(
                 "critic",
-                prompts.node_assign_prompt(taxonomy_to_text(factor_root), factor_root["name"], text),
-                system=prompts.SYSTEM_JSON,
+                cfg.prompts.node_assign_prompt(taxonomy_to_text(factor_root), factor_root["name"], text),
+                system=cfg.prompts.SYSTEM_JSON,
                 task=TaskType.NODE_ASSIGN,
             )
             return factor_root["name"], response.get("node_name")

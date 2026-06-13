@@ -57,7 +57,7 @@ Generated artifacts:
 - Add comments around logical blocks in orchestration code, especially generation and taxonomy expansion.
 - Every major logical block in `config.py`, `models.py`, `generate.py`, `taxonomy.py`, and `evaluate.py` should have a short orienting comment. Do not comment obvious assignments.
 - Do not over-comment obvious assignments.
-- Keep prompt changes in `syndata/prompts.py`.
+- Keep built-in prompt changes in `syndata/prompts.py`; use configured prompt modules for per-run overrides.
 - Keep schema/task behavior in YAML config where possible.
 - Use deterministic fake-model tests for behavior that should not require network access.
 - When adding network/model behavior, ensure tests still pass offline.
@@ -90,6 +90,7 @@ The config loader applies defaults from `syndata/config.py`. Required user-facin
 - `description`: dataset description
 - `schema`: JSON Schema subset, or `null`/omitted for free-text generation
 - `models`: `strategic`, `bulk`, `critic`
+- `prompts`: optional Python prompt module override
 - `taxonomy`: depth/factors/review behavior
 - `generation`: target size, overgeneration, complexity ratio, retries, concurrency
 - `evaluation`: dedupe, coverage, complexity

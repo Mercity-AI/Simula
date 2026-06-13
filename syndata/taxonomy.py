@@ -4,7 +4,6 @@ import asyncio
 import random
 from typing import Any
 
-from . import prompts
 from .config import Config
 from .models import ModelRouter
 from .tasks import TaskType
@@ -39,8 +38,8 @@ async def build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, Any]:
             if level < int(tax_cfg["depth"]):
                 plan_data = await router.complete_json(
                     "strategic",
-                    prompts.level_plan_prompt(cfg.description, next_queue),
-                    system=prompts.SYSTEM_JSON,
+                    cfg.prompts.level_plan_prompt(cfg.description, next_queue),
+                    system=cfg.prompts.SYSTEM_JSON,
                     task=TaskType.LEVEL_PLAN,
                 )
                 plan = plan_data.get("plan", plan)
@@ -65,8 +64,8 @@ async def build_strategies(cfg: Config, router: ModelRouter, taxonomy: dict[str,
         return existing["strategies"]
     response = await router.complete_json(
         "strategic",
-        prompts.strategy_prompt(cfg.description, taxonomy),
-        system=prompts.SYSTEM_JSON,
+        cfg.prompts.strategy_prompt(cfg.description, taxonomy),
+        system=cfg.prompts.SYSTEM_JSON,
         task=TaskType.STRATEGY,
     )
     strategies = response.get("strategies") or [{"id": "general", "description": "Sample all taxonomies.", "taxonomy_roots": [f["name"] for f in taxonomy["factors"]], "weight": 1.0}]
@@ -122,8 +121,8 @@ def taxonomy_to_text(node: dict[str, Any], indent: int = 0) -> str:
 async def _discover_factors(cfg: Config, router: ModelRouter) -> list[dict[str, Any]]:
     response = await router.complete_json(
         "strategic",
-        prompts.factor_prompt(cfg.description, cfg.data["taxonomy"].get("factors")),
-        system=prompts.SYSTEM_JSON,
+        cfg.prompts.factor_prompt(cfg.description, cfg.data["taxonomy"].get("factors")),
+        system=cfg.prompts.SYSTEM_JSON,
         task=TaskType.FACTOR_DISCOVERY,
     )
     return response.get("factors", [])
@@ -146,8 +145,8 @@ async def _expand_one_node(
         for _ in range(int(tax_cfg["best_of_n"])):
             response = await router.complete_json(
                 "strategic",
-                prompts.expand_prompt(cfg.description, factor, node, siblings, plan, int(tax_cfg.get("children_per_node", 4))),
-                system=prompts.SYSTEM_JSON,
+                cfg.prompts.expand_prompt(cfg.description, factor, node, siblings, plan, int(tax_cfg.get("children_per_node", 4))),
+                system=cfg.prompts.SYSTEM_JSON,
                 task=TaskType.NODE_EXPANSION,
             )
             raw_children.extend(response.get("children", []))
@@ -155,8 +154,8 @@ async def _expand_one_node(
         # A separate refinement call keeps child categories coherent and low-duplication.
         refined = await router.complete_json(
             "strategic",
-            prompts.refine_nodes_prompt(cfg.description, node, raw_children),
-            system=prompts.SYSTEM_JSON,
+            cfg.prompts.refine_nodes_prompt(cfg.description, node, raw_children),
+            system=cfg.prompts.SYSTEM_JSON,
             task=TaskType.TAXONOMY_CRITIC,
         )
         return [_child(child, level, node.get("path", [node["name"]])) for child in refined.get("children", [])]

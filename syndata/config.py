@@ -7,6 +7,7 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator
 
+from . import prompts
 from .utils import ensure_dir
 
 
@@ -17,6 +18,7 @@ DEFAULT_SCHEMA = None
 class Config:
     path: Path
     data: dict[str, Any]
+    prompts: prompts.PromptSet
 
     @property
     def output_dir(self) -> Path:
@@ -60,6 +62,7 @@ def default_config() -> dict[str, Any]:
             "bulk": {"base_url": "https://openrouter.ai/api/v1", "api_key_env": "OPENROUTER_API_KEY", "model": ""},
             "critic": {"base_url": "https://openrouter.ai/api/v1", "api_key_env": "OPENROUTER_API_KEY", "model": ""},
         },
+        "prompts": {"module": None},
         "taxonomy": {"depth": 2, "factors": None, "best_of_n": 2, "review_mode": "auto_accept", "children_per_node": 4},
         "generation": {
             "target_size": 50,
@@ -94,7 +97,8 @@ def load_config(path: str | Path) -> Config:
     config_path = Path(path)
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     data = _deep_merge(default_config(), raw)
-    cfg = Config(path=config_path, data=data)
+    prompt_set = prompts.load_prompt_set(config_path, data.get("prompts"))
+    cfg = Config(path=config_path, data=data, prompts=prompt_set)
     validate_config(cfg)
     ensure_dir(cfg.output_dir)
     return cfg

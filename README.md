@@ -127,6 +127,9 @@ models:
     api_key_env: "OPENROUTER_API_KEY"
     model: "google/gemini-3-flash-preview"
 
+prompts:
+  module: "config/prompts.py"
+
 taxonomy:
   depth: 2
   factors: null
@@ -163,6 +166,36 @@ evaluation:
 - `critic`: semantic critique and optional complexity scoring.
 
 All model roles use the same OpenAI-compatible chat completions interface. A role can use `"model": "fake"` for deterministic local tests.
+
+### Prompt Overrides
+
+Built-in prompt defaults live in `syndata/prompts.py`. To override them for one run, point config at a Python module:
+
+```yaml
+prompts:
+  module: "config/prompts.py"
+```
+
+Paths are resolved relative to the YAML file. The module may override any subset of the built-in prompt functions, and missing functions fall back to the defaults. It may also override `SYSTEM_JSON` and `SYSTEM_TEXT`.
+
+```python
+SYSTEM_JSON = "Return valid JSON only."
+
+
+def strategy_prompt(description, taxonomy):
+    return f"""
+Dataset description:
+{description}
+
+Taxonomy:
+{taxonomy}
+
+Create only combinations that make semantic sense for this dataset.
+Return JSON with a strategies array.
+""".strip()
+```
+
+Override functions must keep the same parameter names as their built-in counterparts in `syndata/prompts.py`. `syndata validate` imports the module and rejects missing files, import failures, non-string system prompts, and incompatible function signatures before any model call runs.
 
 ### Schema Support
 
@@ -302,5 +335,5 @@ Current test coverage includes:
 - Keep generated outputs under `runs/`; it is gitignored.
 - Avoid committing API keys or local `.env` files.
 - Prefer editing example YAMLs rather than hardcoding task-specific behavior.
-- Keep prompts centralized in `syndata/prompts.py`.
+- Keep built-in prompt defaults centralized in `syndata/prompts.py`; use prompt modules for per-run overrides.
 - Use `llm_calls.jsonl` when debugging model behavior.

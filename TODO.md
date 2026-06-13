@@ -1,37 +1,17 @@
 # TODO
 
-## Add Configurable Prompt Overrides
+## Done: Add Configurable Prompt Overrides
 
-All built-in prompts currently live in `syndata/prompts.py`, so users cannot directly tune the wording used for taxonomy discovery, taxonomy expansion/refinement, strategy generation, meta-prompt generation, complexification, record generation, repair, critique, refinement, complexity scoring, or taxonomy reassignment.
-
-Add a config-level prompt override mechanism that keeps the built-in prompts as defaults while letting users provide custom prompt text when they need more control.
-
-Possible shape:
+Runs can now point at a Python prompt module from config:
 
 ```yaml
 prompts:
-  system_json: null
-  system_text: null
-  factor_discovery: null
-  taxonomy_expand: null
-  taxonomy_refine: null
-  strategy: null
-  meta_prompt: null
-  complexify: null
-  generate_record: null
-  generate_text: null
-  repair_json: null
-  critique_record: null
-  critique_text: null
-  refine_record: null
-  refine_text: null
-  complexity_score: null
-  node_assign: null
+  module: "config/prompts.py"
 ```
 
-Support either inline YAML strings or references to external prompt files. Validate prompt placeholders early so bad prompt configs fail during `validate`, not halfway through a paid run.
+The module may override any subset of built-in prompt functions plus `SYSTEM_JSON` and `SYSTEM_TEXT`; missing overrides fall back to the built-ins in `syndata/prompts.py`. The loader resolves paths relative to the YAML file and validates module imports, string system prompts, and compatible function signatures during config loading.
 
-Reason: prompt wording is the main way users steer dataset style, quality criteria, taxonomy behavior, generation format, and critic behavior. The project should remain usable with zero prompt customization, but advanced users need an escape hatch without editing package code.
+Reason: prompt wording is the main way users steer dataset style, quality criteria, taxonomy behavior, generation format, and critic behavior. The implementation uses Python modules rather than text templates so advanced users can customize prompt-building logic, not only wording.
 
 ## Let Users Influence Strategy And Sampling Behavior
 

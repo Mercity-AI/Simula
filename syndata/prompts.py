@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import importlib.util
+import inspect
 import json
+from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 
@@ -15,6 +20,111 @@ SYSTEM_TEXT = (
     "Always think and write in English. "
     "Produce the requested content directly with no markdown wrapping or preamble."
 )
+
+
+PROMPT_FUNCTION_NAMES = (
+    "factor_prompt",
+    "expand_prompt",
+    "refine_nodes_prompt",
+    "level_plan_prompt",
+    "strategy_prompt",
+    "meta_prompt_prompt",
+    "complexify_prompt",
+    "generate_record_prompt",
+    "generate_text_prompt",
+    "repair_json_prompt",
+    "critique_prompt",
+    "critique_text_prompt",
+    "refine_record_prompt",
+    "refine_text_prompt",
+    "complexity_prompt",
+    "node_assign_prompt",
+)
+
+
+class PromptSet:
+    def __init__(self, module: ModuleType | None = None, module_path: Path | None = None):
+        self.module = module
+        self.module_path = module_path
+
+    def __getattr__(self, name: str) -> Any:
+        if name in {"SYSTEM_JSON", "SYSTEM_TEXT"}:
+            if self.module is not None and hasattr(self.module, name):
+                return getattr(self.module, name)
+            return globals()[name]
+        if name in PROMPT_FUNCTION_NAMES:
+            if self.module is not None and hasattr(self.module, name):
+                return getattr(self.module, name)
+            return globals()[name]
+        raise AttributeError(name)
+
+
+def load_prompt_set(config_path: Path, prompt_config: Any) -> PromptSet:
+    # Prompt modules are optional; missing functions fall back to the built-in prompt set.
+    module_ref = _prompt_module_ref(prompt_config)
+    if module_ref is None:
+        return PromptSet()
+
+    module_path = Path(module_ref)
+    if not module_path.is_absolute():
+        module_path = config_path.parent / module_path
+    module_path = module_path.resolve()
+    if not module_path.is_file():
+        raise ValueError(f"prompts.module does not exist: {module_path}")
+
+    module = _load_module(module_path)
+    _validate_prompt_module(module, module_path)
+    return PromptSet(module, module_path)
+
+
+def _prompt_module_ref(prompt_config: Any) -> str | None:
+    if prompt_config is None or prompt_config == {}:
+        return None
+    if isinstance(prompt_config, str):
+        return prompt_config
+    if isinstance(prompt_config, dict):
+        module_ref = prompt_config.get("module")
+        if module_ref is None:
+            return None
+        if not isinstance(module_ref, str) or not module_ref.strip():
+            raise ValueError("prompts.module must be a non-empty string path.")
+        return module_ref
+    raise ValueError("prompts must be a module path string or mapping with prompts.module.")
+
+
+def _load_module(module_path: Path) -> ModuleType:
+    digest = hashlib.sha1(str(module_path).encode("utf-8")).hexdigest()[:12]
+    spec = importlib.util.spec_from_file_location(f"syndata_user_prompts_{digest}", module_path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"Could not load prompt module: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # noqa: BLE001 - surface user-module import errors during validation.
+        raise ValueError(f"Failed to import prompt module {module_path}: {exc}") from exc
+    return module
+
+
+def _validate_prompt_module(module: ModuleType, module_path: Path) -> None:
+    # Fail early when an override cannot be called like the built-in function it replaces.
+    for system_name in ("SYSTEM_JSON", "SYSTEM_TEXT"):
+        if hasattr(module, system_name) and not isinstance(getattr(module, system_name), str):
+            raise ValueError(f"{module_path}: {system_name} must be a string.")
+
+    for name in PROMPT_FUNCTION_NAMES:
+        if not hasattr(module, name):
+            continue
+        override = getattr(module, name)
+        if not callable(override):
+            raise ValueError(f"{module_path}: {name} must be callable.")
+        expected = _parameter_names(globals()[name])
+        actual = _parameter_names(override)
+        if actual != expected:
+            raise ValueError(f"{module_path}: {name} must accept parameters {expected}; got {actual}.")
+
+
+def _parameter_names(func: Any) -> list[str]:
+    return list(inspect.signature(func).parameters)
 
 
 def schema_text(schema: dict[str, Any] | None) -> str:
