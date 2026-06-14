@@ -51,6 +51,21 @@ def test_fake_model_end_to_end(tmp_path: Path) -> None:
     assert "attempt_index" in rows[0]
 
 
+def test_sampling_override_is_logged_in_llm_calls(tmp_path: Path) -> None:
+    cfg = load_config(write_config(tmp_path, {"sampling": {"tasks": {"generate": {"temperature": 1.3, "min_p": 0.07}}}}))
+    router = ModelRouter(cfg.data)
+    asyncio.run(generate_dataset(cfg, router, quiet=True))
+    asyncio.run(router.flush_logs())
+    calls = read_jsonl(artifact_path(cfg.output_dir, "llm_calls"))
+    generate_calls = [c for c in calls if c["task"] == "generate"]
+    assert generate_calls, "expected at least one generate call logged"
+    assert all(c["sampling"]["temperature"] == 1.3 for c in generate_calls)  # task override applied
+    assert all(c["extra_body"].get("min_p") == 0.07 for c in generate_calls)  # provider param via extra_body
+    # An untargeted task keeps the default temperature, proving the override is task-scoped.
+    meta_calls = [c for c in calls if c["task"] == "meta_prompt"]
+    assert meta_calls and all(c["sampling"]["temperature"] == 0.7 for c in meta_calls)
+
+
 def test_malformed_json_repair_path(tmp_path: Path) -> None:
     from syndata.generate import _make_record
 

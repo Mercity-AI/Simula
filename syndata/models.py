@@ -31,13 +31,16 @@ class ModelRouter:
         model_cfg = self.config["models"][role]
         model = model_cfg["model"]
 
+        # Resolve decoding params once per call so fake and real paths log identical provenance.
+        sampling, extras = resolve_sampling(self.config, role, task)
+
         # Fake responses stay async so tests exercise the same call shape as real runs.
         if model == "fake":
             async with self._fake_lock:
                 self._fake_counter += 1
                 response = fake_complete(prompt, self._fake_counter)
             self._record_cost(role, task, model, prompt, response, 0.0, None)
-            self._schedule_log(role, task, model, prompt, system, response, 0.0, None, None)
+            self._schedule_log(role, task, model, prompt, system, response, 0.0, None, extras, sampling)
             return response
 
         client = self._client_for(role, model_cfg)
@@ -45,7 +48,6 @@ class ModelRouter:
             {"role": "system", "content": system or "You are a helpful assistant."},
             {"role": "user", "content": prompt},
         ]
-        extras = _merged_extra_body(model_cfg)
         started = time.time()
         last_rate_limit = None
 
@@ -53,12 +55,7 @@ class ModelRouter:
         for attempt in range(8):
             try:
                 await self._pace(float(model_cfg.get("min_interval_seconds", 0.0)))
-                kwargs = {
-                    "model": model,
-                    "messages": messages,
-                    "temperature": model_cfg.get("temperature", 0.7),
-                    "max_tokens": model_cfg.get("max_tokens", 2048),
-                }
+                kwargs = {"model": model, "messages": messages, **sampling}
                 if extras:
                     kwargs["extra_body"] = extras
                 response = await client.chat.completions.create(**kwargs)
@@ -66,7 +63,7 @@ class ModelRouter:
                 duration = time.time() - started
                 usage = getattr(response, "usage", None)
                 self._record_cost(role, task, model, prompt, content, duration, usage)
-                self._schedule_log(role, task, model, prompt, system, content, duration, usage, extras)
+                self._schedule_log(role, task, model, prompt, system, content, duration, usage, extras, sampling)
                 return content
             except Exception as exc:  # noqa: BLE001 - provider SDKs expose several exception classes.
                 retry_after, body = _rate_limit_details(exc)
@@ -125,11 +122,12 @@ class ModelRouter:
         duration: float,
         usage: Any,
         extra_body: dict[str, Any] | None,
+        sampling: dict[str, Any] | None,
     ) -> None:
         if self._output_dir is None:
             return
         task_obj = asyncio.create_task(
-            self._log_call_async(role, task, model, prompt, system, response, duration, usage, extra_body)
+            self._log_call_async(role, task, model, prompt, system, response, duration, usage, extra_body, sampling)
         )
         self._log_tasks.add(task_obj)
         task_obj.add_done_callback(self._log_tasks.discard)
@@ -145,6 +143,7 @@ class ModelRouter:
         duration: float,
         usage: Any,
         extra_body: dict[str, Any] | None,
+        sampling: dict[str, Any] | None,
     ) -> None:
         log_path = Path(os.getenv("SYNDATA_LLM_LOG", "")) if os.getenv("SYNDATA_LLM_LOG") else artifact_path(self._output_dir, "llm_calls")  # type: ignore[arg-type]
         row = {
@@ -158,9 +157,38 @@ class ModelRouter:
             "response": response,
             "in_tokens": getattr(usage, "prompt_tokens", None),
             "out_tokens": getattr(usage, "completion_tokens", None),
+            "sampling": sampling,
             "extra_body": extra_body,
         }
         await asyncio.to_thread(append_jsonl, log_path, row)
+
+
+# OpenAI-compatible decoding params sent as top-level call kwargs; everything else rides extra_body.
+KNOWN_PARAMS = ("temperature", "top_p", "max_tokens", "frequency_penalty", "presence_penalty", "stop", "seed")
+SAMPLING_DEFAULTS = {"temperature": 0.7, "max_tokens": 32768}
+# Connection/control keys on a model role are not decoding params and must not be sent as sampling kwargs.
+_CONNECTION_KEYS = frozenset({"base_url", "api_key", "api_key_env", "model", "min_interval_seconds", "extra_body"})
+
+
+def resolve_sampling(config: dict[str, Any], role: str, task: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    # Layer decoding params: built-in defaults <- model-role static <- per-task overrides.
+    model_cfg = config["models"][role]
+    layered: dict[str, Any] = dict(SAMPLING_DEFAULTS)
+    for key, value in model_cfg.items():
+        if key not in _CONNECTION_KEYS:
+            layered[key] = value
+    task_cfg = (config.get("sampling") or {}).get("tasks") or {}
+    layered.update(task_cfg.get(str(task)) or {})
+
+    # Split known OpenAI params (top-level) from provider-specific ones (extra_body pass-through).
+    call_params: dict[str, Any] = {}
+    extra_overrides: dict[str, Any] = {}
+    for key, value in layered.items():
+        (call_params if key in KNOWN_PARAMS else extra_overrides)[key] = value
+
+    extra_body = dict(_merged_extra_body(model_cfg))
+    extra_body.update(extra_overrides)
+    return call_params, extra_body
 
 
 def _merged_extra_body(model_cfg: dict[str, Any]) -> dict[str, Any]:

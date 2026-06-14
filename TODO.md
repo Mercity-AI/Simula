@@ -42,21 +42,31 @@ Reason: synthetic data users often need targeted coverage, not just broad random
 
 ## Add LLM Sampling Policies For Generation
 
-Model configuration is currently static per role: one `temperature`, one `max_tokens`, and optional provider `extra_body` settings are reused for every call made by that role. This is too rigid for advanced synthetic-data workflows where generation quality depends on coordinating decoding parameters across attempts.
+### Done: Per-task sampling overrides
 
-Add a compact sampling-policy layer for model calls, especially `bulk` generation calls, while preserving the current static config as the default.
+Decoding params are no longer static per role. `sampling.tasks` maps a task name to a
+decoding-param mapping, and `resolve_sampling` in `syndata/models.py` layers built-in
+defaults <- `models.<role>` static <- `sampling.tasks[task]`. OpenAI-compatible params
+go top-level; provider-specific ones (`min_p`, `top_k`, `repetition_penalty`, …) pass
+through `extra_body`. Resolution is pure (safe under concurrent workers). The resolved
+params are logged per call in `llm_calls.jsonl`. `validate` rejects unknown task names
+and non-numeric values. Default `max_tokens` is now 32768 (batteries-included).
 
-Potential capabilities:
+### Deliberately not built
 
-- per-task sampling overrides, so taxonomy, meta-prompt generation, record generation, repair, critique, and refinement can use different decoding settings
-- named sampling policies that bundle related parameters such as `temperature`, `top_p`, `min_p`, `frequency_penalty`, `presence_penalty`, `repetition_penalty`, and provider-specific extras
-- scheduled policies across repeated attempts, such as gradually increasing `temperature` while reducing `min_p`
-- policy sequences for the same prompt/meta-prompt, such as generating several variants under progressively more exploratory settings
-- enough provenance in `llm_calls.jsonl` and dataset artifacts to tell which sampling policy produced each output
+- **Named policies + task assignment.** Each task maps to exactly one role, so a task
+  key alone identifies a call; the policy-name indirection added ceremony without
+  payoff at this size. Params are assigned directly to tasks.
+- **Schedules / policy sequences across attempts.** Dropped to keep resolution a pure
+  function of `(role, task)` with no attempt plumbing or shared schedule state. For a
+  temperature spread, run the CLI twice with different `sampling` (each run already
+  takes its own `seed` and `output_dir`).
+- **Dataset-row provenance field.** Params are deterministic from `task`, so the row
+  shape is untouched; per-call provenance lives in `llm_calls.jsonl`.
 
-Do not turn this into a provider-specific abstraction. Keep the public config OpenAI-compatible where possible, and pass less common provider settings through `extra_body` when needed.
+Revisit only if a real workflow needs in-run decoding schedules that two CLI runs cannot cover.
 
-Reason: prompt design controls *what* the model should do, but decoding controls strongly affect diversity, repetition, novelty, and failure modes. Synthetic data generation often needs coordinated decoding schedules rather than one static temperature for an entire run.
+Reason: prompt design controls *what* the model should do, but decoding controls strongly affect diversity, repetition, novelty, and failure modes. Per-task overrides cover that without a scheduler; coordinated schedules can be achieved with multiple runs.
 
 ## Add Batched And Multi-Turn Generation Modes
 

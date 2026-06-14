@@ -140,6 +140,9 @@ taxonomy:
 strategy:
   guidance: null
 
+sampling:
+  tasks: {}
+
 generation:
   target_size: 50
   overgenerate_ratio: 1.2
@@ -213,6 +216,24 @@ strategy:
 ```
 
 The guidance is woven into the strategy prompt, so the generated `strategies.json` reflects your intent (root combinations and weights) before any bulk generation runs. Guidance is a nudge interpreted by the strategic model, not a hard constraint; for guarantees, edit `strategies.json` directly or override `strategy_prompt`. When unset (`null`), the built-in prompt is used unchanged.
+
+### Sampling
+
+Decoding params resolve in three layers, last one wins: built-in defaults (`temperature: 0.7`, `max_tokens: 32768`) → per-role config under `models.<role>` → per-task overrides under `sampling.tasks`. Each task is handled by exactly one role, so naming a task is enough — no role needs to be specified.
+
+```yaml
+sampling:
+  tasks:
+    generate:    {temperature: 1.1, top_p: 0.95, min_p: 0.05}
+    repair:      {temperature: 0.0}
+    meta_prompt: {temperature: 1.1}
+```
+
+Valid task names are the `TaskType` values: `factor_discovery`, `node_expansion`, `taxonomy_critic`, `level_plan`, `strategy`, `meta_prompt`, `complexify`, `generate`, `repair`, `semantic_critic`, `refine`, `complexity_score`, `node_assign`.
+
+OpenAI-compatible params (`temperature`, `top_p`, `max_tokens`, `frequency_penalty`, `presence_penalty`, `stop`, `seed`) are sent as top-level call kwargs. Anything else (`min_p`, `top_k`, `repetition_penalty`, …) is passed through `extra_body` so provider-specific knobs work without lock-in. The resolved params are recorded per call in `llm_calls.jsonl`.
+
+`syndata validate` rejects unknown task names and non-numeric values before any model call runs. With no `sampling` block, behavior is unchanged except the larger default `max_tokens`. That 32K default is batteries-included: roles without an explicit `max_tokens` can now emit much larger (and pricier) completions than before — set `models.<role>.max_tokens` or a per-task `max_tokens` to cap it.
 
 ### Schema Support
 

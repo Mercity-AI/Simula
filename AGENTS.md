@@ -33,6 +33,7 @@ Tests:
 - `tests/test_utils.py`
 - `tests/test_evaluate.py`
 - `tests/test_pipeline.py`
+- `tests/test_models.py`
 
 Generated artifacts:
 
@@ -93,6 +94,7 @@ The config loader applies defaults from `syndata/config.py`. Required user-facin
 - `prompts`: optional Python prompt module override
 - `taxonomy`: depth/factors/review behavior
 - `strategy`: optional free-text `guidance` woven into the strategy prompt
+- `sampling`: optional per-task decoding overrides under `sampling.tasks`
 - `generation`: target size, overgeneration, complexity ratio, retries, concurrency
 - `evaluation`: dedupe, coverage, complexity
 
@@ -102,9 +104,11 @@ Supported model config fields:
 - `api_key` or `api_key_env`
 - `model`
 - `temperature`
-- `max_tokens`
+- `max_tokens` (default 32768 when unset)
 - `min_interval_seconds`
 - `extra_body`
+
+Per-task decoding overrides live under `sampling.tasks` (task name -> param mapping). `resolve_sampling` in `syndata/models.py` layers built-in defaults <- `models.<role>` static <- `sampling.tasks[task]`, then splits OpenAI-compatible params (top-level call kwargs) from provider-specific ones (`extra_body` pass-through). Resolution is a pure function so it is safe under concurrent workers. Named policies and attempt schedules were intentionally not built; run the CLI twice for a temperature spread.
 
 Supported schema subset:
 
@@ -215,6 +219,8 @@ await ModelRouter.complete_json(role, prompt, system, task="...")
 ```
 
 `complete_json` expects parseable JSON somewhere in the response. If you strengthen parsing, keep fenced JSON support.
+
+The `task` argument drives per-task decoding via `resolve_sampling`; both the resolved sampling params and any `extra_body` are recorded on each `llm_calls.jsonl` row. Keep `task` accurate when adding new call sites.
 
 Rate-limit behavior:
 

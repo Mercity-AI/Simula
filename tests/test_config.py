@@ -137,6 +137,45 @@ def test_strategy_guidance_rejects_non_string(tmp_path: Path) -> None:
         load_config(path)
 
 
+def _sampling_config(tmp_path: Path, sampling: dict) -> Path:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "description": "Generate examples.",
+                "project": {"output_dir": str(tmp_path / "run")},
+                "sampling": sampling,
+                "models": {
+                    "strategic": {"base_url": "fake", "model": "fake"},
+                    "bulk": {"base_url": "fake", "model": "fake"},
+                    "critic": {"base_url": "fake", "model": "fake"},
+                },
+            }
+        )
+    )
+    return path
+
+
+def test_sampling_tasks_valid_config_loads(tmp_path: Path) -> None:
+    cfg = load_config(_sampling_config(tmp_path, {"tasks": {"generate": {"temperature": 1.1, "min_p": 0.05}}}))
+    assert cfg.data["sampling"]["tasks"]["generate"]["temperature"] == 1.1
+
+
+def test_sampling_rejects_unknown_task(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="unknown task"):
+        load_config(_sampling_config(tmp_path, {"tasks": {"generation": {"temperature": 1.1}}}))
+
+
+def test_sampling_rejects_non_mapping_params(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="must be a mapping"):
+        load_config(_sampling_config(tmp_path, {"tasks": {"generate": 1.1}}))
+
+
+def test_sampling_rejects_non_numeric_temperature(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="must be a number"):
+        load_config(_sampling_config(tmp_path, {"tasks": {"generate": {"temperature": "hot"}}}))
+
+
 def test_schema_subset_rejects_missing_array_items() -> None:
     with pytest.raises(ValueError):
         validate_schema_subset({"type": "array"})

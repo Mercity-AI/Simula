@@ -8,6 +8,7 @@ import yaml
 from jsonschema import Draft202012Validator
 
 from . import prompts
+from .tasks import TaskType
 from .utils import ensure_dir
 
 
@@ -65,6 +66,7 @@ def default_config() -> dict[str, Any]:
         "prompts": {"module": None},
         "taxonomy": {"depth": 2, "factors": None, "best_of_n": 2, "review_mode": "auto_accept", "children_per_node": 4},
         "strategy": {"guidance": None},
+        "sampling": {"tasks": {}},
         "generation": {
             "target_size": 50,
             "overgenerate_ratio": 1.3,
@@ -130,6 +132,9 @@ def validate_config(cfg: Config) -> None:
     if guidance is not None and not isinstance(guidance, str):
         raise ValueError("strategy.guidance must be a string when set.")
 
+    # Per-task sampling overrides must name real tasks; param names stay open for extra_body pass-through.
+    validate_sampling(cfg.data.get("sampling"))
+
     # Evaluation modes are explicit because they change cost and whether model calls happen.
     coverage_mode = cfg.data["evaluation"].get("coverage_mode", "lineage")
     if coverage_mode not in {"lineage", "reassign", "both"}:
@@ -140,6 +145,31 @@ def validate_config(cfg: Config) -> None:
         raise ValueError("evaluation.diversity.sample_cap must be positive.")
     if int(diversity.get("k_local", 10)) <= 0:
         raise ValueError("evaluation.diversity.k_local must be positive.")
+
+
+def validate_sampling(sampling: Any) -> None:
+    # Validate per-task decoding overrides early so a typo fails during `validate`, not mid-run.
+    if sampling is None:
+        return
+    if not isinstance(sampling, dict):
+        raise ValueError("sampling must be a mapping.")
+    tasks = sampling.get("tasks") or {}
+    if not isinstance(tasks, dict):
+        raise ValueError("sampling.tasks must be a mapping of task name to decoding params.")
+
+    valid_tasks = {t.value for t in TaskType}
+    numeric_params = {"temperature", "top_p", "frequency_penalty", "presence_penalty", "min_p", "repetition_penalty"}
+    for name, params in tasks.items():
+        if name not in valid_tasks:
+            raise ValueError(f"sampling.tasks has unknown task '{name}'. Valid tasks: {sorted(valid_tasks)}.")
+        if not isinstance(params, dict):
+            raise ValueError(f"sampling.tasks.{name} must be a mapping of decoding params.")
+        # Param names stay open (unknowns pass through to extra_body), but known numerics must be numbers.
+        for key, value in params.items():
+            if key in numeric_params and not isinstance(value, (int, float)):
+                raise ValueError(f"sampling.tasks.{name}.{key} must be a number.")
+            if key == "max_tokens" and not isinstance(value, int):
+                raise ValueError(f"sampling.tasks.{name}.max_tokens must be an integer.")
 
 
 def validate_schema_subset(schema: dict[str, Any]) -> None:
