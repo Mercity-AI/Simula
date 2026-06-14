@@ -14,11 +14,14 @@ Core package:
 
 - `syndata/cli.py`: CLI command dispatch for `validate`, `taxonomy`, `generate`, `evaluate`, and `run`.
 - `syndata/config.py`: YAML loading, defaults, config validation, JSON Schema subset checks, call estimates.
-- `syndata/models.py`: OpenAI-compatible model router, fake model, retry/rate-limit handling, live `llm_calls.jsonl` logging.
-- `syndata/prompts.py`: all built-in prompt templates and the global English/JSON system instruction.
+- `syndata/models.py`: OpenAI-compatible model router, fake model, retry/rate-limit handling, per-task sampling resolution (`resolve_sampling`), live `llm_calls.jsonl` logging.
+- `syndata/prompts.py`: built-in prompt templates, the global English/JSON system instruction, and the prompt-module override loader (`PromptSet`, `load_prompt_set`).
 - `syndata/taxonomy.py`: factor discovery, breadth-first taxonomy expansion, review modes, strategy creation, strategy-aware sampling.
 - `syndata/generate.py`: generation orchestration, meta-prompts, complexification, JSON generation/repair, critic/refine loop, concurrent workers, final trimming.
 - `syndata/evaluate.py`: schema validation, dedupe, coverage reports, coverage-aware trimming, optional complexity scoring.
+- `syndata/tasks.py`: `TaskType` enum naming every model-call site (drives logging and per-task sampling).
+- `syndata/cost.py`: token/cost accounting accumulated across calls and written to `cost_summary.json`.
+- `syndata/diversity.py`: optional embedding-based diversity scoring used by evaluation.
 - `syndata/utils.py`: artifact names, JSON/JSONL helpers, timestamps, JSON extraction, record-to-text, checkpoint helpers.
 
 Examples:
@@ -260,7 +263,7 @@ Use `"model": "fake"` for tests. Do not require network access in tests.
 ## Known Cleanup / Improvement Candidates
 
 - Add a command to tail/summarize `llm_calls.jsonl`.
-- Add prompt override support from config files.
+- Add batched and multi-turn generation modes (see `TODO.md`).
 
 ## Safety and Privacy
 
