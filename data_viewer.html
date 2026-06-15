@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Synthetic Data Viewer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --line: #e6eaf0;
+      --line-strong: #d4dae3;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --accent: #2563eb;
+      --accent-soft: #eef4ff;
+      --green: #047857;
+      --green-soft: #ecfdf5;
+      --red: #b91c1c;
+      --red-soft: #fef2f2;
+      --amber: #b45309;
+      --amber-soft: #fffbeb;
+      --violet: #6d28d9;
+      --violet-soft: #f5f3ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    button, input, select { font: inherit; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; }
+    .btn {
+      border: 1px solid var(--line-strong); border-radius: 10px; padding: 7px 14px; background: #fff;
+      color: var(--text); cursor: pointer; transition: background 120ms ease, border-color 120ms ease;
+      font-size: 14px; font-weight: 500;
+    }
+    .btn:hover:not(:disabled) { background: #f3f6fb; border-color: #c2cad6; }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #1d4ed8; border-color: #1d4ed8; }
+    .input {
+      width: 100%; border: 1px solid var(--line-strong); border-radius: 10px; padding: 8px 12px;
+      background: #fff; color: var(--text); outline: none;
+    }
+    .input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }
+    .dropzone { border: 1.5px dashed var(--line-strong); border-radius: 12px; background: #fbfcfe; transition: all 120ms ease; }
+    .dropzone.dragging { border-color: var(--accent); background: var(--accent-soft); }
+    .chip {
+      display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px;
+      font-size: 11.5px; font-weight: 600; border: 1px solid transparent; white-space: nowrap;
+    }
+    .chip-blue { background: var(--accent-soft); color: var(--accent); border-color: #dbe6ff; }
+    .chip-green { background: var(--green-soft); color: var(--green); border-color: #c7efd9; }
+    .chip-red { background: var(--red-soft); color: var(--red); border-color: #fbd5d5; }
+    .chip-amber { background: var(--amber-soft); color: var(--amber); border-color: #fce8bf; }
+    .chip-violet { background: var(--violet-soft); color: var(--violet); border-color: #e6defb; }
+    .chip-gray { background: #f1f3f7; color: var(--muted); border-color: #e3e7ee; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    .label { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+    .kv { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .kv td { padding: 4px 8px; vertical-align: top; border-bottom: 1px solid #f0f2f6; }
+    .kv td:first-child { color: var(--muted); white-space: nowrap; width: 1%; font-weight: 500; }
+    .kv td:last-child { word-break: break-word; }
+    .kv tr:last-child td { border-bottom: none; }
+    .val-num { color: #0e7490; font-weight: 600; }
+    .val-bool { color: var(--violet); font-weight: 600; }
+    .val-str { color: #15803d; }
+    details > summary { cursor: pointer; list-style: none; }
+    details > summary::-webkit-details-marker { display: none; }
+    .source-text { white-space: pre-wrap; font-size: 13.5px; color: #374151; }
+    .stat b { display:block; font-size: 22px; font-weight: 700; color: var(--text); line-height: 1.1; }
+    .stat span { font-size: 12px; color: var(--muted); }
+    ::selection { background: #cfe0ff; }
+  </style>
+</head>
+<body>
+  <main class="mx-auto w-[min(1280px,calc(100vw-28px))] py-7">
+    <header class="mb-5">
+      <div class="mb-2 inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
+        syndata · dataset inspector
+      </div>
+      <h1 class="text-3xl font-semibold tracking-tight">Synthetic Data Viewer</h1>
+      <p class="mt-1.5 max-w-3xl text-sm text-slate-500">
+        Browse generated records 10 at a time with the full provenance behind each one — the sampling strategy,
+        the taxonomy branches that conditioned it, the meta-prompt, the critic's verdict, and the model used.
+      </p>
+    </header>
+
+    <!-- Loader -->
+    <section class="card mb-4 p-4">
+      <div id="dropzone" class="dropzone p-4">
+        <div class="grid gap-3 lg:grid-cols-[minmax(260px,1fr)_minmax(220px,1fr)_auto] lg:items-end">
+          <label class="block">
+            <span class="label mb-1 block">Load files</span>
+            <input id="fileInput" class="input file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-blue-700"
+                   type="file" multiple accept=".json,.jsonl,.yaml,.yml,application/json">
+          </label>
+          <label class="block">
+            <span class="label mb-1 block">Search records</span>
+            <input id="searchInput" class="input" type="search" placeholder="text, field, value, strategy…">
+          </label>
+          <button id="sampleBtn" class="btn" type="button" title="Try with a tiny built-in example">Load demo</button>
+        </div>
+        <p class="mt-3 text-xs text-slate-500">
+          Drop <span class="mono">dataset.final.jsonl</span> here (required). Optionally add
+          <span class="mono">cost_summary.json</span>, <span class="mono">strategies.json</span>, and the run's
+          <span class="mono">*.yaml</span> config — they're auto-detected and enrich the view.
+        </p>
+        <p id="loadStatus" class="mt-1 text-xs text-slate-400"></p>
+      </div>
+    </section>
+
+    <!-- Summary -->
+    <section id="summary" class="mb-4 hidden grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div class="card stat p-3"><b id="sRows">0</b><span>Records</span></div>
+      <div class="card stat p-3"><b id="sAccepted">0</b><span>Accepted</span></div>
+      <div class="card stat p-3"><b id="sStrategies">0</b><span>Strategies</span></div>
+      <div class="card stat p-3"><b id="sModels">0</b><span>Models</span></div>
+      <div class="card stat p-3"><b id="sCalls">—</b><span>LLM calls</span></div>
+      <div class="card stat p-3"><b id="sCost">—</b><span>Run cost / time</span></div>
+    </section>
+
+    <!-- Filters + paging -->
+    <section id="controls" class="mb-3 hidden items-center justify-between gap-3">
+      <div class="flex flex-wrap items-center gap-2">
+        <select id="strategyFilter" class="input !w-auto text-sm"><option value="">All strategies</option></select>
+        <label class="flex items-center gap-1.5 text-sm text-slate-600">
+          <input id="acceptedOnly" type="checkbox" class="h-4 w-4 rounded border-slate-300"> accepted only
+        </label>
+      </div>
+      <div class="flex items-center gap-2">
+        <span id="rangeInfo" class="text-sm text-slate-500"></span>
+        <button id="prevBtn" class="btn" type="button">← Prev</button>
+        <button id="nextBtn" class="btn" type="button">Next →</button>
+      </div>
+    </section>
+
+    <section id="cards" class="space-y-4"></section>
+
+    <div id="emptyState" class="card mt-2 p-10 text-center text-slate-400">
+      No data loaded yet. Drop a <span class="mono">dataset.*.jsonl</span> file above to begin.
+    </div>
+
+    <section id="pagerBottom" class="mt-5 hidden items-center justify-center gap-3">
+      <button id="prevBtn2" class="btn" type="button">← Prev</button>
+      <span id="pageInfo" class="text-sm text-slate-500"></span>
+      <button id="nextBtn2" class="btn" type="button">Next →</button>
+    </section>
+
+    <footer class="mt-8 text-center text-xs text-slate-400">Single-file viewer · works fully offline · light theme</footer>
+  </main>
+
+<script>
+const PAGE_SIZE = 10;
+const state = { rows: [], filtered: [], page: 0, cost: null, strategies: {}, config: null, search: "", strategyFilter: "", acceptedOnly: false };
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const fmtNum = (n) => n == null ? "—" : Number(n).toLocaleString();
+
+function fmtDur(sec) {
+  if (sec == null) return "—";
+  sec = Math.round(sec); const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
+  return h ? `${h}h${String(m).padStart(2,"0")}m` : m ? `${m}m${String(s).padStart(2,"0")}s` : `${s}s`;
+}
+function fmtDate(iso) { if (!iso) return ""; const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString(); }
+
+// ---- File ingestion (auto-detect by content) ----
+function classify(name, parsed, text) {
+  if (Array.isArray(parsed) || (parsed && parsed[0])) {} // unused
+  if (name.endsWith(".jsonl")) return "rows";
+  if (name.endsWith(".yaml") || name.endsWith(".yml")) return "config";
+  if (parsed && typeof parsed === "object") {
+    if ("total_calls" in parsed || "by_role_task_model" in parsed) return "cost";
+    if (Array.isArray(parsed.strategies)) return "strategies";
+    if (parsed.models || parsed.taxonomy) return "config";
+  }
+  // JSON array of records?
+  if (Array.isArray(parsed) && parsed.length && parsed[0] && parsed[0].record !== undefined) return "rows";
+  return "rows";
+}
+
+function parseJsonl(text) {
+  const out = [];
+  for (const line of text.split("\n")) {
+    const t = line.trim(); if (!t) continue;
+    try { out.push(JSON.parse(t)); } catch (_) {}
+  }
+  return out;
+}
+
+async function ingestFiles(fileList) {
+  const msgs = [];
+  for (const file of fileList) {
+    const text = await file.text();
+    const name = file.name.toLowerCase();
+    let kind = name.endsWith(".jsonl") ? "rows" : null;
+    let parsed = null;
+    if (!kind) { try { parsed = JSON.parse(text); } catch (_) {} }
+    if (name.endsWith(".yaml") || name.endsWith(".yml")) kind = "config";
+    if (!kind) kind = classify(name, parsed, text);
+
+    if (kind === "rows") {
+      const rows = name.endsWith(".jsonl") ? parseJsonl(text) : (Array.isArray(parsed) ? parsed : parseJsonl(text));
+      state.rows = rows; msgs.push(`${rows.length} records from ${file.name}`);
+    } else if (kind === "cost") {
+      state.cost = parsed; msgs.push(`cost summary from ${file.name}`);
+    } else if (kind === "strategies") {
+      const list = parsed.strategies || [];
+      state.strategies = Object.fromEntries(list.map(s => [s.id, s]));
+      msgs.push(`${list.length} strategies from ${file.name}`);
+    } else if (kind === "config") {
+      try { state.config = jsyaml.load(text); msgs.push(`config from ${file.name}`); }
+      catch (e) { msgs.push(`could not parse ${file.name}`); }
+    }
+  }
+  $("loadStatus").textContent = "Loaded: " + msgs.join(" · ");
+  rebuild();
+}
+
+// ---- Summary ----
+function rebuild() {
+  if (!state.rows.length) return;
+  const accepted = state.rows.filter(r => r.accepted).length;
+  const strategies = new Set(state.rows.map(r => r.strategy_id).filter(Boolean));
+  const models = new Set(state.rows.map(r => r.generator_model).filter(Boolean));
+  $("sRows").textContent = fmtNum(state.rows.length);
+  $("sAccepted").textContent = fmtNum(accepted);
+  $("sStrategies").textContent = fmtNum(strategies.size);
+  $("sModels").textContent = fmtNum(models.size);
+  if (state.cost) {
+    $("sCalls").textContent = fmtNum(state.cost.total_calls);
+    const cost = estCost(state.cost);
+    $("sCost").textContent = `${cost} · ${fmtDur(state.cost.elapsed_seconds)}`;
+  }
+  // strategy filter options
+  const sel = $("strategyFilter");
+  sel.innerHTML = '<option value="">All strategies</option>' +
+    [...strategies].sort().map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
+
+  $("summary").classList.remove("hidden");
+  $("summary").classList.add("grid");
+  $("controls").classList.remove("hidden");
+  $("controls").classList.add("flex");
+  $("emptyState").classList.add("hidden");
+  applyFilters();
+}
+
+function estCost(cost) {
+  // Token-based estimate when the run didn't log per-call $; rates are deepseek-ish OpenRouter ballparks.
+  const inT = cost.total_input_tokens || 0, outT = cost.total_output_tokens || 0;
+  const usd = inT/1e6*0.05 + outT/1e6*0.40;
+  return usd ? `~$${usd.toFixed(2)}` : "—";
+}
+
+function applyFilters() {
+  const q = state.search.trim().toLowerCase();
+  state.filtered = state.rows.filter(r => {
+    if (state.acceptedOnly && !r.accepted) return false;
+    if (state.strategyFilter && r.strategy_id !== state.strategyFilter) return false;
+    if (!q) return true;
+    return JSON.stringify(r.record || "").toLowerCase().includes(q)
+        || (r.strategy_id || "").toLowerCase().includes(q)
+        || (r.meta_prompt || "").toLowerCase().includes(q);
+  });
+  state.page = 0;
+  render();
+}
+
+// ---- Value rendering ----
+function valHtml(v) {
+  if (v === null) return '<span class="text-slate-400">null</span>';
+  if (typeof v === "number") return `<span class="val-num mono">${esc(v)}</span>`;
+  if (typeof v === "boolean") return `<span class="val-bool mono">${v}</span>`;
+  if (Array.isArray(v)) return v.map(x => `<span class="chip chip-gray mono">${esc(typeof x === "object" ? JSON.stringify(x) : x)}</span>`).join(" ");
+  if (typeof v === "object") return `<span class="mono">${esc(JSON.stringify(v))}</span>`;
+  return `<span class="val-str">${esc(v)}</span>`;
+}
+function kvTable(obj) {
+  const keys = Object.keys(obj || {});
+  if (!keys.length) return '<div class="text-sm text-slate-400">—</div>';
+  return `<table class="kv">${keys.map(k => `<tr><td class="mono">${esc(k)}</td><td>${valHtml(obj[k])}</td></tr>`).join("")}</table>`;
+}
+
+function recordBody(rec) {
+  // Special-case the schema-guided extraction shape; fall back to generic JSON / text.
+  if (rec && typeof rec === "object" && "schema" in rec && "text" in rec && "extraction" in rec) {
+    const schemaKeys = Object.keys(rec.schema || {});
+    const extractKeys = Object.keys(rec.extraction || {});
+    const omitted = schemaKeys.filter(k => !extractKeys.includes(k));
+    return `
+      <div class="grid gap-3 lg:grid-cols-3">
+        <div>
+          <div class="label mb-1">Target schema <span class="text-slate-400">(${schemaKeys.length})</span></div>
+          ${kvTable(rec.schema)}
+        </div>
+        <div>
+          <div class="label mb-1">Source text</div>
+          <div class="source-text rounded-lg border border-slate-100 bg-slate-50 p-3">${esc(rec.text)}</div>
+        </div>
+        <div>
+          <div class="label mb-1">Extraction <span class="text-slate-400">(${extractKeys.length})</span></div>
+          ${kvTable(rec.extraction)}
+          ${omitted.length ? `<div class="mt-2 text-xs text-slate-400">omitted (not in text): <span class="mono">${omitted.map(esc).join(", ")}</span></div>` : ""}
+        </div>
+      </div>`;
+  }
+  if (typeof rec === "string") {
+    return `<div class="source-text rounded-lg border border-slate-100 bg-slate-50 p-3">${esc(rec)}</div>`;
+  }
+  return `<pre class="mono overflow-auto rounded-lg border border-slate-100 bg-slate-50 p-3 text-xs">${esc(JSON.stringify(rec, null, 2))}</pre>`;
+}
+
+function lineageHtml(mix) {
+  if (!Array.isArray(mix) || !mix.length) return '<span class="text-slate-400 text-sm">no lineage</span>';
+  return `<div class="flex flex-wrap gap-2">` + mix.map(m => {
+    const path = Array.isArray(m.path) ? m.path.join(" › ") : m.node;
+    return `<span class="chip chip-violet" title="${esc(m.description || "")}"><span class="opacity-70">${esc(m.factor)}:</span> ${esc(path)}</span>`;
+  }).join("") + `</div>`;
+}
+
+function verdictsHtml(verdicts) {
+  if (!Array.isArray(verdicts) || !verdicts.length) return '<span class="text-slate-400 text-sm">no critic verdicts recorded</span>';
+  return verdicts.map((v, i) => {
+    const ok = (v.verdict || "").toLowerCase() === "accept";
+    return `<div class="mb-1.5 text-sm">
+      <span class="chip ${ok ? "chip-green" : "chip-red"}">${esc(v.verdict || "?")}</span>
+      <span class="ml-2 text-slate-600">${esc(v.explanation || "")}</span>
+      ${verdicts.length > 1 ? `<span class="ml-1 text-xs text-slate-400">(pass ${i+1})</span>` : ""}
+    </div>`;
+  }).join("");
+}
+
+function llmConfigHtml(row) {
+  const cfg = state.config && state.config.models ? state.config.models : null;
+  const role = (r) => cfg && cfg[r] ? cfg[r] : null;
+  const bulk = role("bulk"), critic = role("critic");
+  const parts = [];
+  parts.push(`<tr><td>generator</td><td class="mono">${esc(row.generator_model || "—")}</td></tr>`);
+  if (bulk) parts.push(`<tr><td>bulk sampling</td><td>temp <span class="val-num mono">${esc(bulk.temperature ?? "—")}</span> · max_tokens <span class="mono">${esc(bulk.max_tokens ?? "—")}</span></td></tr>`);
+  if (critic) parts.push(`<tr><td>critic sampling</td><td>temp <span class="val-num mono">${esc(critic.temperature ?? "—")}</span> · model <span class="mono">${esc(critic.model || "—")}</span></td></tr>`);
+  // Avg time per generation-related task from cost_summary, if present.
+  if (state.cost && Array.isArray(state.cost.by_role_task_model)) {
+    const want = ["generate","meta_prompt","semantic_critic"];
+    const rowsT = state.cost.by_role_task_model.filter(t => want.includes(t.task));
+    const avg = rowsT.length ? rowsT.map(t => `${t.task} ~${(t.duration_seconds/Math.max(1,t.calls)).toFixed(1)}s`).join(" · ") : null;
+    if (avg) parts.push(`<tr><td>avg call time</td><td class="text-slate-600">${esc(avg)} <span class="text-xs text-slate-400">(run-wide)</span></td></tr>`);
+  }
+  return `<table class="kv">${parts.join("")}</table>`;
+}
+
+function strategyDetailHtml(id) {
+  const s = state.strategies[id];
+  if (!s) return "";
+  return `<div class="mt-1 text-sm text-slate-600">${esc(s.description || "")}
+    ${s.weight != null ? `<span class="chip chip-gray ml-1">weight ${esc(s.weight)}</span>` : ""}
+    ${Array.isArray(s.taxonomy_roots) ? `<div class="mt-1 text-xs text-slate-400 mono">${esc(s.taxonomy_roots.join(", "))}</div>` : ""}</div>`;
+}
+
+function cardHtml(row, idx) {
+  const accepted = !!row.accepted;
+  const badges = [
+    `<span class="chip ${accepted ? "chip-green" : "chip-red"}">${accepted ? "accepted" : "rejected"}</span>`,
+    row.complexified ? `<span class="chip chip-amber">complexified</span>` : "",
+    row.schema_valid === false ? `<span class="chip chip-red">schema invalid</span>` : "",
+  ].filter(Boolean).join(" ");
+
+  return `
+  <article class="card overflow-hidden">
+    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50/60 px-4 py-3">
+      <div class="flex items-center gap-2">
+        <span class="text-sm font-semibold text-slate-400">#${idx}</span>
+        <span class="mono text-xs text-slate-500">${esc(row.id || "")}</span>
+        ${badges}
+      </div>
+      <div class="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        ${row.strategy_id ? `<span class="chip chip-blue">${esc(row.strategy_id)}</span>` : ""}
+        ${row.generator_model ? `<span class="chip chip-gray mono">${esc(row.generator_model)}</span>` : ""}
+        ${row.created_at ? `<span>${esc(fmtDate(row.created_at))}</span>` : ""}
+      </div>
+    </div>
+
+    <div class="p-4">
+      ${recordBody(row.record)}
+      ${row.rejection_reason ? `<div class="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700"><b>Rejected:</b> ${esc(row.rejection_reason)}</div>` : ""}
+
+      <details class="mt-3 rounded-lg border border-slate-100 bg-slate-50/40">
+        <summary class="flex items-center gap-2 px-3 py-2 text-sm font-medium text-slate-600">
+          <span class="text-slate-400">▸</span> Provenance — how this record was created
+        </summary>
+        <div class="grid gap-4 border-t border-slate-100 p-4 lg:grid-cols-2">
+          <div>
+            <div class="label mb-1.5">Sampling strategy</div>
+            <span class="chip chip-blue">${esc(row.strategy_id || "—")}</span>
+            ${strategyDetailHtml(row.strategy_id)}
+            <div class="label mb-1.5 mt-4">Taxonomy lineage (inputs)</div>
+            ${lineageHtml(row.taxonomy_mix)}
+          </div>
+          <div>
+            <div class="label mb-1.5">LLM config &amp; timing</div>
+            ${llmConfigHtml(row)}
+          </div>
+          <div class="lg:col-span-2">
+            <div class="label mb-1.5">Meta-prompt (generation instruction)</div>
+            <div class="source-text rounded-lg border border-slate-100 bg-white p-3 text-sm">${esc(row.meta_prompt || "—")}</div>
+          </div>
+          <div class="lg:col-span-2">
+            <div class="label mb-1.5">Critic verdict</div>
+            ${verdictsHtml(row.critic_verdicts)}
+          </div>
+        </div>
+      </details>
+    </div>
+  </article>`;
+}
+
+function render() {
+  const total = state.filtered.length;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  state.page = Math.min(state.page, pages - 1);
+  const start = state.page * PAGE_SIZE;
+  const slice = state.filtered.slice(start, start + PAGE_SIZE);
+
+  $("cards").innerHTML = slice.length
+    ? slice.map((r, i) => cardHtml(r, start + i + 1)).join("")
+    : `<div class="card p-10 text-center text-slate-400">No records match the current filters.</div>`;
+
+  const end = Math.min(start + PAGE_SIZE, total);
+  $("rangeInfo").textContent = total ? `${start + 1}–${end} of ${total}` : "0 of 0";
+  $("pageInfo").textContent = `Page ${state.page + 1} of ${pages}`;
+  for (const id of ["prevBtn", "prevBtn2"]) $(id).disabled = state.page === 0;
+  for (const id of ["nextBtn", "nextBtn2"]) $(id).disabled = state.page >= pages - 1;
+  $("pagerBottom").classList.toggle("hidden", total <= PAGE_SIZE);
+  $("pagerBottom").classList.toggle("flex", total > PAGE_SIZE);
+}
+
+// ---- Events ----
+$("fileInput").addEventListener("change", e => ingestFiles([...e.target.files]));
+const dz = $("dropzone");
+["dragenter","dragover"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add("dragging"); }));
+["dragleave","drop"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove("dragging"); }));
+dz.addEventListener("drop", e => { if (e.dataTransfer.files.length) ingestFiles([...e.dataTransfer.files]); });
+
+$("searchInput").addEventListener("input", e => { state.search = e.target.value; applyFilters(); });
+$("strategyFilter").addEventListener("change", e => { state.strategyFilter = e.target.value; applyFilters(); });
+$("acceptedOnly").addEventListener("change", e => { state.acceptedOnly = e.target.checked; applyFilters(); });
+const go = (d) => { state.page += d; render(); window.scrollTo({ top: 0, behavior: "smooth" }); };
+["prevBtn","prevBtn2"].forEach(id => $(id).addEventListener("click", () => go(-1)));
+["nextBtn","nextBtn2"].forEach(id => $(id).addEventListener("click", () => go(1)));
+
+$("sampleBtn").addEventListener("click", () => {
+  state.rows = DEMO; state.cost = DEMO_COST; state.strategies = {}; state.config = DEMO_CONFIG;
+  $("loadStatus").textContent = "Loaded built-in demo (3 records).";
+  rebuild();
+});
+
+// Tiny built-in demo so the page is never blank.
+const DEMO = [
+  { id: "item-2-ab12cd34", accepted: true, complexified: false, schema_valid: true, strategy_id: "tech_digital_jobs",
+    generator_model: "deepseek/deepseek-v4-flash:nitro", created_at: "2026-06-14T14:05:00Z",
+    meta_prompt: "Write a posting for an Applied Scientist (NLP) at a Toronto AI lab; request a narrow schema; the text will not state education level.",
+    taxonomy_mix: [
+      { factor: "job_family", node: "technology_digital", path: ["job_family","technology_digital","ml_ai"], description: "ML/AI roles" },
+      { factor: "seniority_level", node: "senior", path: ["seniority_level","senior"], description: "Senior IC" },
+      { factor: "posting_style", node: "narrative_blurb", path: ["posting_style","narrative_blurb"], description: "Warm prose ad" },
+      { factor: "fact_completeness", node: "compensation_present", path: ["fact_completeness","compensation_completeness","present"], description: "Salary stated" }
+    ],
+    critic_verdicts: [{ verdict: "accept", explanation: "All fields atomic and grounded in the text; education_level correctly omitted." }],
+    record: {
+      schema: { job_title: "string", company_name: "string", location_city: "string", location_country: "string",
+        salary_min: "integer", salary_max: "integer", salary_currency: "string", education_level: "string", remote_ok: "boolean" },
+      text: "At GlobalSoft we're building multimodal assistants. We're hiring an Applied Scientist (NLP) for our Toronto research lab. Compensation is CAD 150,000–190,000. On-site.",
+      extraction: { job_title: "Applied Scientist (NLP)", company_name: "GlobalSoft", location_city: "Toronto",
+        location_country: "Canada", salary_min: 150000, salary_max: 190000, salary_currency: "CAD", remote_ok: false }
+    }
+  },
+  { id: "item-5-99ffaa01", accepted: true, complexified: true, schema_valid: true, strategy_id: "legal_service_trades_jobs",
+    generator_model: "deepseek/deepseek-v4-flash:nitro", created_at: "2026-06-14T14:06:10Z",
+    meta_prompt: "Bulleted apprenticeship ad in Sydney; request licenses + email; omit salary.",
+    taxonomy_mix: [
+      { factor: "job_family", node: "legal_service_trades", path: ["job_family","legal_service_trades","skilled_trades"], description: "Skilled trades" },
+      { factor: "seniority_level", node: "internship", path: ["seniority_level","internship"], description: "Apprentice" }
+    ],
+    critic_verdicts: [{ verdict: "accept", explanation: "Atomic fields; salary correctly omitted (absent in text)." }],
+    record: {
+      schema: { job_title: "string", company_name: "string", location_city: "string", location_state: "string",
+        salary_hourly: "number", employment_type: "string", required_licenses: "array<string>", application_email: "string" },
+      text: "BuildCorp Australia seeks an Apprentice Electrician for commercial construction in Sydney, NSW. Full-time. Requires a White Card and Electrical Apprentice Licence. Apply: careers@buildcorp.com.au",
+      extraction: { job_title: "Apprentice Electrician", company_name: "BuildCorp Australia", location_city: "Sydney",
+        location_state: "NSW", employment_type: "full_time", required_licenses: ["White Card","Electrical Apprentice Licence"], application_email: "careers@buildcorp.com.au" }
+    }
+  },
+  { id: "item-7-77bbee52", accepted: false, complexified: false, schema_valid: true, strategy_id: "business_admin_jobs",
+    generator_model: "deepseek/deepseek-v4-flash:nitro", created_at: "2026-06-14T14:07:40Z",
+    rejection_reason: "The extraction value for 'salary_per_year' is a range string '70-90k' rather than split atomic fields.",
+    meta_prompt: "Recruiter message for a finance analyst; request salary fields.",
+    taxonomy_mix: [{ factor: "job_family", node: "business_administration", path: ["job_family","business_administration","finance"], description: "Finance" }],
+    critic_verdicts: [{ verdict: "reject", explanation: "salary_per_year holds a compound range string; should be salary_min/salary_max." }],
+    record: {
+      schema: { job_title: "string", salary_per_year: "string", location_city: "string" },
+      text: "Hiring a Finance Analyst in Chicago, 70-90k depending on experience.",
+      extraction: { job_title: "Finance Analyst", salary_per_year: "70-90k", location_city: "Chicago" }
+    }
+  }
+];
+const DEMO_COST = { total_calls: 4292, total_input_tokens: 3312717, total_output_tokens: 5279467, elapsed_seconds: 4100,
+  by_role_task_model: [
+    { role: "bulk", task: "generate", calls: 1055, duration_seconds: 9000 },
+    { role: "bulk", task: "meta_prompt", calls: 1067, duration_seconds: 14000 },
+    { role: "critic", task: "semantic_critic", calls: 1192, duration_seconds: 9500 }
+  ] };
+const DEMO_CONFIG = { models: { bulk: { model: "deepseek/deepseek-v4-flash:nitro", temperature: 0.9, max_tokens: 16384 },
+  critic: { model: "deepseek/deepseek-v4-flash:nitro", temperature: 0.1, max_tokens: 16384 } } };
+</script>
+</body>
+</html>

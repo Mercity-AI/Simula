@@ -1,0 +1,102 @@
+project:
+  name: "job_extraction"
+  output_dir: "runs/job_extraction"
+  seed: 17
+
+# Schema-guided extraction: each row is an example of (target schema + source text -> extraction).
+# The inner `schema` and `extraction` are open objects, so different rows carry different keys,
+# exactly like a real "given a schema and some text, extract" task. Narrow/atomic-field rules
+# and faithful-extraction rules are enforced via the prompt module + critic, not the envelope.
+description: >
+  A schema-guided information-extraction dataset for JOB POSTINGS. Each example pairs a
+  realistic English job advertisement with a requested extraction schema of narrow, atomic
+  fields, plus the correct extraction. Fields must be atomic: split compound facts into
+  separate keys (salary_min/salary_max, location_city/location_country, start_date/
+  application_deadline) and never pack a range or multiple facts into one string. The
+  extraction must use only facts explicitly stated in the text, with values correctly typed,
+  and must omit any requested field the text does not state, so extraction key sets vary by
+  row. Cover many job families, seniorities, regions/currencies, and posting styles.
+
+schema:
+  type: object
+  required: ["schema", "text", "extraction"]
+  properties:
+    # The extraction target for THIS row (snake_case field -> short type spec). Open object
+    # so each row may request a different set of narrow atomic fields.
+    schema:
+      type: object
+    # The unstructured source job posting.
+    text:
+      type: string
+    # The extracted result. Open object; keys are a subset of `schema` and vary per row.
+    extraction:
+      type: object
+
+prompts:
+  module: "job_extraction_prompts.py"
+
+# DeepSeek v4 Pro via OpenRouter for every role, per request. Reasoning is auto-excluded
+# for deepseek ids (see models._reasoning_extras), keeping output clean JSON and cheaper.
+models:
+  # Data generation uses deepseek-v4-flash:nitro (cheaper/faster; :nitro = throughput routing).
+  # The taxonomy + strategies were already built with deepseek-v4-pro and are reused from disk,
+  # so `strategic` is not re-invoked on a resume/regen of data rows. 16K leaves room for the
+  # hidden reasoning (effort low) alongside the JSON. See testing-notes.md.
+  strategic:
+    base_url: "https://openrouter.ai/api/v1"
+    api_key_env: "OPENROUTER_API_KEY"
+    model: "deepseek/deepseek-v4-flash:nitro"
+    temperature: 0.4
+    max_tokens: 16384
+  bulk:
+    base_url: "https://openrouter.ai/api/v1"
+    api_key_env: "OPENROUTER_API_KEY"
+    model: "deepseek/deepseek-v4-flash:nitro"
+    temperature: 0.9
+    max_tokens: 16384
+  critic:
+    base_url: "https://openrouter.ai/api/v1"
+    api_key_env: "OPENROUTER_API_KEY"
+    model: "deepseek/deepseek-v4-flash:nitro"
+    temperature: 0.1
+    max_tokens: 16384
+
+# Explicit factors keep the taxonomy grounded in job-posting variation.
+taxonomy:
+  depth: 2
+  factors:
+    - name: "job_family"
+      description: "Broad occupational area: software/engineering, data/ML, design, product, sales, marketing, finance/accounting, operations/logistics, healthcare/clinical, education, legal, skilled trades, hospitality, customer support, HR/recruiting, science/research."
+    - name: "seniority_level"
+      description: "Career stage implied by the posting: internship, entry/junior, mid-level, senior, lead/staff, management, and executive."
+    - name: "posting_style"
+      description: "How the ad is written: terse bulleted listing, warm startup blurb, formal corporate HR posting, recruiter LinkedIn-style message, government/public-sector notice, or agency/contract gig post."
+    - name: "fact_completeness"
+      description: "Which facts the posting actually states vs leaves out: salary present/absent, location/remote specified or vague, deadline/start date given or not, requirements explicit or implied. Drives which extraction keys are present vs omitted."
+  best_of_n: 2
+  review_mode: "auto_accept"
+  children_per_node: 4
+
+strategy:
+  guidance: >
+    Cover all job families and seniorities broadly rather than over-weighting software.
+    Make fact_completeness vary widely so many examples legitimately omit some requested
+    fields (absent salary, vague location, missing deadline). Avoid unrealistic combinations
+    such as an internship offering executive equity.
+
+# Smoke values. After approval, bump generation.target_size to 1000 and re-run `generate`
+# in the same output_dir (taxonomy + strategies + existing rows are reused via resume).
+generation:
+  target_size: 1000
+  overgenerate_ratio: 1.4
+  scenarios_per_mix: 3
+  complexity_ratio: 0.25
+  max_refine_attempts: 1
+  concurrency: 25
+  checkpoint_every: 25
+
+evaluation:
+  dedupe: true
+  coverage: true
+  coverage_mode: "lineage"
+  complexity: false
