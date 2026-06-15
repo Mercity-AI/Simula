@@ -8,7 +8,7 @@ from syndata.config import load_config
 from syndata.generate import _generate_one_safe, generate_dataset
 from syndata.models import ModelRouter
 from syndata.utils import artifact_path, read_jsonl
-from syndata.taxonomy import build_taxonomy, sample_mix
+from syndata.taxonomy import build_strategies, build_taxonomy, sample_mix
 
 
 def write_config(tmp_path: Path, extra: dict | None = None) -> Path:
@@ -172,6 +172,40 @@ def test_resume_skips_completed_attempts(tmp_path: Path) -> None:
     raw_count = len(read_jsonl(artifact_path(cfg.output_dir, "raw")))
     asyncio.run(generate_dataset(cfg, router, quiet=True, resume=True))
     assert len(read_jsonl(artifact_path(cfg.output_dir, "raw"))) == raw_count
+
+
+def test_generation_concurrency_is_bounded(tmp_path: Path) -> None:
+    # generation.concurrency must cap in-flight attempts; otherwise every attempt launches at once.
+    class TrackingRouter(ModelRouter):
+        def __init__(self, config: dict) -> None:
+            super().__init__(config)
+            self.active = 0
+            self.max_active = 0
+
+        async def complete(self, *args, **kwargs):  # type: ignore[override]
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            try:
+                await asyncio.sleep(0.01)  # widen the window so overlap is observable
+                return await super().complete(*args, **kwargs)
+            finally:
+                self.active -= 1
+
+    cfg = load_config(
+        write_config(
+            tmp_path,
+            {"generation": {"target_size": 8, "overgenerate_ratio": 1.0, "complexity_ratio": 0, "scenarios_per_mix": 2, "concurrency": 2}},
+        )
+    )
+    router = TrackingRouter(cfg.data)
+    # Build taxonomy + strategies first so the counter reflects only the bounded generation phase.
+    taxonomy = asyncio.run(build_taxonomy(cfg, router))
+    asyncio.run(build_strategies(cfg, router, taxonomy))
+    router.max_active = 0
+    asyncio.run(generate_dataset(cfg, router, quiet=True))
+    asyncio.run(router.flush_logs())
+    # 8 attempts with a limit of 2 must never exceed 2 concurrent calls, and should reach it.
+    assert router.max_active == 2
 
 
 def test_point_failure_becomes_rejected_row(tmp_path: Path) -> None:

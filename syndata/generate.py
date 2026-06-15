@@ -54,11 +54,17 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
     accepted_count = len([row for row in read_jsonl(accepted_path) if row.get("accepted")]) if resume else 0
     checkpoint_every = max(1, int(cfg.data["generation"].get("checkpoint_every", 50)))
     if indexes:
+        # Bound in-flight attempts so a large target does not launch every attempt at once
+        # (which would exhaust the HTTP pool and trigger provider rate limits).
+        concurrency = max(1, int(cfg.data["generation"].get("concurrency", 4)))
+        limiter = asyncio.Semaphore(concurrency)
+
+        async def _bounded(index: int) -> dict[str, Any]:
+            async with limiter:
+                return await _generate_one_safe(cfg, router, taxonomy, strategies, random.Random(seed + index), index)
+
         async with asyncio.TaskGroup() as tg:
-            tasks = [
-                tg.create_task(_generate_one_safe(cfg, router, taxonomy, strategies, random.Random(seed + index), index))
-                for index in indexes
-            ]
+            tasks = [tg.create_task(_bounded(index)) for index in indexes]
             iterator = asyncio.as_completed(tasks)
             if tqdm is not None and not quiet:
                 iterator = tqdm(iterator, total=len(tasks), desc="Generating")
