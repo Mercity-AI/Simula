@@ -81,12 +81,14 @@ def coverage_report(taxonomy: dict[str, Any], rows: list[dict[str, Any]]) -> dic
     total = taxonomy_nodes_by_level(taxonomy)
     covered: dict[str, dict[int, set[str]]] = {factor: {level: set() for level in levels} for factor, levels in total.items()}
 
-    # Lineage coverage trusts the taxonomy_mix saved during generation.
+    # Lineage coverage trusts the taxonomy_mix saved during generation. A sampled node also covers
+    # its ancestors, so count every path prefix (matching reassignment_coverage); otherwise a leaf
+    # sample would report its root and parent levels as uncovered.
     for row in rows:
         for mix in row.get("taxonomy_mix", []):
             factor = mix["factor"]
-            level = int(mix["level"])
-            covered.setdefault(factor, {}).setdefault(level, set()).add("/".join(mix.get("path", [mix["node"]])))
+            for level, prefix in enumerate(_path_prefixes(mix.get("path", [mix["node"]]))):
+                covered.setdefault(factor, {}).setdefault(level, set()).add("/".join(prefix))
     return _coverage_from_sets(total, covered)
 
 

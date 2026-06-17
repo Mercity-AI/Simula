@@ -110,7 +110,13 @@ def load_completed_attempt_indexes(path: Path) -> set[int]:
 
 
 def extract_json_object(text: str) -> Any:
-    """Pull the first JSON object/array out of a model response."""
+    """Parse a model response as JSON, unwrapping a ```json fence if the model added one.
+
+    The system prompt already demands raw JSON with no commentary, so we deliberately do NOT try
+    to slice JSON out of surrounding prose: a first-brace-to-last-brace heuristic splices unrelated
+    braces together and corrupts otherwise-recoverable output. Record generation has its own repair
+    pass for the rare model that ignores the instruction.
+    """
     text = text.strip()
     try:
         return json.loads(text)
@@ -120,15 +126,7 @@ def extract_json_object(text: str) -> Any:
     fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
     if fenced:
         return json.loads(fenced.group(1).strip())
-
-    starts = [i for i in [text.find("{"), text.find("[")] if i >= 0]
-    if not starts:
-        raise ValueError("No JSON object or array found in response.")
-    start = min(starts)
-    end = max(text.rfind("}"), text.rfind("]"))
-    if end <= start:
-        raise ValueError("Incomplete JSON object or array in response.")
-    return json.loads(text[start : end + 1])
+    raise ValueError("Response was not valid JSON.")
 
 
 def _field_value(record: Any, field: str) -> list[Any]:

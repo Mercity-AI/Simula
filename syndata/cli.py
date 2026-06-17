@@ -60,7 +60,8 @@ async def _main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "run":
-            await build_taxonomy(cfg, router)
+            # generate_dataset loads-or-builds the taxonomy itself; building it here too would
+            # rebuild and overwrite an edited/earlier taxonomy on every resumed `run`.
             rows = await generate_dataset(cfg, router, resume=args.resume, quiet=args.quiet)
             report = await run_evaluation(cfg, router, quiet=args.quiet)
             print(f"Run complete: {len(rows)} final records, eval count={report.get('count', 0)}")

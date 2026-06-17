@@ -119,19 +119,43 @@ Improve the global plan prompt so it explicitly asks for a plan that applies acr
 
 Reason: a global plan is compact and helps keep same-level taxonomy nodes comparable, but if it becomes too specific to one branch, it can distort expansion for unrelated siblings.
 
-## Rework the `SYNDATA_LLM_LOG` global override
+## Done: Removed the `SYNDATA_LLM_LOG` global override
 
-`ModelRouter._write_log` currently honors a `SYNDATA_LLM_LOG` environment variable that, when set,
-redirects *every* model-call log line to a single file instead of each run's
-`<output_dir>/llm_calls.jsonl`. This is a foot-gun: it is undocumented, it is read fresh from the
-environment on every write, and if it is ever exported globally then concurrent runs interleave
-into one file while `monitor.py` and resume logic (which read `<output_dir>/llm_calls.jsonl`)
-silently see nothing. It also entangles "where do logs go" with process-wide environment state
-rather than per-run config.
+The env override is gone. `ModelRouter._write_log` always writes to `<output_dir>/llm_calls.jsonl`,
+so concurrent runs stay isolated and `monitor.py`/resume always read the right file. We deliberately
+did NOT route logging through `logging`/`structlog`: a per-run JSONL sink is all this tool needs and
+a logging framework is ceremony at this size. `flush_logs` now reports failed log writes on stderr
+instead of swallowing them (the `llm_calls.jsonl` contract says every response is logged).
 
-This needs to be thought through and fixed. One clean idea is to drop the ad-hoc env override
-entirely and route call logging through a proper logging library (Python's `logging`, or
-`structlog`): configure a per-run handler/sink pointed at the run directory, and let standard
-logging config (levels, handlers, optional extra sinks) replace the bespoke env var. That gives us
-real log levels, formatting, and multiple sinks without a hand-rolled global. Decide on the
-approach, then implement and document it.
+## Deferred review findings (recorded 2026-06-17)
+
+A review pass produced a batch of findings. The correctness/cleanup ones were done on
+`code-refactor`: `write_then_edit` now halts before generation; resume aborts on a run-fingerprint
+change; lineage coverage counts ancestor prefixes; `extract_json_object` no longer slices JSON out
+of prose; diversity deps moved to a `[diversity]` extra and `httpx` was dropped. The following were
+deliberately deferred — keep any fix compact:
+
+- **Generation can finish below target silently.** `generate_dataset` runs a fixed
+  `ceil(target * overgenerate_ratio)` attempts and trims; a low accept rate yields fewer than
+  `target` rows while the CLI still exits 0. Minimum fix: warn loudly (stderr) with the accept rate
+  when `len(final) < target`. Only build a bounded adaptive-refill loop if hitting target must be a
+  guarantee — it adds cost and weakens determinism, so gate it behind a knob/flag.
+- **Model-output shapes are under-validated.** `_discover_factors` → `factor["name"]` is outside any
+  try/except, so one nameless factor crashes the whole taxonomy build; a non-numeric strategy
+  `weight` makes every row fail (silent zero-accept). Add small normalizers (drop nameless
+  factors/children, coerce weights to positive floats, guarantee a non-empty strategy list). No
+  schema framework.
+- **Retry policy is too broad.** `ModelRouter.complete` retries every non-429 exception 8×, so a
+  400/401/403 burns pointless retries before failing. Classify: fail fast on 4xx (except
+  408/409/429), retry transport errors + 5xx.
+- **Config booleans use Python truthiness.** `bool("false") is True` (config.py), so a quoted YAML
+  bool silently inverts. Add a tiny `_require_bool` that fails loudly on non-bools.
+- **`monitor.py` duplicates artifact knowledge and is extraction-specific.** It hardcodes artifact
+  filenames and re-parses config with a different `overgenerate_ratio` default (1.0 vs 1.3), and its
+  quality block assumes `record["extraction"]`. Reuse `syndata.utils.artifact_path`/`read_jsonl` and
+  `load_config` defaults; gate the extraction block behind a presence check. (Unpackaged, untested
+  dev tool, so low priority.)
+- **Sampling includes abstract internal/root nodes.** `_sample_descendant` samples every node
+  uniformly, so a mix can be just a vague root. Not a bug — it adds breadth. Add a single
+  `prefer_leaf`/leaf-only sampling knob only if real meta-prompts come out too vague (see the
+  structured sampling-knobs note above).

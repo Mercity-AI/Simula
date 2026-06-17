@@ -64,6 +64,8 @@ def test_coverage_report_from_lineage() -> None:
     rows = [{"taxonomy_mix": [{"factor": "topic", "node": "alpha", "level": 1, "path": ["topic", "alpha"]}]}]
     report = coverage_report(taxonomy, rows)
     assert report["topic"]["1"]["ratio"] == 1.0
+    # A leaf/branch sample also covers its ancestors: the root level must not read as uncovered.
+    assert report["topic"]["0"]["ratio"] == 1.0
 
 
 def test_coverage_aware_trim_prefers_new_branches() -> None:

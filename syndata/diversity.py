@@ -15,8 +15,13 @@ class EmbeddingClient:
 
     def _load(self) -> Any:
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
-
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError as exc:
+                raise ImportError(
+                    "Embedding diversity needs sentence-transformers. "
+                    "Install it with: pip install 'syndata[diversity]'"
+                ) from exc
             self._model = SentenceTransformer(self.model_name)
         return self._model
 
@@ -33,8 +38,14 @@ def embedding_diversity(
     k_local: int = 10,
     embedder: EmbeddingClient | None = None,
 ) -> dict[str, float | int | str]:
-    import numpy as np
-    from sklearn.metrics.pairwise import cosine_distances
+    try:
+        import numpy as np
+        from sklearn.metrics.pairwise import cosine_distances
+    except ImportError as exc:  # diversity is optional; its heavy deps live in an optional extra.
+        raise ImportError(
+            "Embedding diversity needs numpy and scikit-learn. "
+            "Install them with: pip install 'syndata[diversity]'"
+        ) from exc
 
     if len(texts) < 2:
         return {"global_diversity": 0.0, "local_diversity": 0.0, "sample_size": len(texts), "cache_path": str(cache_path)}

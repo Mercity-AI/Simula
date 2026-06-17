@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import math
 import random
 import uuid
@@ -17,6 +19,7 @@ from .utils import (
     extract_json_object,
     load_completed_attempt_indexes,
     now_iso,
+    read_json,
     read_jsonl,
     write_json,
     write_jsonl,
@@ -34,13 +37,26 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
     raw_path = artifact_path(cfg.output_dir, "raw")
     accepted_path = artifact_path(cfg.output_dir, "accepted")
     final_path = artifact_path(cfg.output_dir, "final")
+    state_path = artifact_path(cfg.output_dir, "state")
+
+    # Resume reuses accepted rows by attempt_index. If an input that determines a row's content or
+    # validity changed since the last checkpoint, blending old and new rows would corrupt the
+    # dataset, so refuse to resume across a fingerprint change and tell the user to pass --no-resume.
+    fingerprint = _run_fingerprint(cfg, taxonomy, strategies)
+    if resume:
+        prior = read_json(state_path)
+        if prior and prior.get("fingerprint") and prior["fingerprint"] != fingerprint:
+            raise ValueError(
+                "Run config changed since the last checkpoint (schema/seed/model/prompts/sampling/"
+                "taxonomy/strategies). Resuming would mix inconsistent rows; rerun with --no-resume."
+            )
 
     # Optional restart clears generated dataset artifacts without touching taxonomy/strategies.
     if not resume:
         write_jsonl(raw_path, [])
         write_jsonl(accepted_path, [])
         write_jsonl(final_path, [])
-        write_json(artifact_path(cfg.output_dir, "state"), {"attempted": 0, "accepted": 0})
+        write_json(state_path, {"attempted": 0, "accepted": 0, "fingerprint": fingerprint})
 
     # Determine the deterministic attempt queue from target size, overgeneration, and checkpoint state.
     target = cfg.generation.target_size
@@ -77,8 +93,8 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
                     append_jsonl(accepted_path, row)
                 if completed % checkpoint_every == 0 or completed >= attempts:
                     write_json(
-                        artifact_path(cfg.output_dir, "state"),
-                        {"attempted": completed, "target_attempts": attempts, "accepted": accepted_count},
+                        state_path,
+                        {"attempted": completed, "target_attempts": attempts, "accepted": accepted_count, "fingerprint": fingerprint},
                     )
 
     # Build the final artifact from accepted rows only; evaluation remains a separate command.
@@ -88,6 +104,28 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
     final = coverage_aware_trim(accepted, target)
     write_jsonl(final_path, final)
     return final
+
+
+def _run_fingerprint(cfg: Config, taxonomy: dict[str, Any], strategies: list[dict[str, Any]]) -> str:
+    # Hash only the inputs that change a generated row's content or validity. target_size,
+    # overgenerate_ratio, concurrency, and checkpoint_every are deliberately excluded so a run can
+    # be grown or re-paced and still resume. A prompt-module edit is caught via its file contents.
+    module_path = cfg.prompts.module_path
+    payload = {
+        "description": cfg.description,
+        "schema": cfg.schema,
+        "seed": cfg.seed,
+        "models": {role: cfg.data["models"][role]["model"] for role in ("strategic", "bulk", "critic")},
+        "scenarios_per_mix": cfg.generation.scenarios_per_mix,
+        "complexity_ratio": cfg.generation.complexity_ratio,
+        "max_refine_attempts": cfg.generation.max_refine_attempts,
+        "sampling": cfg.data.get("sampling"),
+        "prompts": module_path.read_text(encoding="utf-8") if module_path else None,
+        "taxonomy": taxonomy,
+        "strategies": strategies,
+    }
+    blob = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
 def _build_row(

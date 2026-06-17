@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import asyncio
+import pytest
 import yaml
 
 from syndata.cli import main
@@ -172,6 +173,54 @@ def test_resume_skips_completed_attempts(tmp_path: Path) -> None:
     raw_count = len(read_jsonl(artifact_path(cfg.output_dir, "raw")))
     asyncio.run(generate_dataset(cfg, router, quiet=True, resume=True))
     assert len(read_jsonl(artifact_path(cfg.output_dir, "raw"))) == raw_count
+
+
+def test_write_then_edit_halts_before_generation(tmp_path: Path) -> None:
+    cfg = load_config(
+        write_config(tmp_path, {"taxonomy": {"depth": 1, "best_of_n": 1, "review_mode": "write_then_edit", "children_per_node": 2}})
+    )
+    router = ModelRouter(cfg.data)
+    # write_then_edit must STOP the run after writing the taxonomy, not fall through to generation.
+    with pytest.raises(SystemExit):
+        asyncio.run(generate_dataset(cfg, router, quiet=True))
+    assert artifact_path(cfg.output_dir, "taxonomy").exists()  # written so the user can edit it
+    assert read_jsonl(artifact_path(cfg.output_dir, "raw")) == []  # nothing generated
+
+
+def test_resume_rejects_changed_config(tmp_path: Path) -> None:
+    base = {"generation": {"target_size": 3, "overgenerate_ratio": 1.0, "complexity_ratio": 0}}
+    cfg = load_config(write_config(tmp_path, base))
+    asyncio.run(generate_dataset(cfg, ModelRouter(cfg.data), quiet=True, resume=False))
+
+    # Same output_dir, different seed (a fingerprint-changing input) must block resume.
+    changed = dict(base)
+    changed["project"] = {"name": "test", "output_dir": str(tmp_path / "run"), "seed": 999}
+    cfg2 = load_config(write_config(tmp_path, changed))
+    with pytest.raises(ValueError, match="--no-resume"):
+        asyncio.run(generate_dataset(cfg2, ModelRouter(cfg2.data), quiet=True, resume=True))
+
+    # --no-resume starts a clean run under the new config.
+    rows = asyncio.run(generate_dataset(cfg2, ModelRouter(cfg2.data), quiet=True, resume=False))
+    assert rows
+
+
+def test_flush_logs_reports_write_failures(tmp_path: Path, capsys, monkeypatch) -> None:
+    import syndata.models as models_mod
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(models_mod, "append_jsonl", boom)
+    cfg = load_config(write_config(tmp_path))
+    router = ModelRouter(cfg.data)
+
+    # Schedule a log write and flush it in the SAME loop so the failing task is still pending.
+    async def run() -> None:
+        await router.complete("bulk", "generate something", task="generate")
+        await router.flush_logs()
+
+    asyncio.run(run())
+    assert "log write" in capsys.readouterr().err
 
 
 def test_generation_concurrency_is_bounded(tmp_path: Path) -> None:

@@ -144,8 +144,10 @@ are now superseded by this work. Key changes (see commits on `code-refactor`):
   knobs and warns on a missing real API key.
 - **`evaluate` no longer rewrites `dataset.final.jsonl`** — it writes `dataset.evaluated.jsonl`.
 - **Dependencies trimmed:** `jsonpath-ng` dropped (`text_field` is plain dotted dict access now);
-  `python-dotenv` added. Cost tracking simplified (no `CostTracker` class / global).
+  `python-dotenv` added. Cost tracking simplified (no `CostTracker` class / global). `numpy`,
+  `scikit-learn`, and `sentence-transformers` moved to an optional `[diversity]` extra (they are
+  only used by the off-by-default diversity metric); `httpx` dropped (transitive via `openai`).
 - **Token logging:** `llm_calls.jsonl` always records in/out tokens (estimated when the provider
-  omits usage), matching `cost_summary.json`.
-- Open follow-up logged in `TODO.md`: rework the `SYNDATA_LLM_LOG` global override (likely via a
-  real logging library).
+  omits usage), matching `cost_summary.json`. Logs always go to `<output_dir>/llm_calls.jsonl`;
+  the `SYNDATA_LLM_LOG` env override was removed, and `flush_logs` now warns (stderr) on a failed
+  log write instead of swallowing it.

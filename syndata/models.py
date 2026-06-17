@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -84,7 +85,16 @@ class ModelRouter:
     async def flush_logs(self) -> None:
         if not self._log_tasks:
             return
-        await asyncio.gather(*list(self._log_tasks), return_exceptions=True)
+        # A failed log write must not abort shutdown, but it must not vanish silently either: the
+        # llm_calls.jsonl contract says every response is logged, so report any losses on stderr.
+        results = await asyncio.gather(*list(self._log_tasks), return_exceptions=True)
+        failures = [r for r in results if isinstance(r, Exception)]
+        if failures:
+            print(
+                f"Warning: {len(failures)} llm_calls.jsonl log write(s) failed; "
+                f"some calls may be unlogged ({failures[0]}).",
+                file=sys.stderr,
+            )
 
     def _client_for(self, role: str, model_cfg: dict[str, Any]) -> Any:
         if role in self._clients:
@@ -144,8 +154,7 @@ class ModelRouter:
         log_task.add_done_callback(self._log_tasks.discard)
 
     async def _write_log(self, row: dict[str, Any]) -> None:
-        log_path = Path(os.getenv("SYNDATA_LLM_LOG")) if os.getenv("SYNDATA_LLM_LOG") else artifact_path(self._output_dir, "llm_calls")  # type: ignore[arg-type]
-        await asyncio.to_thread(append_jsonl, log_path, row)
+        await asyncio.to_thread(append_jsonl, artifact_path(self._output_dir, "llm_calls"), row)  # type: ignore[arg-type]
 
 
 # OpenAI-compatible decoding params sent as top-level call kwargs; everything else rides extra_body.

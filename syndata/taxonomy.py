@@ -46,8 +46,8 @@ async def build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, Any]:
             queue = next_queue
         taxonomy["factors"].append(root)
 
-    taxonomy = _review_taxonomy(cfg, taxonomy)
     write_json(artifact_path(cfg.output_dir, "taxonomy"), taxonomy)
+    _review_taxonomy(cfg)
     return taxonomy
 
 
@@ -217,19 +217,21 @@ def _norm_segment(value: str) -> str:
     return "".join(ch for ch in value.casefold() if ch.isalnum())
 
 
-def _review_taxonomy(cfg: Config, taxonomy: dict[str, Any]) -> dict[str, Any]:
+def _review_taxonomy(cfg: Config) -> None:
+    # build_taxonomy has already written taxonomy.json; this only gates whether the run proceeds.
+    # write_then_edit and a rejected interactive_confirm STOP the process (not just print) so the
+    # user can edit the file before generating — otherwise generation runs on the unedited tree.
     mode = cfg.taxonomy.review_mode
     if mode == "auto_accept":
-        return taxonomy
+        return
 
     path = artifact_path(cfg.output_dir, "taxonomy")
-    write_json(path, taxonomy)
     if mode == "write_then_edit":
-        print(f"Taxonomy written to {path}. Edit it, then rerun generation.")
-        return taxonomy
+        print(f"Taxonomy written to {path}. Edit it, then rerun to generate.")
+        raise SystemExit(0)
 
     answer = input("Accept generated taxonomy? [Y/n] ").strip().lower()
     if answer in {"", "y", "yes"}:
-        return taxonomy
+        return
     print(f"Taxonomy left at {path}. Edit it before generation.")
     raise SystemExit(1)

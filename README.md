@@ -24,6 +24,13 @@ From the repository root:
 python -m pip install -e ".[dev]"
 ```
 
+The base install is light. The optional embedding-based **diversity** metric needs heavier packages
+(numpy, scikit-learn, sentence-transformers / PyTorch); install them only if you enable it:
+
+```bash
+python -m pip install -e ".[diversity]"
+```
+
 You can also run the CLI without installing:
 
 ```bash

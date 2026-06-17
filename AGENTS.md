@@ -217,6 +217,12 @@ When modifying this code, test that `taxonomy_mix` contains one lineage entry pe
 7. Coverage-aware trims to `target_size`.
 8. Writes `dataset.final.jsonl`.
 
+Resume (`--resume`, the default) skips attempt indexes already in `dataset.raw.jsonl` and reuses
+accepted rows. `run_state.json` stores a fingerprint of the resume-invalidating inputs (description,
+schema, seed, model ids, prompt module, sampling, taxonomy, strategies, and the per-attempt
+generation knobs — not `target_size`/`overgenerate_ratio`/`concurrency`, which can change across
+resumes). If the fingerprint changed, resume aborts and tells the user to pass `--no-resume`.
+
 Generation is concurrent with `asyncio.TaskGroup`. Be careful with shared state:
 
 - `ModelRouter` schedules async log writes and flushes before CLI exit.
@@ -232,11 +238,11 @@ await ModelRouter.complete(role, prompt, system, task="...")
 await ModelRouter.complete_json(role, prompt, system, task="...")
 ```
 
-`complete_json` expects parseable JSON somewhere in the response. If you strengthen parsing, keep fenced JSON support.
+`complete_json` parses the response body as JSON, unwrapping a ```json code fence if the model added one. It deliberately does not slice JSON out of surrounding prose — the system prompt requires raw JSON, and record generation has its own repair pass for the rare model that ignores that.
 
 The `task` argument drives per-task decoding via `resolve_sampling`; both the resolved sampling params and any `extra_body` are recorded on each `llm_calls.jsonl` row. Keep `task` accurate when adding new call sites.
 
-Cost accounting and the log row are produced together in `ModelRouter._account`, which computes input/output tokens once (estimating `len(text)//4` when the provider omits `usage`) so `cost_summary.json` and `llm_calls.jsonl` always agree. The `SYNDATA_LLM_LOG` env var still redirects the log path (slated for rework — see `TODO.md`).
+Cost accounting and the log row are produced together in `ModelRouter._account`, which computes input/output tokens once (estimating `len(text)//4` when the provider omits `usage`) so `cost_summary.json` and `llm_calls.jsonl` always agree. Logs always go to `<output_dir>/llm_calls.jsonl`; there is no env override. `flush_logs` warns on stderr if any log write failed instead of swallowing it.
 
 Rate-limit behavior:
 
@@ -279,7 +285,6 @@ Use `"model": "fake"` for tests. Do not require network access in tests.
 
 ## Known Cleanup / Improvement Candidates
 
-- Rework the `SYNDATA_LLM_LOG` global override; consider routing call logging through a real logging library (see `TODO.md`).
 - Add a command to tail/summarize `llm_calls.jsonl`.
 - Add batched and multi-turn generation modes (see `TODO.md`).
 - `monitor.py` is extraction-specific: its default `--config` and its `record["extraction"]` quality block only make sense for the extraction datasets.
