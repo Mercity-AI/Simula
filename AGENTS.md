@@ -20,7 +20,7 @@ Core package:
 - `syndata/generate.py`: generation orchestration, meta-prompts, complexification, JSON generation/repair, critic/refine loop, concurrent workers, final trimming.
 - `syndata/evaluate.py`: schema validation, dedupe, coverage reports, coverage-aware trimming, optional complexity scoring.
 - `syndata/tasks.py`: `TaskType` enum naming every model-call site (drives logging and per-task sampling).
-- `syndata/cost.py`: token/cost accounting accumulated across calls and written to `cost_summary.json`.
+- `syndata/cost.py`: `summarize_cost` over the per-`(role, task, model)` totals the `ModelRouter` accumulates on `self.cost`; written to `cost_summary.json`. No class, no global singleton.
 - `syndata/diversity.py`: optional embedding-based diversity scoring used by evaluation.
 - `syndata/utils.py`: artifact names, JSON/JSONL helpers, timestamps, JSON extraction, record-to-text, checkpoint helpers.
 
@@ -100,8 +100,16 @@ The config loader applies defaults from `syndata/config.py`. Required user-facin
 - `taxonomy`: depth/factors/review behavior
 - `strategy`: optional free-text `guidance` woven into the strategy prompt
 - `sampling`: optional per-task decoding overrides under `sampling.tasks`
-- `generation`: target size, overgeneration, complexity ratio, retries, concurrency
+- `generation`: target size, overgeneration, complexity ratio, refine attempts, concurrency
 - `evaluation`: dedupe, coverage, complexity
+
+The structured sections (`generation`, `taxonomy`, `evaluation`) are parsed once into typed views
+(`cfg.generation`, `cfg.taxonomy`, `cfg.evaluation`); read those instead of `cfg.data[...]`. Default
+values live ONLY in `default_config()`. `validate_config` enforces non-empty description, required
+`model`/`base_url` per role, valid `review_mode`/`coverage_mode`, and positive/in-range generation +
+taxonomy knobs (a bad `target_size`/`overgenerate_ratio`/`concurrency` fails at load, not as a silent
+zero-row run). It also prints a non-fatal stderr warning when a real model role has no resolvable API
+key. `validate` makes no model calls.
 
 Supported model config fields:
 
@@ -228,6 +236,8 @@ await ModelRouter.complete_json(role, prompt, system, task="...")
 
 The `task` argument drives per-task decoding via `resolve_sampling`; both the resolved sampling params and any `extra_body` are recorded on each `llm_calls.jsonl` row. Keep `task` accurate when adding new call sites.
 
+Cost accounting and the log row are produced together in `ModelRouter._account`, which computes input/output tokens once (estimating `len(text)//4` when the provider omits `usage`) so `cost_summary.json` and `llm_calls.jsonl` always agree. The `SYNDATA_LLM_LOG` env var still redirects the log path (slated for rework — see `TODO.md`).
+
 Rate-limit behavior:
 
 - Retries 429s.
@@ -269,8 +279,10 @@ Use `"model": "fake"` for tests. Do not require network access in tests.
 
 ## Known Cleanup / Improvement Candidates
 
+- Rework the `SYNDATA_LLM_LOG` global override; consider routing call logging through a real logging library (see `TODO.md`).
 - Add a command to tail/summarize `llm_calls.jsonl`.
 - Add batched and multi-turn generation modes (see `TODO.md`).
+- `monitor.py` is extraction-specific: its default `--config` and its `record["extraction"]` quality block only make sense for the extraction datasets.
 
 ## Safety and Privacy
 

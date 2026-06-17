@@ -66,8 +66,8 @@ Design principle the user emphasized: **fields must be narrow/atomic**.
   NOTE: cost_summary.json may be stale (proc was SIGKILLed, skipping the finally-block write).
 
 ## FOLLOW-UPS / known issues for the repo
-- generation has no per-attempt timeout; a hung/rate-limited provider connection can stall a worker for
-  the SDK default (600s). Consider a request timeout + treating exhausted retries as rejected rows faster.
+- ~~generation has no per-attempt timeout~~ RESOLVED (code-refactor branch): each real call now has a
+  180s default timeout (`models.<role>.timeout_seconds`) so a hung connection fails fast.
 - The critic lets ~2% prose/compound fields through; could add an explicit "no *_summary/_description/
   _details fields" rule. Handled here via a post-hoc cleanup filter.
 
@@ -125,3 +125,27 @@ Design principle the user emphasized: **fields must be narrow/atomic**.
   so reasoning+JSON both fit. Set strategic=3000, bulk=4000, critic=2500. (critic also reasons -> needs
   headroom or verdict JSON truncates and the row gets rejected as "Generation failed".)
 - Cost ref: ~$2.2e-5 for a 32-token call; reasoning adds ~1k toks/call but deepseek is cheap.
+
+## REFACTOR (2026-06-17, `code-refactor` branch — not yet merged)
+
+Cleanup/hardening pass driven by a review. Notes above are historical; several observations there
+are now superseded by this work. Key changes (see commits on `code-refactor`):
+
+- **.env is now auto-loaded.** `load_config` calls `load_env_files` (python-dotenv), so the
+  earlier "API key BLOCKER / .env not read" notes no longer apply — drop the key in a gitignored
+  `.env` and it resolves. An exported shell var still wins.
+- **Reasoning auto-detection REMOVED.** The old `_reasoning_extras` substring sniffing
+  (`deepseek`/`o1`/...) is gone; set `extra_body: {reasoning: {effort: low, exclude: true}}`
+  explicitly per role. `examples/job_extraction.yaml` was updated to do this.
+- **Per-request timeout added** (180s default, `models.<role>.timeout_seconds`).
+- **`min_interval_seconds` pacing removed** — rate control is `generation.concurrency` + 429
+  retry/backoff. Lower concurrency if a provider rate-limits.
+- **Typed config** (`cfg.generation`/`cfg.taxonomy`/`cfg.evaluation`); `validate` now range-checks
+  knobs and warns on a missing real API key.
+- **`evaluate` no longer rewrites `dataset.final.jsonl`** — it writes `dataset.evaluated.jsonl`.
+- **Dependencies trimmed:** `jsonpath-ng` dropped (`text_field` is plain dotted dict access now);
+  `python-dotenv` added. Cost tracking simplified (no `CostTracker` class / global).
+- **Token logging:** `llm_calls.jsonl` always records in/out tokens (estimated when the provider
+  omits usage), matching `cost_summary.json`.
+- Open follow-up logged in `TODO.md`: rework the `SYNDATA_LLM_LOG` global override (likely via a
+  real logging library).
