@@ -110,7 +110,6 @@ Supported model config fields:
 - `model`
 - `temperature`
 - `max_tokens` (default 32768 when unset)
-- `min_interval_seconds`
 - `timeout_seconds` (default 180; per-request timeout for real calls)
 - `extra_body` (provider pass-through; set `{reasoning: {effort: low, exclude: true}}` here for reasoning models — there is no automatic model-id detection)
 
@@ -238,7 +237,7 @@ Rate-limit behavior:
 
 Each real call has a per-request timeout (default 180s, `models.<role>.timeout_seconds`) so a hung connection fails fast and the point checkpoints as a rejected row instead of stalling the worker.
 
-`min_interval_seconds` paces calls by reserving staggered start slots; it spaces requests without serializing concurrent workers (the sleep happens outside the pacing lock).
+Rate control is `generation.concurrency` (bounds in-flight requests) plus the 429 retry/backoff above. There is no proactive client-side pacing knob; lower `concurrency` if a provider rate-limits.
 
 ### Evaluation
 
@@ -286,4 +285,4 @@ Do not paste real API keys into configs. Use `api_key_env`.
 - If `taxonomy_mix` is empty, inspect `strategies.json` and `sample_mix` matching logic.
 - If JSON parsing fails often, inspect `SYSTEM_JSON` and `generate_record_prompt`.
 - If the model is slow, reduce taxonomy depth or increase `generation.concurrency` carefully.
-- If the provider rate-limits, set `min_interval_seconds` or lower concurrency.
+- If the provider rate-limits, lower `generation.concurrency` (the 429 retry/backoff still handles bursts).

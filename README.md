@@ -241,7 +241,7 @@ Valid task names are the `TaskType` values: `factor_discovery`, `node_expansion`
 
 OpenAI-compatible params (`temperature`, `top_p`, `max_tokens`, `frequency_penalty`, `presence_penalty`, `stop`, `seed`) are sent as top-level call kwargs. Anything else (`min_p`, `top_k`, `repetition_penalty`, …) is passed through `extra_body` so provider-specific knobs work without lock-in. The resolved params are recorded per call in `llm_calls.jsonl`.
 
-Connection/control keys on a role (`base_url`, `api_key`, `api_key_env`, `model`, `min_interval_seconds`, `timeout_seconds`, `extra_body`) are never treated as decoding params.
+Connection/control keys on a role (`base_url`, `api_key`, `api_key_env`, `model`, `timeout_seconds`, `extra_body`) are never treated as decoding params.
 
 **Per-request timeout.** Each real call uses a default timeout of **180 seconds** so a hung or
 rate-limited provider connection cannot stall a worker for the SDK default (~600s). Override per

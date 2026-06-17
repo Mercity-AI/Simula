@@ -22,8 +22,6 @@ class ModelRouter:
         self._clients: dict[str, Any] = {}
         self._fake_counter = 0
         self._fake_lock = asyncio.Lock()
-        self._pace_lock = asyncio.Lock()
-        self._next_slot = 0.0
         self._log_tasks: set[asyncio.Task[None]] = set()
         self.cost: CostStore = {}
         self.started = time.time()
@@ -61,7 +59,6 @@ class ModelRouter:
         # Retry transient provider failures, preserving Retry-After when available.
         for attempt in range(8):
             try:
-                await self._pace(float(model_cfg.get("min_interval_seconds", 0.0)))
                 kwargs = {"model": model, "messages": messages, **sampling}
                 if extras:
                     kwargs["extra_body"] = extras
@@ -104,19 +101,6 @@ class ModelRouter:
         timeout = float(model_cfg.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS))
         self._clients[role] = AsyncOpenAI(api_key=api_key, base_url=model_cfg["base_url"], timeout=timeout)
         return self._clients[role]
-
-    async def _pace(self, min_interval_seconds: float) -> None:
-        # Reserve a staggered start slot under the lock, then sleep OUTSIDE it. Holding the lock
-        # across the sleep would serialize every concurrent worker; reserving slots spaces calls
-        # by min_interval_seconds while keeping them in flight concurrently.
-        if min_interval_seconds <= 0:
-            return
-        async with self._pace_lock:
-            start_at = max(time.time(), self._next_slot)
-            self._next_slot = start_at + min_interval_seconds
-        delay = start_at - time.time()
-        if delay > 0:
-            await asyncio.sleep(delay)
 
     def _record_cost(self, role: str, task: str, model: str, prompt: str, response: str, duration: float, usage: Any) -> None:
         in_tokens = getattr(usage, "prompt_tokens", None) or max(1, len(prompt) // 4)
@@ -179,7 +163,7 @@ class ModelRouter:
 KNOWN_PARAMS = ("temperature", "top_p", "max_tokens", "frequency_penalty", "presence_penalty", "stop", "seed")
 SAMPLING_DEFAULTS = {"temperature": 0.7, "max_tokens": 32768}
 # Connection/control keys on a model role are not decoding params and must not be sent as sampling kwargs.
-_CONNECTION_KEYS = frozenset({"base_url", "api_key", "api_key_env", "model", "min_interval_seconds", "timeout_seconds", "extra_body"})
+_CONNECTION_KEYS = frozenset({"base_url", "api_key", "api_key_env", "model", "timeout_seconds", "extra_body"})
 
 
 def resolve_sampling(config: dict[str, Any], role: str, task: str) -> tuple[dict[str, Any], dict[str, Any]]:
