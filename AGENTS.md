@@ -13,7 +13,7 @@ The project is intentionally small. Prefer clear, boring code over architectural
 Core package:
 
 - `syndata/cli.py`: CLI command dispatch for `validate`, `taxonomy`, `generate`, `evaluate`, and `run`.
-- `syndata/config.py`: YAML loading, defaults, config validation, JSON Schema subset checks, call estimates.
+- `syndata/config.py`: YAML loading, `.env` loading, defaults, config validation (typed sections `GenerationCfg`/`TaxonomyCfg`/`EvaluationCfg`), JSON Schema subset checks.
 - `syndata/models.py`: OpenAI-compatible model router, fake model, retry/rate-limit handling, per-task sampling resolution (`resolve_sampling`), live `llm_calls.jsonl` logging.
 - `syndata/prompts.py`: built-in prompt templates, the global English/JSON system instruction, and the prompt-module override loader (`PromptSet`, `load_prompt_set`).
 - `syndata/taxonomy.py`: factor discovery, breadth-first taxonomy expansion, review modes, strategy creation, strategy-aware sampling.
@@ -45,7 +45,7 @@ Generated artifacts:
 
 ## Non-Negotiable Constraints
 
-- Do not commit API keys, bearer tokens, `.env`, or generated run artifacts.
+- Do not commit API keys, bearer tokens, `.env`, or generated run artifacts. (`.env` is gitignored and auto-loaded by `load_config`; keep it local.)
 - Keep the codebase compact. Do not split into many tiny files unless the current file is genuinely becoming hard to reason about.
 - Preserve CLI-first behavior.
 - Preserve OpenAI-compatible endpoint support. Do not add provider-specific lock-in unless it remains optional.
@@ -76,10 +76,12 @@ python -m syndata.cli run examples/basic_qa.yaml
 pytest -q
 ```
 
-For real OpenRouter-compatible runs:
+For real OpenRouter-compatible runs, set the key named by each role's `api_key_env`. A gitignored
+`.env` (repo root or next to the config) is loaded automatically; an exported shell variable also
+works and takes precedence.
 
 ```bash
-export OPENROUTER_API_KEY="..."
+echo 'OPENROUTER_API_KEY=...' > .env   # gitignored, auto-loaded
 python -m syndata.cli taxonomy examples/query_extraction_gemini.yaml
 python -m syndata.cli generate examples/query_extraction_gemini.yaml
 ```
@@ -109,7 +111,8 @@ Supported model config fields:
 - `temperature`
 - `max_tokens` (default 32768 when unset)
 - `min_interval_seconds`
-- `extra_body`
+- `timeout_seconds` (default 180; per-request timeout for real calls)
+- `extra_body` (provider pass-through; set `{reasoning: {effort: low, exclude: true}}` here for reasoning models — there is no automatic model-id detection)
 
 Per-task decoding overrides live under `sampling.tasks` (task name -> param mapping). `resolve_sampling` in `syndata/models.py` layers built-in defaults <- `models.<role>` static <- `sampling.tasks[task]`, then splits OpenAI-compatible params (top-level call kwargs) from provider-specific ones (`extra_body` pass-through). Resolution is a pure function so it is safe under concurrent workers. Named policies and attempt schedules were intentionally not built; run the CLI twice for a temperature spread.
 
@@ -141,6 +144,7 @@ Artifact filenames live in `syndata/utils.py`:
 - `dataset.raw.jsonl`
 - `dataset.accepted.jsonl`
 - `dataset.final.jsonl`
+- `dataset.evaluated.jsonl`
 - `eval_report.json`
 - `run_state.json`
 - `llm_calls.jsonl`
@@ -232,9 +236,13 @@ Rate-limit behavior:
 - Otherwise backs off up to 60 seconds.
 - Raises with the provider response body when retries are exhausted.
 
+Each real call has a per-request timeout (default 180s, `models.<role>.timeout_seconds`) so a hung connection fails fast and the point checkpoints as a rejected row instead of stalling the worker.
+
+`min_interval_seconds` paces calls by reserving staggered start slots; it spaces requests without serializing concurrent workers (the sleep happens outside the pacing lock).
+
 ### Evaluation
 
-`run_evaluation` may rewrite `dataset.final.jsonl` after dedupe. It should only run from `evaluate` or `run`, not from `generate`.
+`run_evaluation` reads `dataset.final.jsonl` and writes the deduped/decontaminated result to a separate `dataset.evaluated.jsonl`. It never rewrites `dataset.final.jsonl`. It should only run from `evaluate` or `run`, not from `generate`.
 
 Coverage uses lineage from `taxonomy_mix`; it does not do independent LLM assignment in the MVP.
 

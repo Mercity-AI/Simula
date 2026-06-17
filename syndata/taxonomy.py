@@ -11,8 +11,8 @@ from .utils import artifact_path, read_json, write_json
 
 
 async def build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, Any]:
-    tax_cfg = cfg.data["taxonomy"]
-    factors = tax_cfg.get("factors") or await _discover_factors(cfg, router)
+    depth = cfg.taxonomy.depth
+    factors = cfg.taxonomy.factors or await _discover_factors(cfg, router)
     taxonomy = {"description": cfg.description, "factors": []}
 
     # Expand each factor breadth-first so all branches stay at comparable depth.
@@ -20,7 +20,7 @@ async def build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, Any]:
         root = {"name": factor["name"], "description": factor.get("description", ""), "level": 0, "children": []}
         queue = [root]
         plan = "Expand into useful, balanced child categories."
-        for level in range(1, int(tax_cfg["depth"]) + 1):
+        for level in range(1, depth + 1):
             next_queue: list[dict[str, Any]] = []
             tasks: list[tuple[dict[str, Any], asyncio.Task[list[dict[str, Any]]]]] = []
 
@@ -35,7 +35,7 @@ async def build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, Any]:
             for node, task in tasks:
                 node["children"] = task.result()
                 next_queue.extend(node["children"])
-            if level < int(tax_cfg["depth"]):
+            if level < depth:
                 plan_data = await router.complete_json(
                     "strategic",
                     cfg.prompts.level_plan_prompt(cfg.description, next_queue),
@@ -64,7 +64,7 @@ async def build_strategies(cfg: Config, router: ModelRouter, taxonomy: dict[str,
         return existing["strategies"]
     response = await router.complete_json(
         "strategic",
-        cfg.prompts.strategy_prompt(cfg.description, taxonomy, cfg.data["strategy"].get("guidance")),
+        cfg.prompts.strategy_prompt(cfg.description, taxonomy, (cfg.data.get("strategy") or {}).get("guidance")),
         system=cfg.prompts.SYSTEM_JSON,
         task=TaskType.STRATEGY,
     )
@@ -121,7 +121,7 @@ def taxonomy_to_text(node: dict[str, Any], indent: int = 0) -> str:
 async def _discover_factors(cfg: Config, router: ModelRouter) -> list[dict[str, Any]]:
     response = await router.complete_json(
         "strategic",
-        cfg.prompts.factor_prompt(cfg.description, cfg.data["taxonomy"].get("factors")),
+        cfg.prompts.factor_prompt(cfg.description, cfg.taxonomy.factors),
         system=cfg.prompts.SYSTEM_JSON,
         task=TaskType.FACTOR_DISCOVERY,
     )
@@ -137,15 +137,14 @@ async def _expand_one_node(
     plan: str,
     level: int,
 ) -> list[dict[str, Any]]:
-    tax_cfg = cfg.data["taxonomy"]
     try:
         raw_children: list[dict[str, Any]] = []
 
         # Best-of-N asks for several candidate child lists before the critic refines them.
-        for _ in range(int(tax_cfg["best_of_n"])):
+        for _ in range(cfg.taxonomy.best_of_n):
             response = await router.complete_json(
                 "strategic",
-                cfg.prompts.expand_prompt(cfg.description, factor, node, siblings, plan, int(tax_cfg.get("children_per_node", 4))),
+                cfg.prompts.expand_prompt(cfg.description, factor, node, siblings, plan, cfg.taxonomy.children_per_node),
                 system=cfg.prompts.SYSTEM_JSON,
                 task=TaskType.NODE_EXPANSION,
             )
@@ -219,7 +218,7 @@ def _norm_segment(value: str) -> str:
 
 
 def _review_taxonomy(cfg: Config, taxonomy: dict[str, Any]) -> dict[str, Any]:
-    mode = cfg.data["taxonomy"].get("review_mode", "auto_accept")
+    mode = cfg.taxonomy.review_mode
     if mode == "auto_accept":
         return taxonomy
 

@@ -1,4 +1,4 @@
-from syndata.models import _reasoning_extras, resolve_sampling
+from syndata.models import resolve_sampling
 
 
 def _config(role_cfg: dict, sampling: dict | None = None) -> dict:
@@ -42,10 +42,19 @@ def test_sampling_task_extras_merge_on_top_of_role_extra_body() -> None:
     assert extra_body == {"foo": 1, "min_p": 0.05}
 
 
-def test_reasoning_extras_for_reasoning_models() -> None:
-    assert _reasoning_extras("deepseek/deepseek-r1") == {"reasoning": {"effort": "low", "exclude": True}}
-    assert _reasoning_extras("openai/o3-mini") == {"reasoning": {"effort": "low", "exclude": True}}
+def test_no_implicit_extra_body_without_config() -> None:
+    # Reasoning exclusion is no longer auto-detected from the model id; set it explicitly via extra_body.
+    _, extra_body = resolve_sampling(_config({"model": "deepseek/deepseek-r1"}), "bulk", "generate")
+    assert extra_body == {}
 
 
-def test_reasoning_extras_skips_non_reasoning_models() -> None:
-    assert _reasoning_extras("google/gemini-3-flash-preview") == {}
+def test_role_extra_body_passes_through_verbatim() -> None:
+    role_cfg = {"extra_body": {"reasoning": {"effort": "low", "exclude": True}}}
+    _, extra_body = resolve_sampling(_config(role_cfg), "bulk", "generate")
+    assert extra_body == {"reasoning": {"effort": "low", "exclude": True}}
+
+
+def test_timeout_seconds_is_not_sent_as_a_sampling_param() -> None:
+    call_params, extra_body = resolve_sampling(_config({"timeout_seconds": 30}), "bulk", "generate")
+    assert "timeout_seconds" not in call_params
+    assert "timeout_seconds" not in extra_body

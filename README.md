@@ -44,13 +44,19 @@ Artifacts are written to:
 runs/basic_qa/
 ```
 
-For a real OpenRouter/OpenAI-compatible run:
+For a real OpenRouter/OpenAI-compatible run, provide the key named by each role's
+`api_key_env`. The simplest way is a gitignored `.env` file in the repo root (or next to the
+config), which `syndata` loads automatically on startup:
 
 ```bash
-export OPENROUTER_API_KEY="..."
+echo 'OPENROUTER_API_KEY=sk-or-...' > .env   # gitignored; loaded automatically
 python -m syndata.cli taxonomy examples/query_extraction_gemini.yaml
 python -m syndata.cli generate examples/query_extraction_gemini.yaml
 ```
+
+Key resolution precedence per role: `models.<role>.api_key` (inline; avoid for real keys) →
+`os.environ[api_key_env]` → `.env`. An exported shell variable still works and takes precedence
+over `.env`. Never commit real keys.
 
 The query extraction example currently uses:
 
@@ -66,7 +72,7 @@ through the OpenRouter-compatible API.
 syndata validate CONFIG.yaml
 ```
 
-Validates the YAML config, JSON Schema subset, model role config, and output path. It also prints a rough call estimate.
+Validates the YAML config, JSON Schema subset, model role config, and output path. It makes no model calls.
 
 ```bash
 syndata taxonomy CONFIG.yaml
@@ -84,7 +90,9 @@ Loads or builds the taxonomy, builds strategies if missing, generates data, vali
 syndata evaluate CONFIG.yaml
 ```
 
-Runs dedupe, coverage, and optional complexity scoring against `dataset.final.jsonl`.
+Runs dedupe, coverage, and optional complexity scoring. It reads `dataset.final.jsonl` and writes
+the deduped/decontaminated result to a separate `dataset.evaluated.jsonl` (it never rewrites
+`dataset.final.jsonl`), plus `eval_report.json`.
 
 ```bash
 syndata run CONFIG.yaml
@@ -233,6 +241,24 @@ Valid task names are the `TaskType` values: `factor_discovery`, `node_expansion`
 
 OpenAI-compatible params (`temperature`, `top_p`, `max_tokens`, `frequency_penalty`, `presence_penalty`, `stop`, `seed`) are sent as top-level call kwargs. Anything else (`min_p`, `top_k`, `repetition_penalty`, …) is passed through `extra_body` so provider-specific knobs work without lock-in. The resolved params are recorded per call in `llm_calls.jsonl`.
 
+Connection/control keys on a role (`base_url`, `api_key`, `api_key_env`, `model`, `min_interval_seconds`, `timeout_seconds`, `extra_body`) are never treated as decoding params.
+
+**Per-request timeout.** Each real call uses a default timeout of **180 seconds** so a hung or
+rate-limited provider connection cannot stall a worker for the SDK default (~600s). Override per
+role with `models.<role>.timeout_seconds`.
+
+**Reasoning models.** There is no automatic model-id detection. If a model emits hidden reasoning
+tokens (e.g. DeepSeek R1/V4, OpenAI o-series) and you want them excluded from output and your
+`max_tokens` budget, set it explicitly per role:
+
+```yaml
+models:
+  bulk:
+    model: "deepseek/deepseek-v4-flash"
+    max_tokens: 16384
+    extra_body: {reasoning: {effort: low, exclude: true}}
+```
+
 `syndata validate` rejects unknown task names and non-numeric values before any model call runs. With no `sampling` block, behavior is unchanged except the larger default `max_tokens`. That 32K default is batteries-included: roles without an explicit `max_tokens` can now emit much larger (and pricier) completions than before — set `models.<role>.max_tokens` or a per-task `max_tokens` to cap it.
 
 ### Schema Support
@@ -263,12 +289,17 @@ strategies.json
 dataset.raw.jsonl
 dataset.accepted.jsonl
 dataset.final.jsonl
+dataset.evaluated.jsonl
 run_state.json
 llm_calls.jsonl
 eval_report.json
 cost_summary.json
 embeddings.cache.npz
 ```
+
+`dataset.final.jsonl` is the generator's output. `dataset.evaluated.jsonl` is written by
+`evaluate`/`run` and holds the deduped/decontaminated rows, leaving `dataset.final.jsonl`
+untouched.
 
 `llm_calls.jsonl` is especially useful while a run is still active. Every successful model response is appended immediately with:
 

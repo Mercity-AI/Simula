@@ -1,9 +1,58 @@
+import os
 from pathlib import Path
 
 import pytest
 import yaml
 
 from syndata.config import load_config, validate_schema_subset
+
+
+def _fake_models() -> dict:
+    return {
+        "strategic": {"base_url": "fake", "model": "fake"},
+        "bulk": {"base_url": "fake", "model": "fake"},
+        "critic": {"base_url": "fake", "model": "fake"},
+    }
+
+
+def _write_config(tmp_path: Path, extra: dict | None = None) -> Path:
+    data = {
+        "description": "Generate examples.",
+        "project": {"output_dir": str(tmp_path / "run")},
+        "models": _fake_models(),
+    }
+    if extra:
+        data.update(extra)
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    return path
+
+
+def test_env_file_next_to_config_is_loaded(tmp_path: Path) -> None:
+    var = "SYNDATA_TEST_ENV_KEY_XYZ"
+    os.environ.pop(var, None)
+    (tmp_path / ".env").write_text(f"{var}=secret-123\n", encoding="utf-8")
+    try:
+        load_config(_write_config(tmp_path))
+        assert os.getenv(var) == "secret-123"
+    finally:
+        os.environ.pop(var, None)
+
+
+def test_null_section_falls_back_to_defaults(tmp_path: Path) -> None:
+    cfg = load_config(_write_config(tmp_path, {"evaluation": None}))
+    assert cfg.evaluation.coverage_mode == "lineage"
+    assert cfg.evaluation.dedupe is True
+
+
+def test_rejects_nonpositive_target_size(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="target_size"):
+        load_config(_write_config(tmp_path, {"generation": {"target_size": 0}}))
+
+
+def test_rejects_overgenerate_ratio_below_one(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="overgenerate_ratio"):
+        load_config(_write_config(tmp_path, {"generation": {"overgenerate_ratio": 0.5}}))
 
 
 def test_config_defaults(tmp_path: Path) -> None:

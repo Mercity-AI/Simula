@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+import time
 
-from .config import estimate_calls, load_config
-from .cost import COST
+from .config import load_config
+from .cost import summarize_cost
 from .evaluate import run_evaluation
 from .generate import generate_dataset
 from .models import ModelRouter
@@ -35,15 +36,12 @@ async def _main(argv: list[str] | None = None) -> int:
     try:
         cfg = load_config(args.config)
         router = ModelRouter(cfg.data)
-        COST.reset()
 
         # Validate prints static run information and does not invoke any model calls.
         if args.command == "validate":
-            calls = estimate_calls(cfg)
             print(f"Config OK: {cfg.path}")
             print(f"Output dir: {cfg.output_dir}")
             print(f"Output format: {cfg.output_format}")
-            print(f"Estimated calls: taxonomy={calls['taxonomy']} generation={calls['generation']} complexity={calls['complexity']}")
             return 0
 
         if args.command == "taxonomy":
@@ -75,8 +73,8 @@ async def _main(argv: list[str] | None = None) -> int:
         # Flush live LLM logs and persist cost totals before the process exits.
         if router is not None:
             await router.flush_logs()
-        if cfg is not None:
-            summary = COST.summary()
+        if cfg is not None and router is not None:
+            summary = summarize_cost(router.cost, time.time() - router.started)
             write_json(artifact_path(cfg.output_dir, "cost"), summary)
             if summary["total_calls"]:
                 print(

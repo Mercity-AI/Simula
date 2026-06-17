@@ -7,8 +7,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .cost import COST
+from .cost import CostStore, record_cost
 from .utils import append_jsonl, artifact_path, ensure_dir, extract_json_object, now_iso
+
+
+# Default per-request timeout (seconds). A hung/rate-limited provider connection would otherwise
+# stall a worker for the SDK default (~600s). Override per role with models.<role>.timeout_seconds.
+DEFAULT_TIMEOUT_SECONDS = 180.0
 
 
 class ModelRouter:
@@ -18,8 +23,10 @@ class ModelRouter:
         self._fake_counter = 0
         self._fake_lock = asyncio.Lock()
         self._pace_lock = asyncio.Lock()
-        self._last_api_call = 0.0
+        self._next_slot = 0.0
         self._log_tasks: set[asyncio.Task[None]] = set()
+        self.cost: CostStore = {}
+        self.started = time.time()
         self._output_dir = Path(config["project"]["output_dir"]) if config.get("project", {}).get("output_dir") else None
         if self._output_dir is not None:
             ensure_dir(self._output_dir)
@@ -94,22 +101,27 @@ class ModelRouter:
             from openai import AsyncOpenAI
         except ImportError as exc:
             raise RuntimeError("The openai package is required for real model calls.") from exc
-        self._clients[role] = AsyncOpenAI(api_key=api_key, base_url=model_cfg["base_url"])
+        timeout = float(model_cfg.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS))
+        self._clients[role] = AsyncOpenAI(api_key=api_key, base_url=model_cfg["base_url"], timeout=timeout)
         return self._clients[role]
 
     async def _pace(self, min_interval_seconds: float) -> None:
+        # Reserve a staggered start slot under the lock, then sleep OUTSIDE it. Holding the lock
+        # across the sleep would serialize every concurrent worker; reserving slots spaces calls
+        # by min_interval_seconds while keeping them in flight concurrently.
         if min_interval_seconds <= 0:
             return
         async with self._pace_lock:
-            elapsed = time.time() - self._last_api_call
-            if elapsed < min_interval_seconds:
-                await asyncio.sleep(min_interval_seconds - elapsed)
-            self._last_api_call = time.time()
+            start_at = max(time.time(), self._next_slot)
+            self._next_slot = start_at + min_interval_seconds
+        delay = start_at - time.time()
+        if delay > 0:
+            await asyncio.sleep(delay)
 
     def _record_cost(self, role: str, task: str, model: str, prompt: str, response: str, duration: float, usage: Any) -> None:
         in_tokens = getattr(usage, "prompt_tokens", None) or max(1, len(prompt) // 4)
         out_tokens = getattr(usage, "completion_tokens", None) or max(1, len(response) // 4)
-        COST.record(role, str(task), model, in_tokens, out_tokens, duration)
+        record_cost(self.cost, role, str(task), model, in_tokens, out_tokens, duration)
 
     def _schedule_log(
         self,
@@ -167,7 +179,7 @@ class ModelRouter:
 KNOWN_PARAMS = ("temperature", "top_p", "max_tokens", "frequency_penalty", "presence_penalty", "stop", "seed")
 SAMPLING_DEFAULTS = {"temperature": 0.7, "max_tokens": 32768}
 # Connection/control keys on a model role are not decoding params and must not be sent as sampling kwargs.
-_CONNECTION_KEYS = frozenset({"base_url", "api_key", "api_key_env", "model", "min_interval_seconds", "extra_body"})
+_CONNECTION_KEYS = frozenset({"base_url", "api_key", "api_key_env", "model", "min_interval_seconds", "timeout_seconds", "extra_body"})
 
 
 def resolve_sampling(config: dict[str, Any], role: str, task: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -186,22 +198,10 @@ def resolve_sampling(config: dict[str, Any], role: str, task: str) -> tuple[dict
     for key, value in layered.items():
         (call_params if key in KNOWN_PARAMS else extra_overrides)[key] = value
 
-    extra_body = dict(_merged_extra_body(model_cfg))
+    # Per-task provider params merge on top of the role's static extra_body (task wins on conflict).
+    extra_body = dict(model_cfg.get("extra_body") or {})
     extra_body.update(extra_overrides)
     return call_params, extra_body
-
-
-def _merged_extra_body(model_cfg: dict[str, Any]) -> dict[str, Any]:
-    if "extra_body" in model_cfg:
-        return model_cfg.get("extra_body") or {}
-    return _reasoning_extras(model_cfg["model"])
-
-
-def _reasoning_extras(model_id: str) -> dict[str, Any]:
-    mid = model_id.casefold()
-    if any(tag in mid for tag in ("deepseek", "o1", "o3", "o4", "reason")):
-        return {"reasoning": {"effort": "low", "exclude": True}}
-    return {}
 
 
 def _rate_limit_details(exc: Exception) -> tuple[float | None, str | None]:

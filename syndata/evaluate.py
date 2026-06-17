@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+from functools import lru_cache
 from itertools import combinations
 from pathlib import Path
 from typing import Any
@@ -22,10 +23,17 @@ except ImportError:  # pragma: no cover - tqdm is a declared dependency.
     tqdm = None
 
 
+@lru_cache(maxsize=None)
+def _validator_for(schema_json: str) -> Draft202012Validator:
+    # Compiling a jsonschema validator is not free; cache one per distinct schema so the
+    # critic/refine loop and per-record validation reuse it instead of rebuilding every call.
+    return Draft202012Validator(json.loads(schema_json))
+
+
 def validate_record(schema: dict[str, Any] | None, record: Any) -> tuple[bool, str | None]:
     if schema is None:
         return True, None
-    validator = Draft202012Validator(schema)
+    validator = _validator_for(json.dumps(schema, sort_keys=True))
     errors = sorted(validator.iter_errors(record), key=lambda e: list(e.path))
     if errors:
         return False, errors[0].message
@@ -40,7 +48,10 @@ def dedupe_rows(rows: list[dict[str, Any]], n: int = 13, threshold: float = 0.8)
     # Compare each candidate against kept records using the paper-style n-gram overlap.
     for row in rows:
         grams = ngrams_for_text(record_to_text(row.get("record")), n)
-        duplicate = any(_jaccard(grams, existing) >= threshold for existing in kept_grams)
+        # Empty n-grams (record_to_text has no word tokens) carry no signal: two such records are
+        # not duplicates of each other. Without this guard _jaccard(set(), set()) == 1.0 silently
+        # collapses every empty/symbol-only record into one.
+        duplicate = bool(grams) and any(_jaccard(grams, existing) >= threshold for existing in kept_grams)
         if duplicate:
             removed.append(row["id"])
             continue
@@ -59,7 +70,7 @@ def decontaminate_rows(rows: list[dict[str, Any]], paths: list[str], n: int = 13
     removed: list[str] = []
     for row in rows:
         grams = ngrams_for_text(record_to_text(row.get("record")), n)
-        if any(_jaccard(grams, reference) >= threshold for reference in reference_grams):
+        if grams and any(_jaccard(grams, reference) >= threshold for reference in reference_grams):
             removed.append(row["id"])
             continue
         kept.append(row)
@@ -82,42 +93,48 @@ def coverage_report(taxonomy: dict[str, Any], rows: list[dict[str, Any]]) -> dic
 def coverage_aware_trim(rows: list[dict[str, Any]], target_size: int) -> list[dict[str, Any]]:
     selected: list[dict[str, Any]] = []
     used: set[str] = set()
-    remaining = list(rows)
+    # Precompute each row's taxonomy-path set once instead of rebuilding it on every scan.
+    remaining = [(row, _row_paths(row)) for row in rows]
 
     # Greedily prefer rows that add the most unseen taxonomy paths.
     while remaining and len(selected) < target_size:
         best_idx = 0
         best_gain = -1
-        for idx, row in enumerate(remaining):
-            paths = {f"{m['factor']}:{'/'.join(m.get('path', [m['node']]))}" for m in row.get("taxonomy_mix", [])}
+        for idx, (_, paths) in enumerate(remaining):
             gain = len(paths - used)
             if gain > best_gain:
                 best_idx, best_gain = idx, gain
-        row = remaining.pop(best_idx)
+        row, paths = remaining.pop(best_idx)
         selected.append(row)
-        used.update({f"{m['factor']}:{'/'.join(m.get('path', [m['node']]))}" for m in row.get("taxonomy_mix", [])})
+        used.update(paths)
     return selected
 
 
+def _row_paths(row: dict[str, Any]) -> set[str]:
+    return {f"{m['factor']}:{'/'.join(m.get('path', [m['node']]))}" for m in row.get("taxonomy_mix", [])}
+
+
 async def run_evaluation(cfg: Config, router: ModelRouter | None = None, *, quiet: bool = False) -> dict[str, Any]:
+    eval_cfg = cfg.evaluation
     taxonomy = read_json(artifact_path(cfg.output_dir, "taxonomy"), {"factors": []})
-    rows = read_jsonl(artifact_path(cfg.output_dir, "final"))
+    # Read the generator's final dataset tolerantly (a torn line from a killed run must not abort eval).
+    rows = read_jsonl(artifact_path(cfg.output_dir, "final"), tolerant=True)
     report: dict[str, Any] = {"count": len(rows)}
 
-    # Dedupe/decontamination may rewrite the final dataset, but only from evaluate/run.
-    if cfg.data["evaluation"].get("dedupe", True):
+    # Dedupe/decontamination write a SEPARATE evaluated artifact; the generator's dataset.final.jsonl
+    # is never rewritten so `evaluate` is a read-only-on-final, side-effect-isolated step.
+    if eval_cfg.dedupe:
         deduped, removed = dedupe_rows(rows)
         rows = deduped
         report["dedupe"] = {"removed_count": len(removed), "removed_ids": removed}
-    decontam_paths = [str(path) for path in cfg.data["evaluation"].get("decontaminate_against", [])]
-    if decontam_paths:
-        rows, removed = decontaminate_rows(rows, decontam_paths)
+    if eval_cfg.decontaminate_against:
+        rows, removed = decontaminate_rows(rows, eval_cfg.decontaminate_against)
         report["decontamination"] = {"removed_count": len(removed), "removed_ids": removed}
-    write_jsonl(artifact_path(cfg.output_dir, "final"), rows)
+    write_jsonl(artifact_path(cfg.output_dir, "evaluated"), rows)
 
     # Coverage can use saved lineage, independent LLM reassignment, or both.
-    if cfg.data["evaluation"].get("coverage", True):
-        mode = cfg.data["evaluation"].get("coverage_mode", "lineage")
+    if eval_cfg.coverage:
+        mode = eval_cfg.coverage_mode
         if mode in {"lineage", "both"}:
             report["coverage"] = coverage_report(taxonomy, rows)
         if mode in {"reassign", "both"}:
@@ -126,18 +143,18 @@ async def run_evaluation(cfg: Config, router: ModelRouter | None = None, *, quie
             report["reassignment_coverage"] = await reassignment_coverage(cfg, router, rows, taxonomy, quiet=quiet)
 
     # Optional eval enrichments are deliberately separate from generation.
-    diversity_cfg = cfg.data["evaluation"].get("diversity", {})
-    if diversity_cfg.get("enabled", False):
-        texts = [record_to_text(row.get("record"), diversity_cfg.get("text_field")) for row in rows]
+    diversity_cfg = eval_cfg.diversity
+    if diversity_cfg.enabled:
+        texts = [record_to_text(row.get("record"), diversity_cfg.text_field) for row in rows]
         report["diversity"] = embedding_diversity(
             texts,
-            diversity_cfg.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2"),
+            diversity_cfg.embedding_model,
             artifact_path(cfg.output_dir, "embedding_cache"),
-            sample_cap=int(diversity_cfg.get("sample_cap", 1000)),
-            k_local=int(diversity_cfg.get("k_local", 10)),
+            sample_cap=diversity_cfg.sample_cap,
+            k_local=diversity_cfg.k_local,
         )
 
-    if cfg.data["evaluation"].get("complexity", False):
+    if eval_cfg.complexity:
         if router is None:
             raise ValueError("Complexity scoring requires a model router.")
         report["complexity"] = await complexity_scores(cfg, router, rows, quiet=quiet)
@@ -148,8 +165,8 @@ async def run_evaluation(cfg: Config, router: ModelRouter | None = None, *, quie
 
 
 async def complexity_scores(cfg: Config, router: ModelRouter, rows: list[dict[str, Any]], *, quiet: bool = False) -> dict[str, Any]:
-    batch_size = int(cfg.data["evaluation"].get("complexity_batch_size", 5))
-    appearances = int(cfg.data["evaluation"].get("complexity_samples_per_item", 2))
+    batch_size = cfg.evaluation.complexity_batch_size
+    appearances = cfg.evaluation.complexity_samples_per_item
     raw: dict[str, list[float]] = {row["id"]: [] for row in rows}
     ratings: dict[str, float] = {row["id"]: 1000.0 for row in rows}
     schedule = _complexity_schedule(rows, batch_size, appearances)
@@ -199,8 +216,8 @@ async def reassignment_coverage(
 ) -> dict[str, Any]:
     total = taxonomy_nodes_by_level(taxonomy)
     covered: dict[str, dict[int, set[str]]] = {factor: {level: set() for level in levels} for factor, levels in total.items()}
-    text_field = cfg.data["evaluation"].get("diversity", {}).get("text_field")
-    sem = asyncio.Semaphore(max(1, int(cfg.data["generation"].get("concurrency", 4))))
+    text_field = cfg.evaluation.diversity.text_field
+    sem = asyncio.Semaphore(cfg.generation.concurrency)
 
     async def assign(row: dict[str, Any], factor_root: dict[str, Any]) -> tuple[str, str | None]:
         async with sem:

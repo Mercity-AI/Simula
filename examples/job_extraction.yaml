@@ -35,8 +35,9 @@ schema:
 prompts:
   module: "job_extraction_prompts.py"
 
-# DeepSeek v4 Pro via OpenRouter for every role, per request. Reasoning is auto-excluded
-# for deepseek ids (see models._reasoning_extras), keeping output clean JSON and cheaper.
+# DeepSeek v4 via OpenRouter for every role. Reasoning is excluded EXPLICITLY via extra_body
+# (effort low, exclude true) — this keeps output as clean JSON and cheaper. There is no
+# automatic model-id detection; set extra_body per role when a model emits hidden reasoning.
 models:
   # Data generation uses deepseek-v4-flash:nitro (cheaper/faster; :nitro = throughput routing).
   # The taxonomy + strategies were already built with deepseek-v4-pro and are reused from disk,
@@ -48,18 +49,21 @@ models:
     model: "deepseek/deepseek-v4-flash:nitro"
     temperature: 0.4
     max_tokens: 16384
+    extra_body: {reasoning: {effort: low, exclude: true}}
   bulk:
     base_url: "https://openrouter.ai/api/v1"
     api_key_env: "OPENROUTER_API_KEY"
     model: "deepseek/deepseek-v4-flash:nitro"
     temperature: 0.9
     max_tokens: 16384
+    extra_body: {reasoning: {effort: low, exclude: true}}
   critic:
     base_url: "https://openrouter.ai/api/v1"
     api_key_env: "OPENROUTER_API_KEY"
     model: "deepseek/deepseek-v4-flash:nitro"
     temperature: 0.1
     max_tokens: 16384
+    extra_body: {reasoning: {effort: low, exclude: true}}
 
 # Explicit factors keep the taxonomy grounded in job-posting variation.
 taxonomy:

@@ -13,6 +13,7 @@ dependencies = [
   "jsonpath-ng>=1.6.1",
   "numpy>=1.26.0",
   "openai>=1.50.0",
+  "python-dotenv>=1.0.0",
   "PyYAML>=6.0.1",
   "scikit-learn>=1.4.0",
   "sentence-transformers>=2.7.0",

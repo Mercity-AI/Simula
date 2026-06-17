@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -14,6 +13,7 @@ ARTIFACTS = {
     "raw": "dataset.raw.jsonl",
     "accepted": "dataset.accepted.jsonl",
     "final": "dataset.final.jsonl",
+    "evaluated": "dataset.evaluated.jsonl",
     "eval": "eval_report.json",
     "state": "run_state.json",
     "llm_calls": "llm_calls.jsonl",
@@ -45,18 +45,9 @@ def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if line.strip():
-                rows.append(json.loads(line))
-    return rows
-
-
-def read_jsonl_tolerant(path: Path) -> list[dict[str, Any]]:
+def read_jsonl(path: Path, *, tolerant: bool = False) -> list[dict[str, Any]]:
+    # tolerant=True skips blank/corrupt lines, which matters for files appended to live
+    # (a SIGKILL mid-append can leave a torn final line). Strict mode raises on bad JSON.
     if not path.exists():
         return []
     rows: list[dict[str, Any]] = []
@@ -64,10 +55,13 @@ def read_jsonl_tolerant(path: Path) -> list[dict[str, Any]]:
         for line in handle:
             if not line.strip():
                 continue
-            try:
+            if tolerant:
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+            else:
                 rows.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
     return rows
 
 
@@ -105,7 +99,7 @@ def ngrams_for_text(text: str, n: int = 13) -> set[tuple[str, ...]]:
 
 def load_completed_attempt_indexes(path: Path) -> set[int]:
     indexes: set[int] = set()
-    for row in read_jsonl_tolerant(path):
+    for row in read_jsonl(path, tolerant=True):
         if isinstance(row.get("attempt_index"), int):
             indexes.add(row["attempt_index"])
             continue
@@ -135,10 +129,6 @@ def extract_json_object(text: str) -> Any:
     if end <= start:
         raise ValueError("Incomplete JSON object or array in response.")
     return json.loads(text[start : end + 1])
-
-
-def retry_sleep(attempt: int) -> None:
-    time.sleep(min(2.0, 0.25 * (2**attempt)))
 
 
 def _jsonpath_matches(record: Any, expression: str) -> list[Any]:

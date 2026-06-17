@@ -43,21 +43,21 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
         write_json(artifact_path(cfg.output_dir, "state"), {"attempted": 0, "accepted": 0})
 
     # Determine the deterministic attempt queue from target size, overgeneration, and checkpoint state.
-    target = int(cfg.data["generation"]["target_size"])
-    attempts = math.ceil(target * float(cfg.data["generation"]["overgenerate_ratio"]))
-    seed = int(cfg.data["project"].get("seed", 42))
+    target = cfg.generation.target_size
+    attempts = math.ceil(target * cfg.generation.overgenerate_ratio)
+    seed = cfg.seed
     completed_indexes = load_completed_attempt_indexes(raw_path) if resume else set()
     indexes = [index for index in range(attempts) if index not in completed_indexes]
 
     # Run point generation concurrently, writing artifacts in completion order from the main task.
+    # accepted.jsonl is read tolerantly: a crash mid-append can leave a torn final line.
     completed = len(completed_indexes)
-    accepted_count = len([row for row in read_jsonl(accepted_path) if row.get("accepted")]) if resume else 0
-    checkpoint_every = max(1, int(cfg.data["generation"].get("checkpoint_every", 50)))
+    accepted_count = len([row for row in read_jsonl(accepted_path, tolerant=True) if row.get("accepted")]) if resume else 0
+    checkpoint_every = max(1, cfg.generation.checkpoint_every)
     if indexes:
         # Bound in-flight attempts so a large target does not launch every attempt at once
         # (which would exhaust the HTTP pool and trigger provider rate limits).
-        concurrency = max(1, int(cfg.data["generation"].get("concurrency", 4)))
-        limiter = asyncio.Semaphore(concurrency)
+        limiter = asyncio.Semaphore(cfg.generation.concurrency)
 
         async def _bounded(index: int) -> dict[str, Any]:
             async with limiter:
@@ -82,12 +82,46 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
                     )
 
     # Build the final artifact from accepted rows only; evaluation remains a separate command.
-    accepted = [row for row in read_jsonl(accepted_path) if row.get("accepted")]
-    if cfg.data["evaluation"].get("dedupe", True):
+    accepted = [row for row in read_jsonl(accepted_path, tolerant=True) if row.get("accepted")]
+    if cfg.evaluation.dedupe:
         accepted, _ = dedupe_rows(accepted)
     final = coverage_aware_trim(accepted, target)
     write_jsonl(final_path, final)
     return final
+
+
+def _build_row(
+    cfg: Config,
+    router: ModelRouter,
+    index: int,
+    *,
+    record: Any,
+    mix: list[dict[str, Any]],
+    strategy_id: str,
+    meta_prompt: str,
+    complexified: bool,
+    schema_valid: bool,
+    accepted: bool,
+    rejection_reason: str | None,
+    critic_verdicts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    # Single source of truth for the dataset row shape (see the Artifact Contract in AGENTS.md).
+    return {
+        "id": f"item-{index}-{uuid.uuid4().hex[:8]}",
+        "attempt_index": index,
+        "record": record,
+        "output_format": cfg.output_format,
+        "taxonomy_mix": mix,
+        "strategy_id": strategy_id,
+        "meta_prompt": meta_prompt,
+        "complexified": complexified,
+        "generator_model": router.model_name("bulk"),
+        "critic_verdicts": critic_verdicts or [],
+        "schema_valid": schema_valid,
+        "accepted": accepted,
+        "rejection_reason": rejection_reason,
+        "created_at": now_iso(),
+    }
 
 
 async def _generate_one_safe(
@@ -108,22 +142,19 @@ async def _generate_one_safe(
         except Exception:  # noqa: BLE001 - fallback only applies when sampling itself is broken.
             mix = []
             strategy_id = "error"
-        return {
-            "id": f"item-{index}-{uuid.uuid4().hex[:8]}",
-            "attempt_index": index,
-            "record": "" if cfg.is_schema_free else {},
-            "output_format": cfg.output_format,
-            "taxonomy_mix": mix,
-            "strategy_id": strategy_id,
-            "meta_prompt": "",
-            "complexified": False,
-            "generator_model": router.model_name("bulk"),
-            "critic_verdicts": [],
-            "schema_valid": cfg.is_schema_free,
-            "accepted": False,
-            "rejection_reason": f"Generation failed: {exc}",
-            "created_at": now_iso(),
-        }
+        return _build_row(
+            cfg,
+            router,
+            index,
+            record="" if cfg.is_schema_free else {},
+            mix=mix,
+            strategy_id=strategy_id,
+            meta_prompt="",
+            complexified=False,
+            schema_valid=cfg.is_schema_free,
+            accepted=False,
+            rejection_reason=f"Generation failed: {exc}",
+        )
 
 
 async def _generate_one(
@@ -144,22 +175,19 @@ async def _generate_one(
     else:
         record, schema_valid, rejection_reason = await _make_record(cfg, router, meta_prompt)
 
-    row = {
-        "id": f"item-{index}-{uuid.uuid4().hex[:8]}",
-        "attempt_index": index,
-        "record": record,
-        "output_format": cfg.output_format,
-        "taxonomy_mix": mix,
-        "strategy_id": strategy.get("id", "general"),
-        "meta_prompt": meta_prompt,
-        "complexified": complexified,
-        "generator_model": router.model_name("bulk"),
-        "critic_verdicts": [],
-        "schema_valid": schema_valid,
-        "accepted": False,
-        "rejection_reason": rejection_reason,
-        "created_at": now_iso(),
-    }
+    row = _build_row(
+        cfg,
+        router,
+        index,
+        record=record,
+        mix=mix,
+        strategy_id=strategy.get("id", "general"),
+        meta_prompt=meta_prompt,
+        complexified=complexified,
+        schema_valid=schema_valid,
+        accepted=False,
+        rejection_reason=rejection_reason,
+    )
     if not schema_valid:
         return row
 
@@ -176,7 +204,7 @@ async def _generate_one(
 async def _make_meta_prompt(cfg: Config, router: ModelRouter, mix: list[dict[str, Any]], rng: random.Random) -> tuple[str, bool]:
     response = await router.complete_json(
         "bulk",
-        cfg.prompts.meta_prompt_prompt(cfg.description, cfg.schema, mix, int(cfg.data["generation"]["scenarios_per_mix"])),
+        cfg.prompts.meta_prompt_prompt(cfg.description, cfg.schema, mix, cfg.generation.scenarios_per_mix),
         system=cfg.prompts.SYSTEM_JSON,
         task=TaskType.META_PROMPT,
     )
@@ -184,7 +212,7 @@ async def _make_meta_prompt(cfg: Config, router: ModelRouter, mix: list[dict[str
     meta_prompt = rng.choice(options)
 
     # Complexification is sampled per point so the final set mixes simple and difficult items.
-    complexified = rng.random() < float(cfg.data["generation"]["complexity_ratio"])
+    complexified = rng.random() < cfg.generation.complexity_ratio
     if complexified:
         response = await router.complete_json(
             "bulk",
@@ -243,7 +271,7 @@ async def _critic_loop(
 ) -> tuple[Any, bool, str | None, list[dict[str, Any]]]:
     verdicts: list[dict[str, Any]] = []
     current = record
-    for _ in range(int(cfg.data["generation"]["max_refine_attempts"]) + 1):
+    for _ in range(cfg.generation.max_refine_attempts + 1):
         if cfg.is_schema_free:
             critique = await router.complete_json(
                 "critic",

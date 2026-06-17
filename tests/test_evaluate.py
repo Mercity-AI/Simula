@@ -16,6 +16,15 @@ def test_dedupe_rows() -> None:
     assert removed == ["b"]
 
 
+def test_dedupe_does_not_collapse_records_without_word_tokens() -> None:
+    # `{}` and `[]` both render to text with no word tokens, so they yield empty n-grams.
+    # They must NOT be treated as duplicates of each other (the old jaccard(set(),set())==1.0 bug).
+    rows = [{"id": "a", "record": {}}, {"id": "b", "record": []}]
+    kept, removed = dedupe_rows(rows)
+    assert [row["id"] for row in kept] == ["a", "b"]
+    assert removed == []
+
+
 def test_decontaminate_rows(tmp_path: Path) -> None:
     ref = tmp_path / "ref.jsonl"
     ref.write_text('{"record":"alpha beta gamma"}\n', encoding="utf-8")

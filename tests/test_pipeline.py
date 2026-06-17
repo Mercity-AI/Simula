@@ -208,6 +208,22 @@ def test_generation_concurrency_is_bounded(tmp_path: Path) -> None:
     assert router.max_active == 2
 
 
+def test_evaluate_writes_its_own_artifact_and_preserves_final(tmp_path: Path) -> None:
+    from syndata.evaluate import run_evaluation
+
+    cfg = load_config(write_config(tmp_path))
+    router = ModelRouter(cfg.data)
+    asyncio.run(build_taxonomy(cfg, router))
+    asyncio.run(generate_dataset(cfg, router, quiet=True))
+    final_before = read_jsonl(artifact_path(cfg.output_dir, "final"))
+    asyncio.run(run_evaluation(cfg, router, quiet=True))
+    asyncio.run(router.flush_logs())
+    # evaluate must not rewrite the generator's final dataset; it writes a separate artifact.
+    assert read_jsonl(artifact_path(cfg.output_dir, "final")) == final_before
+    evaluated = read_jsonl(artifact_path(cfg.output_dir, "evaluated"))
+    assert isinstance(evaluated, list) and len(evaluated) <= len(final_before)
+
+
 def test_point_failure_becomes_rejected_row(tmp_path: Path) -> None:
     class BadRouter:
         def model_name(self, role: str) -> str:
