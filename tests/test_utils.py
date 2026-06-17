@@ -22,8 +22,9 @@ def test_read_jsonl_tolerant_skips_torn_line(tmp_path: Path) -> None:
         read_jsonl(path)
 
 
-def test_record_to_text_jsonpath() -> None:
-    assert record_to_text({"x": {"y": "hello"}}, "$.x.y") == "hello"
+def test_record_to_text_dotted_field() -> None:
+    assert record_to_text({"x": {"y": "hello"}}, "x.y") == "hello"
+    assert record_to_text({"x": {"y": "hello"}}, "$.x.y") == "hello"  # leading $. tolerated
 
 
 def test_ngrams_for_short_text() -> None:

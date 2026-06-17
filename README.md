@@ -370,7 +370,7 @@ Evaluation is separate:
 python -m syndata.cli evaluate examples/query_extraction_gemini.yaml
 ```
 
-For diversity in JSON mode, set `evaluation.diversity.text_field` to a JSONPath such as `$.query` to embed a specific text field instead of the full JSON blob. Embeddings are cached under the run directory and reused on later `evaluate` runs.
+For diversity in JSON mode, set `evaluation.diversity.text_field` to a dotted field path such as `query` or `extraction.intent` to embed a specific field instead of the full JSON blob (a leading `$.` is accepted too). This is plain nested-key access, not full JSONPath. Embeddings are cached under the run directory and reused on later `evaluate` runs.
 
 ## Tests
 

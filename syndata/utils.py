@@ -82,7 +82,7 @@ def record_to_text(record: Any, text_field: str | None = None) -> str:
     if isinstance(record, str):
         return record
     if text_field:
-        matches = _jsonpath_matches(record, text_field)
+        matches = _field_value(record, text_field)
         if matches:
             return "\n".join(str(match) for match in matches)
     return json.dumps(record, sort_keys=True, ensure_ascii=False)
@@ -131,11 +131,14 @@ def extract_json_object(text: str) -> Any:
     return json.loads(text[start : end + 1])
 
 
-def _jsonpath_matches(record: Any, expression: str) -> list[Any]:
-    # jsonpath-ng is a declared dependency; a malformed/unsupported expression returns no matches.
-    from jsonpath_ng import parse
-
-    try:
-        return [match.value for match in parse(expression).find(record)]
-    except Exception:
-        return []
+def _field_value(record: Any, field: str) -> list[Any]:
+    # Direct nested-key access into a record dict: "query" or "extraction.intent" (a leading "$."
+    # is tolerated). Records share a fixed shape, so this is all the field-targeting we need — no
+    # JSONPath engine. Returns [value] when the path resolves, else [] (caller falls back to JSON).
+    current = record
+    for part in field.lstrip("$.").split("."):
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return []
+    return [current]
