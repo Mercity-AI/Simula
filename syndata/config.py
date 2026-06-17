@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+import sys
+from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -13,45 +15,47 @@ from .tasks import TaskType
 from .utils import ensure_dir
 
 
+# Typed views of the structured config sections. Default values live ONLY in default_config();
+# these are pure structs built from the already-merged dict in _parse_sections.
 @dataclass(frozen=True)
 class GenerationCfg:
-    target_size: int = 50
-    overgenerate_ratio: float = 1.3
-    scenarios_per_mix: int = 3
-    complexity_ratio: float = 0.3
-    max_refine_attempts: int = 2
-    concurrency: int = 4
-    checkpoint_every: int = 50
+    target_size: int
+    overgenerate_ratio: float
+    scenarios_per_mix: int
+    complexity_ratio: float
+    max_refine_attempts: int
+    concurrency: int
+    checkpoint_every: int
 
 
 @dataclass(frozen=True)
 class TaxonomyCfg:
-    depth: int = 2
-    factors: list[dict[str, Any]] | None = None
-    best_of_n: int = 2
-    review_mode: str = "auto_accept"
-    children_per_node: int = 4
+    depth: int
+    factors: list[dict[str, Any]] | None
+    best_of_n: int
+    review_mode: str
+    children_per_node: int
 
 
 @dataclass(frozen=True)
 class DiversityCfg:
-    enabled: bool = False
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
-    k_local: int = 10
-    sample_cap: int = 1000
-    text_field: str | None = None
+    enabled: bool
+    embedding_model: str
+    k_local: int
+    sample_cap: int
+    text_field: str | None
 
 
 @dataclass(frozen=True)
 class EvaluationCfg:
-    dedupe: bool = True
-    coverage: bool = True
-    coverage_mode: str = "lineage"
-    complexity: bool = False
-    complexity_batch_size: int = 5
-    complexity_samples_per_item: int = 2
-    decontaminate_against: list[str] = field(default_factory=list)
-    diversity: DiversityCfg = field(default_factory=DiversityCfg)
+    dedupe: bool
+    coverage: bool
+    coverage_mode: str
+    complexity: bool
+    complexity_batch_size: int
+    complexity_samples_per_item: int
+    decontaminate_against: list[str]
+    diversity: DiversityCfg
 
 
 @dataclass
@@ -62,6 +66,11 @@ class Config:
     generation: GenerationCfg
     taxonomy: TaxonomyCfg
     evaluation: EvaluationCfg
+
+    @cached_property
+    def validator(self) -> Draft202012Validator | None:
+        # Compile the schema validator once per run and reuse it across all record validations.
+        return Draft202012Validator(self.schema) if self.schema is not None else None
 
     @property
     def output_dir(self) -> Path:
@@ -147,26 +156,13 @@ def default_config() -> dict[str, Any]:
 
 
 def load_env_files(config_path: Path) -> None:
-    # Load .env so `api_key_env` actually resolves without a manual `export`. We look next to
-    # the config file and in the current directory; existing env vars always win (override=False).
-    candidates = [config_path.resolve().parent / ".env", Path.cwd() / ".env"]
-    try:
-        from dotenv import load_dotenv
-    except ImportError:
-        load_dotenv = None
-    for env_path in candidates:
-        if not env_path.is_file():
-            continue
-        if load_dotenv is not None:
-            load_dotenv(env_path, override=False)
-            continue
-        # Thin fallback parser when python-dotenv is not installed.
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    # Load .env so `api_key_env` resolves without a manual `export`. We look next to the config
+    # file and in the current directory; existing env vars win (override=False). load_dotenv
+    # no-ops on a missing file. python-dotenv is a declared dependency.
+    from dotenv import load_dotenv
+
+    load_dotenv(config_path.resolve().parent / ".env", override=False)
+    load_dotenv(Path.cwd() / ".env", override=False)
 
 
 def _section(data: dict[str, Any], key: str) -> dict[str, Any]:
@@ -175,41 +171,41 @@ def _section(data: dict[str, Any], key: str) -> dict[str, Any]:
 
 
 def _parse_sections(data: dict[str, Any]) -> tuple[GenerationCfg, TaxonomyCfg, EvaluationCfg]:
-    # Parse the structured sections once into typed views so the rest of the codebase reads
-    # cfg.generation.target_size instead of int(cfg.data["generation"]["target_size"]).
+    # Build typed views from the already-merged dict (every key is guaranteed present by
+    # _deep_merge, so we read directly and only coerce types — defaults live in default_config()).
     gen = _section(data, "generation")
     generation = GenerationCfg(
-        target_size=int(gen.get("target_size", 50)),
-        overgenerate_ratio=float(gen.get("overgenerate_ratio", 1.3)),
-        scenarios_per_mix=int(gen.get("scenarios_per_mix", 3)),
-        complexity_ratio=float(gen.get("complexity_ratio", 0.3)),
-        max_refine_attempts=int(gen.get("max_refine_attempts", 2)),
-        concurrency=int(gen.get("concurrency", 4)),
-        checkpoint_every=int(gen.get("checkpoint_every", 50)),
+        target_size=int(gen["target_size"]),
+        overgenerate_ratio=float(gen["overgenerate_ratio"]),
+        scenarios_per_mix=int(gen["scenarios_per_mix"]),
+        complexity_ratio=float(gen["complexity_ratio"]),
+        max_refine_attempts=int(gen["max_refine_attempts"]),
+        concurrency=int(gen["concurrency"]),
+        checkpoint_every=int(gen["checkpoint_every"]),
     )
     tax = _section(data, "taxonomy")
     taxonomy = TaxonomyCfg(
-        depth=int(tax.get("depth", 2)),
+        depth=int(tax["depth"]),
         factors=tax.get("factors"),
-        best_of_n=int(tax.get("best_of_n", 2)),
-        review_mode=str(tax.get("review_mode", "auto_accept")),
-        children_per_node=int(tax.get("children_per_node", 4)),
+        best_of_n=int(tax["best_of_n"]),
+        review_mode=str(tax["review_mode"]),
+        children_per_node=int(tax["children_per_node"]),
     )
     ev = _section(data, "evaluation")
     div = _section(ev, "diversity")
     evaluation = EvaluationCfg(
-        dedupe=bool(ev.get("dedupe", True)),
-        coverage=bool(ev.get("coverage", True)),
-        coverage_mode=str(ev.get("coverage_mode", "lineage")),
-        complexity=bool(ev.get("complexity", False)),
-        complexity_batch_size=int(ev.get("complexity_batch_size", 5)),
-        complexity_samples_per_item=int(ev.get("complexity_samples_per_item", 2)),
+        dedupe=bool(ev["dedupe"]),
+        coverage=bool(ev["coverage"]),
+        coverage_mode=str(ev["coverage_mode"]),
+        complexity=bool(ev["complexity"]),
+        complexity_batch_size=int(ev["complexity_batch_size"]),
+        complexity_samples_per_item=int(ev["complexity_samples_per_item"]),
         decontaminate_against=[str(p) for p in (ev.get("decontaminate_against") or [])],
         diversity=DiversityCfg(
-            enabled=bool(div.get("enabled", False)),
-            embedding_model=str(div.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2")),
-            k_local=int(div.get("k_local", 10)),
-            sample_cap=int(div.get("sample_cap", 1000)),
+            enabled=bool(div["enabled"]),
+            embedding_model=str(div["embedding_model"]),
+            k_local=int(div["k_local"]),
+            sample_cap=int(div["sample_cap"]),
             text_field=div.get("text_field"),
         ),
     )
@@ -246,12 +242,18 @@ def validate_config(cfg: Config) -> None:
     if cfg.schema is not None:
         validate_schema_subset(cfg.schema)
 
+    missing_keys = []
     for role in ("strategic", "bulk", "critic"):
         model_cfg = cfg.data["models"].get(role, {})
         if not model_cfg.get("model"):
             raise ValueError(f"models.{role}.model is required.")
         if not model_cfg.get("base_url"):
             raise ValueError(f"models.{role}.base_url is required.")
+        # Warn (don't fail — keep `validate` offline-friendly) when a real model has no resolvable key.
+        if model_cfg["model"] != "fake" and not (model_cfg.get("api_key") or os.getenv(model_cfg.get("api_key_env", ""))):
+            missing_keys.append(f"{role} (api_key_env={model_cfg.get('api_key_env') or 'unset'})")
+    if missing_keys:
+        print(f"Warning: no API key resolved for model role(s): {', '.join(missing_keys)}.", file=sys.stderr)
 
     if cfg.taxonomy.review_mode not in {"auto_accept", "write_then_edit", "interactive_confirm"}:
         raise ValueError("taxonomy.review_mode must be auto_accept, write_then_edit, or interactive_confirm.")

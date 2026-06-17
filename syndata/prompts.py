@@ -22,37 +22,14 @@ SYSTEM_TEXT = (
 )
 
 
-PROMPT_FUNCTION_NAMES = (
-    "factor_prompt",
-    "expand_prompt",
-    "refine_nodes_prompt",
-    "level_plan_prompt",
-    "strategy_prompt",
-    "meta_prompt_prompt",
-    "complexify_prompt",
-    "generate_record_prompt",
-    "generate_text_prompt",
-    "repair_json_prompt",
-    "critique_prompt",
-    "critique_text_prompt",
-    "refine_record_prompt",
-    "refine_text_prompt",
-    "complexity_prompt",
-    "node_assign_prompt",
-)
-
-
 class PromptSet:
     def __init__(self, module: ModuleType | None = None, module_path: Path | None = None):
         self.module = module
         self.module_path = module_path
 
     def __getattr__(self, name: str) -> Any:
-        if name in {"SYSTEM_JSON", "SYSTEM_TEXT"}:
-            if self.module is not None and hasattr(self.module, name):
-                return getattr(self.module, name)
-            return globals()[name]
-        if name in PROMPT_FUNCTION_NAMES:
+        # Resolve an overridable name to the user module's version if present, else the built-in.
+        if name in OVERRIDABLE_NAMES:
             if self.module is not None and hasattr(self.module, name):
                 return getattr(self.module, name)
             return globals()[name]
@@ -411,3 +388,14 @@ Choose the single most appropriate node name in this taxonomy for the data point
 Return JSON:
 {{"node_name": "..."}}
 """.strip()
+
+
+# Overridable prompt builders are every public module-level function ending in `_prompt`, derived
+# here so adding a builder never requires updating a hand-maintained list. Defined at module end so
+# all builders are already in globals().
+PROMPT_FUNCTION_NAMES = tuple(
+    name
+    for name, obj in sorted(globals().items())
+    if name.endswith("_prompt") and not name.startswith("_") and callable(obj)
+)
+OVERRIDABLE_NAMES = frozenset(PROMPT_FUNCTION_NAMES) | {"SYSTEM_JSON", "SYSTEM_TEXT"}

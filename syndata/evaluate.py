@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import random
-from functools import lru_cache
 from itertools import combinations
 from pathlib import Path
 from typing import Any
@@ -23,17 +22,18 @@ except ImportError:  # pragma: no cover - tqdm is a declared dependency.
     tqdm = None
 
 
-@lru_cache(maxsize=None)
-def _validator_for(schema_json: str) -> Draft202012Validator:
-    # Compiling a jsonschema validator is not free; cache one per distinct schema so the
-    # critic/refine loop and per-record validation reuse it instead of rebuilding every call.
-    return Draft202012Validator(json.loads(schema_json))
-
-
-def validate_record(schema: dict[str, Any] | None, record: Any) -> tuple[bool, str | None]:
-    if schema is None:
-        return True, None
-    validator = _validator_for(json.dumps(schema, sort_keys=True))
+def validate_record(
+    schema: dict[str, Any] | None,
+    record: Any,
+    *,
+    validator: Draft202012Validator | None = None,
+) -> tuple[bool, str | None]:
+    # Pass a precompiled `validator` (e.g. cfg.validator) on hot paths to avoid recompiling per call;
+    # otherwise the schema is compiled here. Either way schema=None means "free-text, always valid".
+    if validator is None:
+        if schema is None:
+            return True, None
+        validator = Draft202012Validator(schema)
     errors = sorted(validator.iter_errors(record), key=lambda e: list(e.path))
     if errors:
         return False, errors[0].message
@@ -258,10 +258,12 @@ def _complexity_schedule(rows: list[dict[str, Any]], batch_size: int, appearance
     for _ in range(max(1, appearances)):
         shuffled = rows[:]
         rng.shuffle(shuffled)
-        for idx in range(0, len(shuffled), batch_size):
-            batch = shuffled[idx : idx + batch_size]
-            if len(batch) >= 2:
-                schedule.append(batch)
+        batches = [shuffled[idx : idx + batch_size] for idx in range(0, len(shuffled), batch_size)]
+        # A trailing batch of one can't be ranked within itself; merge it back so the item is not
+        # silently dropped from this appearance pass.
+        if len(batches) >= 2 and len(batches[-1]) < 2:
+            batches[-2].extend(batches.pop())
+        schedule.extend(batch for batch in batches if len(batch) >= 2)
     return schedule
 
 

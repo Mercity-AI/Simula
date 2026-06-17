@@ -55,6 +55,17 @@ def test_rejects_overgenerate_ratio_below_one(tmp_path: Path) -> None:
         load_config(_write_config(tmp_path, {"generation": {"overgenerate_ratio": 0.5}}))
 
 
+def test_missing_api_key_warns_but_does_not_fail(tmp_path: Path, capsys) -> None:
+    os.environ.pop("SYNDATA_DEFINITELY_MISSING_KEY", None)
+    real_models = {
+        role: {"base_url": "https://example", "api_key_env": "SYNDATA_DEFINITELY_MISSING_KEY", "model": "vendor/real-model"}
+        for role in ("strategic", "bulk", "critic")
+    }
+    cfg = load_config(_write_config(tmp_path, {"models": real_models}))  # must not raise
+    assert cfg.data["models"]["bulk"]["model"] == "vendor/real-model"
+    assert "no API key resolved" in capsys.readouterr().err
+
+
 def test_config_defaults(tmp_path: Path) -> None:
     path = tmp_path / "config.yaml"
     path.write_text(

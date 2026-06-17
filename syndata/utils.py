@@ -132,17 +132,10 @@ def extract_json_object(text: str) -> Any:
 
 
 def _jsonpath_matches(record: Any, expression: str) -> list[Any]:
-    try:
-        from jsonpath_ng import parse
+    # jsonpath-ng is a declared dependency; a malformed/unsupported expression returns no matches.
+    from jsonpath_ng import parse
 
+    try:
         return [match.value for match in parse(expression).find(record)]
     except Exception:
-        if not expression.startswith("$."):
-            return []
-        current = record
-        for part in expression[2:].split("."):
-            if isinstance(current, dict) and part in current:
-                current = current[part]
-            else:
-                return []
-        return [current]
+        return []

@@ -1,12 +1,37 @@
 from pathlib import Path
 
-from syndata.evaluate import coverage_aware_trim, coverage_report, decontaminate_rows, dedupe_rows, validate_record
+from jsonschema import Draft202012Validator
+
+from syndata.evaluate import (
+    _complexity_schedule,
+    coverage_aware_trim,
+    coverage_report,
+    decontaminate_rows,
+    dedupe_rows,
+    validate_record,
+)
 
 
 def test_validate_record() -> None:
     schema = {"type": "object", "required": ["x"], "properties": {"x": {"type": "string"}}}
     assert validate_record(schema, {"x": "ok"}) == (True, None)
     assert validate_record(schema, {"x": 1})[0] is False
+
+
+def test_validate_record_uses_precompiled_validator() -> None:
+    schema = {"type": "object", "required": ["x"], "properties": {"x": {"type": "string"}}}
+    validator = Draft202012Validator(schema)
+    # A precompiled validator is reused and takes precedence over the schema argument.
+    assert validate_record(None, {"x": "ok"}, validator=validator) == (True, None)
+    assert validate_record(None, {"x": 1}, validator=validator)[0] is False
+
+
+def test_complexity_schedule_keeps_every_row_without_singletons() -> None:
+    # 3 rows in batches of 2 would leave a trailing batch of 1; it must merge, not drop.
+    rows = [{"id": str(i), "record": {}} for i in range(3)]
+    schedule = _complexity_schedule(rows, batch_size=2, appearances=1)
+    assert all(len(batch) >= 2 for batch in schedule)
+    assert {row["id"] for batch in schedule for row in batch} == {"0", "1", "2"}
 
 
 def test_dedupe_rows() -> None:

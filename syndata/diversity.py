@@ -39,8 +39,10 @@ def embedding_diversity(
     if len(texts) < 2:
         return {"global_diversity": 0.0, "local_diversity": 0.0, "sample_size": len(texts), "cache_path": str(cache_path)}
 
-    # Diversity can be expensive, so sample deterministically after text extraction.
+    # Diversity can be expensive, so sample deterministically after text extraction. The reported
+    # metric is then an estimate from this subset (see sample_size/sample_cap in the result).
     if len(texts) > sample_cap:
+        print(f"[diversity] {len(texts)} texts exceed sample_cap={sample_cap}; computing on a random sample of {sample_cap}.")
         texts = random.Random(0).sample(texts, sample_cap)
 
     cache = _load_cache(cache_path)
@@ -91,6 +93,10 @@ def _save_cache(path: Path, cache: dict[str, Any]) -> None:
     import numpy as np
 
     ensure_dir(path.parent)
-    keys = np.array(list(cache.keys()), dtype="<U64")
+    key_list = list(cache.keys())
+    # Size the unicode dtype to the longest key so keys are never silently truncated (and we avoid
+    # object arrays, which np.load(allow_pickle=False) would refuse). sha256 keys are 64 chars today.
+    width = max((len(key) for key in key_list), default=1)
+    keys = np.array(key_list, dtype=f"<U{width}")
     embeddings = np.vstack(list(cache.values())).astype("float32") if cache else np.empty((0, 0), dtype="float32")
     np.savez_compressed(path, keys=keys, embeddings=embeddings)

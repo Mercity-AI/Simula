@@ -7,7 +7,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .cost import CostStore, record_cost
 from .utils import append_jsonl, artifact_path, ensure_dir, extract_json_object, now_iso
 
 
@@ -23,7 +22,8 @@ class ModelRouter:
         self._fake_counter = 0
         self._fake_lock = asyncio.Lock()
         self._log_tasks: set[asyncio.Task[None]] = set()
-        self.cost: CostStore = {}
+        # Cost accounting keyed by (role, task, model) -> [calls, in_tokens, out_tokens, duration].
+        self.cost: dict[tuple[str, str, str], list[float]] = {}
         self.started = time.time()
         self._output_dir = Path(config["project"]["output_dir"]) if config.get("project", {}).get("output_dir") else None
         if self._output_dir is not None:
@@ -44,8 +44,7 @@ class ModelRouter:
             async with self._fake_lock:
                 self._fake_counter += 1
                 response = fake_complete(prompt, self._fake_counter)
-            self._record_cost(role, task, model, prompt, response, 0.0, None)
-            self._schedule_log(role, task, model, prompt, system, response, 0.0, None, extras, sampling)
+            self._account(role, task, model, prompt, system, response, 0.0, None, extras, sampling)
             return response
 
         client = self._client_for(role, model_cfg)
@@ -66,8 +65,7 @@ class ModelRouter:
                 content = response.choices[0].message.content or ""
                 duration = time.time() - started
                 usage = getattr(response, "usage", None)
-                self._record_cost(role, task, model, prompt, content, duration, usage)
-                self._schedule_log(role, task, model, prompt, system, content, duration, usage, extras, sampling)
+                self._account(role, task, model, prompt, system, content, duration, usage, extras, sampling)
                 return content
             except Exception as exc:  # noqa: BLE001 - provider SDKs expose several exception classes.
                 retry_after, body = _rate_limit_details(exc)
@@ -102,46 +100,31 @@ class ModelRouter:
         self._clients[role] = AsyncOpenAI(api_key=api_key, base_url=model_cfg["base_url"], timeout=timeout)
         return self._clients[role]
 
-    def _record_cost(self, role: str, task: str, model: str, prompt: str, response: str, duration: float, usage: Any) -> None:
+    def _account(
+        self,
+        role: str,
+        task: str,
+        model: str,
+        prompt: str,
+        system: str | None,
+        response: str,
+        duration: float,
+        usage: Any,
+        extra_body: dict[str, Any] | None,
+        sampling: dict[str, Any] | None,
+    ) -> None:
+        # Compute tokens once (estimating when the provider omits usage) so cost accounting and
+        # the llm_calls log always agree, then accumulate cost and schedule the log row.
         in_tokens = getattr(usage, "prompt_tokens", None) or max(1, len(prompt) // 4)
         out_tokens = getattr(usage, "completion_tokens", None) or max(1, len(response) // 4)
-        record_cost(self.cost, role, str(task), model, in_tokens, out_tokens, duration)
+        agg = self.cost.setdefault((role, str(task), model), [0, 0, 0, 0.0])
+        agg[0] += 1
+        agg[1] += in_tokens
+        agg[2] += out_tokens
+        agg[3] += duration
 
-    def _schedule_log(
-        self,
-        role: str,
-        task: str,
-        model: str,
-        prompt: str,
-        system: str | None,
-        response: str,
-        duration: float,
-        usage: Any,
-        extra_body: dict[str, Any] | None,
-        sampling: dict[str, Any] | None,
-    ) -> None:
         if self._output_dir is None:
             return
-        task_obj = asyncio.create_task(
-            self._log_call_async(role, task, model, prompt, system, response, duration, usage, extra_body, sampling)
-        )
-        self._log_tasks.add(task_obj)
-        task_obj.add_done_callback(self._log_tasks.discard)
-
-    async def _log_call_async(
-        self,
-        role: str,
-        task: str,
-        model: str,
-        prompt: str,
-        system: str | None,
-        response: str,
-        duration: float,
-        usage: Any,
-        extra_body: dict[str, Any] | None,
-        sampling: dict[str, Any] | None,
-    ) -> None:
-        log_path = Path(os.getenv("SYNDATA_LLM_LOG", "")) if os.getenv("SYNDATA_LLM_LOG") else artifact_path(self._output_dir, "llm_calls")  # type: ignore[arg-type]
         row = {
             "created_at": now_iso(),
             "role": role,
@@ -151,11 +134,17 @@ class ModelRouter:
             "system": system,
             "prompt": prompt,
             "response": response,
-            "in_tokens": getattr(usage, "prompt_tokens", None),
-            "out_tokens": getattr(usage, "completion_tokens", None),
+            "in_tokens": in_tokens,
+            "out_tokens": out_tokens,
             "sampling": sampling,
             "extra_body": extra_body,
         }
+        log_task = asyncio.create_task(self._write_log(row))
+        self._log_tasks.add(log_task)
+        log_task.add_done_callback(self._log_tasks.discard)
+
+    async def _write_log(self, row: dict[str, Any]) -> None:
+        log_path = Path(os.getenv("SYNDATA_LLM_LOG")) if os.getenv("SYNDATA_LLM_LOG") else artifact_path(self._output_dir, "llm_calls")  # type: ignore[arg-type]
         await asyncio.to_thread(append_jsonl, log_path, row)
 
 
@@ -206,9 +195,7 @@ def fake_complete(prompt: str, counter: int = 0) -> str:
         return f"Once upon a time there was a cat with id {counter}. The cat had adventures."
     if '"factors"' in prompt:
         return '{"factors":[{"name":"topic","description":"Subject area"},{"name":"difficulty","description":"Difficulty level"}]}'
-    if '"children"' in prompt and "Refine" not in prompt:
-        return '{"children":[{"name":"alpha","description":"Alpha branch"},{"name":"beta","description":"Beta branch"}]}'
-    if '"children"' in prompt and "Refine" in prompt:
+    if '"children"' in prompt:
         return '{"children":[{"name":"alpha","description":"Alpha branch"},{"name":"beta","description":"Beta branch"}]}'
     if '"plan"' in prompt:
         return '{"plan":"Expand each node into two concrete and balanced child nodes."}'

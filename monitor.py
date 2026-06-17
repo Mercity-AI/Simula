@@ -116,7 +116,7 @@ def snapshot(config_path: Path) -> bool:
     acc_rate = (n_acc / n_raw * 100) if n_raw else 0.0
     reasons = Counter()
     for r in rejected_rows:
-        reason = (r.get("rejection_reason") or "unknown").split(":")[0][:60]
+        reason = (r.get("rejection_reason") or "unknown").split(":")[0]
         reasons[reason] += 1
 
     print("=" * 64)
@@ -133,7 +133,7 @@ def snapshot(config_path: Path) -> bool:
         print("  generator models: " + ", ".join(f"{m}={c}" for m, c in models.most_common()))
     if reasons:
         print("top reject reasons:")
-        for reason, count in reasons.most_common(5):
+        for reason, count in reasons.most_common(10):
             print(f"  {count:4d}  {reason}")
     print("=" * 64)
 

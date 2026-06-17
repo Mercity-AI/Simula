@@ -194,7 +194,7 @@ async def _generate_one(
     # Semantic critique/refinement is applied to both JSON and free-text records.
     row["record"], row["accepted"], row["rejection_reason"], row["critic_verdicts"] = await _critic_loop(cfg, router, meta_prompt, record)
     if not cfg.is_schema_free:
-        row["schema_valid"] = validate_record(cfg.schema, row["record"])[0]
+        row["schema_valid"] = validate_record(cfg.schema, row["record"], validator=cfg.validator)[0]
         if not row["schema_valid"]:
             row["accepted"] = False
             row["rejection_reason"] = "Record failed schema validation after critique refinement."
@@ -233,7 +233,7 @@ async def _make_record(cfg: Config, router: ModelRouter, meta_prompt: str) -> tu
     )
     try:
         record = extract_json_object(raw_response)
-        valid, error = validate_record(cfg.schema, record)
+        valid, error = validate_record(cfg.schema, record, validator=cfg.validator)
         if valid:
             return record, True, None
     except Exception as exc:
@@ -247,7 +247,7 @@ async def _make_record(cfg: Config, router: ModelRouter, meta_prompt: str) -> tu
             system=cfg.prompts.SYSTEM_JSON,
             task=TaskType.REPAIR,
         )
-        valid, repair_error = validate_record(cfg.schema, repaired)
+        valid, repair_error = validate_record(cfg.schema, repaired, validator=cfg.validator)
         return repaired, valid, None if valid else repair_error
     except Exception as exc:
         return record, False, f"JSON repair failed: {exc}"
@@ -308,7 +308,7 @@ async def _critic_loop(
                     system=cfg.prompts.SYSTEM_JSON,
                     task=TaskType.REFINE,
                 )
-                valid, error = validate_record(cfg.schema, current)
+                valid, error = validate_record(cfg.schema, current, validator=cfg.validator)
                 if not valid:
                     return current, False, error, verdicts
         except Exception as exc:

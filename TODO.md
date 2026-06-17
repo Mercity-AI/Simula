@@ -118,3 +118,20 @@ Improve the global plan prompt so it explicitly asks for a plan that applies acr
 - preserve flexibility for each node's own domain
 
 Reason: a global plan is compact and helps keep same-level taxonomy nodes comparable, but if it becomes too specific to one branch, it can distort expansion for unrelated siblings.
+
+## Rework the `SYNDATA_LLM_LOG` global override
+
+`ModelRouter._write_log` currently honors a `SYNDATA_LLM_LOG` environment variable that, when set,
+redirects *every* model-call log line to a single file instead of each run's
+`<output_dir>/llm_calls.jsonl`. This is a foot-gun: it is undocumented, it is read fresh from the
+environment on every write, and if it is ever exported globally then concurrent runs interleave
+into one file while `monitor.py` and resume logic (which read `<output_dir>/llm_calls.jsonl`)
+silently see nothing. It also entangles "where do logs go" with process-wide environment state
+rather than per-run config.
+
+This needs to be thought through and fixed. One clean idea is to drop the ad-hoc env override
+entirely and route call logging through a proper logging library (Python's `logging`, or
+`structlog`): configure a per-run handler/sink pointed at the run directory, and let standard
+logging config (levels, handlers, optional extra sinks) replace the bespoke env var. That gives us
+real log levels, formatting, and multiple sinks without a hand-rolled global. Decide on the
+approach, then implement and document it.
