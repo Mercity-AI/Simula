@@ -285,6 +285,11 @@ Use `"model": "fake"` for tests. Do not require network access in tests.
 
 ## Known Cleanup / Improvement Candidates
 
+- Behavior-preserving cleanup ("Pile A", see `TODO.md` → "Simplification review (2026-06-23)"):
+  collapse the duplicated schema-free/JSON branching in `generate.py` (`_make_record`/`_make_text` +
+  the `cfg.is_schema_free` branches in `_critic_loop`) and flatten `_generate_one_safe`'s nested
+  try/except. NOTE: `ModelRouter.model_name()` looks like a trivial accessor but is a test seam (a
+  test injects a router exposing only that method, with no `.config`) — do not inline it.
 - Add a command to tail/summarize `llm_calls.jsonl`.
 - Add batched and multi-turn generation modes (see `TODO.md`).
 - `monitor.py` is extraction-specific: its default `--config` and its `record["extraction"]` quality block only make sense for the extraction datasets.

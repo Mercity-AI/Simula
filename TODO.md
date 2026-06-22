@@ -159,3 +159,29 @@ deliberately deferred — keep any fix compact:
   uniformly, so a mix can be just a vague root. Not a bug — it adds breadth. Add a single
   `prefer_leaf`/leaf-only sampling knob only if real meta-prompts come out too vague (see the
   structured sampling-knobs note above).
+
+## Simplification review (2026-06-23): decisions + sanctioned cleanup
+
+A complexity/bloat review concluded that most of the perceived bloat is **feature accumulation, not
+bad style** — roughly half the codebase is optional/off-by-default capability (the eval metrics),
+safety layers (typed config), and quality multipliers (best_of_n, complexify, critic/refine), each
+added deliberately. Decisions (no code changed in this pass):
+
+- **Keep all features**, including Elo complexity scoring and LLM reassignment coverage. Both are
+  off by default and DO write into `eval_report.json` when enabled (confirmed). Known gap, left as-is:
+  the complexity ranking is reported but not consumed by any dataset-shaping step — it would only
+  earn its weight once `coverage_aware_trim` or a curriculum export actually uses it.
+- **Keep the generation methodology unchanged** (meta-prompt indirection, best_of_n, critic/refine).
+- Only **behavior-preserving cleanup ("Pile A")** is sanctioned. Not yet done:
+
+  1. Collapse the schema-free-vs-JSON duality duplicated across `_make_record` / `_make_text` and the
+     `if cfg.is_schema_free` branches inside `_critic_loop`. The two flows are genuinely different
+     (JSON parses/validates/repairs; text doesn't), so this consolidates shared structure — it does
+     not fully merge them.
+  2. Flatten the nested try/except in `_generate_one_safe`: compute the strategy+mix once and build
+     the row progressively so the failure path doesn't recompute the mix.
+
+  CAVEAT: `ModelRouter.model_name()` looks like a trivial accessor but is a **test seam** —
+  `test_point_failure_becomes_rejected_row` injects a `BadRouter` with no `.config`, only
+  `model_name()`. Do NOT inline it. Realistic Pile A savings are modest (~30–50 lines); the big
+  reductions only come from cutting features, which was declined.
