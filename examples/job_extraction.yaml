@@ -35,31 +35,29 @@ schema:
 prompts:
   module: "job_extraction_prompts.py"
 
-# DeepSeek v4 via OpenRouter for every role. Reasoning is excluded EXPLICITLY via extra_body
-# (effort low, exclude true) — this keeps output as clean JSON and cheaper. There is no
-# automatic model-id detection; set extra_body per role when a model emits hidden reasoning.
+# DeepSeek v4 via OpenRouter for every role (single provider; key read from the project-root .env).
+# Reasoning is excluded EXPLICITLY via per-role extra_body (effort low, exclude true) — this keeps
+# output as clean JSON and cheaper. There is no automatic model-id detection.
+provider:
+  base_url: "https://openrouter.ai/api/v1"
+  api_key_env: "OPENROUTER_API_KEY"
+
 models:
   # Data generation uses deepseek-v4-flash:nitro (cheaper/faster; :nitro = throughput routing).
   # The taxonomy + strategies were already built with deepseek-v4-pro and are reused from disk,
   # so `strategic` is not re-invoked on a resume/regen of data rows. 16K leaves room for the
   # hidden reasoning (effort low) alongside the JSON. See testing-notes.md.
   strategic:
-    base_url: "https://openrouter.ai/api/v1"
-    api_key_env: "OPENROUTER_API_KEY"
     model: "deepseek/deepseek-v4-flash:nitro"
     temperature: 0.4
     max_tokens: 16384
     extra_body: {reasoning: {effort: low, exclude: true}}
   bulk:
-    base_url: "https://openrouter.ai/api/v1"
-    api_key_env: "OPENROUTER_API_KEY"
     model: "deepseek/deepseek-v4-flash:nitro"
     temperature: 0.9
     max_tokens: 16384
     extra_body: {reasoning: {effort: low, exclude: true}}
   critic:
-    base_url: "https://openrouter.ai/api/v1"
-    api_key_env: "OPENROUTER_API_KEY"
     model: "deepseek/deepseek-v4-flash:nitro"
     temperature: 0.1
     max_tokens: 16384

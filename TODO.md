@@ -1,5 +1,31 @@
 # TODO
 
+## Done: Structural refactor (round 4, 2026-06-23)
+
+A larger sanctioned refactor landed (60 tests pass). Highlights:
+
+- **Pydantic config.** `syndata/data_models.py` holds the config models (single source of defaults +
+  validation) and `TaskType`. `config.py` shrank to YAML load + Pydantic validate + schema-subset
+  check + the missing-key warning. `cfg.data` is now a derived `model_dump()` view, not a
+  hand-merged dict. Deleted `_deep_merge`/`_section`/`_parse_sections`/`default_config`/the
+  dataclasses. `tasks.py` merged into `data_models.py`; `cost.py` merged into `utils.summarize_cost`.
+- **Single provider.** Per-role `base_url`/`api_key` are gone from the contract; connection lives on a
+  `provider` block (`base_url`/`api_key_env`/`timeout_seconds`). `ModelRouter` uses one shared client.
+- **.env-only keys.** `resolve_api_key` reads the project-root `.env` directly (`dotenv_values`); a
+  shell export is ignored. No `os.getenv`, no two-location load.
+- **rich logging.** `syndata/console.py` routes human-facing status/warnings/the review prompt;
+  `llm_calls.jsonl` stays plain JSONL.
+- **Retry classification.** Fail fast on 4xx (except 408/409/429), retry transport/5xx/429.
+- **Pile A done.** `_critic_loop` schema-free branches consolidated; `_generate_one_safe` flattened.
+- **Misc.** required `system` param (dropped the "helpful assistant" fallback); required `router` in
+  `run_evaluation`; dropped the `tqdm` try/except; diversity deps top-of-file behind one guard with
+  the import boundary in `run_evaluation`; `examples/template.yaml` added.
+
+Note: `monitor.py` parses the config YAML directly (not via `load_config`) and only reads the
+`generation` section + artifacts, so the single-provider change does NOT break it; it remains
+extraction-specific and duplicates artifact knowledge (pre-existing). Deferred findings below (output
+normalizers, silent-below-target) are unaffected by this refactor.
+
 ## Done: Add Configurable Prompt Overrides
 
 Runs can now point at a Python prompt module from config:
@@ -172,7 +198,7 @@ added deliberately. Decisions (no code changed in this pass):
   the complexity ranking is reported but not consumed by any dataset-shaping step — it would only
   earn its weight once `coverage_aware_trim` or a curriculum export actually uses it.
 - **Keep the generation methodology unchanged** (meta-prompt indirection, best_of_n, critic/refine).
-- Only **behavior-preserving cleanup ("Pile A")** is sanctioned. Not yet done:
+- Only **behavior-preserving cleanup ("Pile A")** is sanctioned. DONE in round 4 (2026-06-23):
 
   1. Collapse the schema-free-vs-JSON duality duplicated across `_make_record` / `_make_text` and the
      `if cfg.is_schema_free` branches inside `_critic_loop`. The two flows are genuinely different

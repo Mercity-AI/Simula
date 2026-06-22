@@ -8,18 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
+from tqdm import tqdm
 
 from .config import Config
-from .diversity import embedding_diversity
+from .data_models import TaskType
 from .models import ModelRouter
-from .tasks import TaskType
 from .taxonomy import taxonomy_nodes_by_level, taxonomy_to_text, walk_nodes
 from .utils import artifact_path, ngrams_for_text, read_json, read_jsonl, record_to_text, write_json, write_jsonl
-
-try:
-    from tqdm import tqdm
-except ImportError:  # pragma: no cover - tqdm is a declared dependency.
-    tqdm = None
 
 
 def validate_record(
@@ -61,6 +56,11 @@ def dedupe_rows(rows: list[dict[str, Any]], n: int = 13, threshold: float = 0.8)
 
 
 def decontaminate_rows(rows: list[dict[str, Any]], paths: list[str], n: int = 13, threshold: float = 0.8) -> tuple[list[dict[str, Any]], list[str]]:
+    """Drop rows whose text overlaps a reference/test set, to avoid train/test contamination.
+
+    Builds n-gram sets from every reference file and removes any row whose n-gram Jaccard overlap
+    against any reference meets `threshold`. Returns (kept_rows, removed_ids).
+    """
     reference_grams = [ngrams_for_text(text, n) for text in _load_reference_texts(paths)]
     if not reference_grams:
         return rows, []
@@ -116,7 +116,13 @@ def _row_paths(row: dict[str, Any]) -> set[str]:
     return {f"{m['factor']}:{'/'.join(m.get('path', [m['node']]))}" for m in row.get("taxonomy_mix", [])}
 
 
-async def run_evaluation(cfg: Config, router: ModelRouter | None = None, *, quiet: bool = False) -> dict[str, Any]:
+async def run_evaluation(cfg: Config, router: ModelRouter, *, quiet: bool = False) -> dict[str, Any]:
+    """Read the generator's dataset.final.jsonl and write a separate evaluated artifact + report.
+
+    Dedup/decontamination produce dataset.evaluated.jsonl; final.jsonl is never rewritten. Coverage,
+    diversity, and complexity enrichments are optional and config-gated. The router is always provided
+    by the CLI (constructing one is free), so reassignment/complexity modes can rely on it.
+    """
     eval_cfg = cfg.evaluation
     taxonomy = read_json(artifact_path(cfg.output_dir, "taxonomy"), {"factors": []})
     # Read the generator's final dataset tolerantly (a torn line from a killed run must not abort eval).
@@ -140,13 +146,14 @@ async def run_evaluation(cfg: Config, router: ModelRouter | None = None, *, quie
         if mode in {"lineage", "both"}:
             report["coverage"] = coverage_report(taxonomy, rows)
         if mode in {"reassign", "both"}:
-            if router is None:
-                raise ValueError("Reassignment coverage requires a model router.")
             report["reassignment_coverage"] = await reassignment_coverage(cfg, router, rows, taxonomy, quiet=quiet)
 
-    # Optional eval enrichments are deliberately separate from generation.
+    # Optional eval enrichments are deliberately separate from generation. Diversity's heavy deps are
+    # imported here so a base install only loads them when diversity is actually enabled.
     diversity_cfg = eval_cfg.diversity
     if diversity_cfg.enabled:
+        from .diversity import embedding_diversity
+
         texts = [record_to_text(row.get("record"), diversity_cfg.text_field) for row in rows]
         report["diversity"] = embedding_diversity(
             texts,
@@ -157,8 +164,6 @@ async def run_evaluation(cfg: Config, router: ModelRouter | None = None, *, quie
         )
 
     if eval_cfg.complexity:
-        if router is None:
-            raise ValueError("Complexity scoring requires a model router.")
         report["complexity"] = await complexity_scores(cfg, router, rows, quiet=quiet)
 
     report["count"] = len(rows)
@@ -167,6 +172,12 @@ async def run_evaluation(cfg: Config, router: ModelRouter | None = None, *, quie
 
 
 async def complexity_scores(cfg: Config, router: ModelRouter, rows: list[dict[str, Any]], *, quiet: bool = False) -> dict[str, Any]:
+    """Rank records by relative complexity using batched LLM scoring + Elo (optional, costs calls).
+
+    Each record appears in several shuffled batches; the critic scores 1-10 within each batch, and
+    pairwise Elo aggregates those batch rankings into a global ordering. Returns per-id mean raw
+    scores and Elo ratings. Off by default — it makes extra model calls.
+    """
     batch_size = cfg.evaluation.complexity_batch_size
     appearances = cfg.evaluation.complexity_samples_per_item
     raw: dict[str, list[float]] = {row["id"]: [] for row in rows}
@@ -191,7 +202,7 @@ async def complexity_scores(cfg: Config, router: ModelRouter, rows: list[dict[st
     async with asyncio.TaskGroup() as tg:
         tasks = [tg.create_task(score_indexed(idx, batch)) for idx, batch in enumerate(schedule)]
         iterator = asyncio.as_completed(tasks)
-        if tqdm is not None and not quiet:
+        if not quiet:
             iterator = tqdm(iterator, total=len(tasks), desc="Scoring complexity")
         for future in iterator:
             idx, score_map = await future
@@ -216,6 +227,11 @@ async def reassignment_coverage(
     *,
     quiet: bool = False,
 ) -> dict[str, Any]:
+    """Coverage via independent LLM reassignment instead of saved lineage (optional, costs calls).
+
+    Asks the critic to assign every row to a node within every factor, then counts the assigned
+    paths and their ancestor prefixes — a model-judged alternative to lineage coverage.
+    """
     total = taxonomy_nodes_by_level(taxonomy)
     covered: dict[str, dict[int, set[str]]] = {factor: {level: set() for level in levels} for factor, levels in total.items()}
     text_field = cfg.evaluation.diversity.text_field
@@ -239,7 +255,7 @@ async def reassignment_coverage(
             for factor_root in taxonomy.get("factors", []):
                 tasks.append(tg.create_task(assign(row, factor_root)))
         iterator = asyncio.as_completed(tasks)
-        if tqdm is not None and not quiet:
+        if not quiet:
             iterator = tqdm(iterator, total=len(tasks), desc="Reassigning coverage")
         for future in iterator:
             factor_name, node_name = await future
@@ -270,6 +286,8 @@ def _complexity_schedule(rows: list[dict[str, Any]], batch_size: int, appearance
 
 
 def _update_elo(ratings: dict[str, float], scores: dict[str, float]) -> None:
+    # Treat each within-batch pair as a match: the higher raw score "wins" and both ratings move by
+    # the standard Elo update (K=16), so consistent winners drift up across batches.
     for left, right in combinations(scores.keys(), 2):
         expected = 1 / (1 + 10 ** ((ratings[right] - ratings[left]) / 400))
         actual = 1.0 if scores[left] > scores[right] else 0.0 if scores[left] < scores[right] else 0.5

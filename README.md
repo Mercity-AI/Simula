@@ -51,19 +51,19 @@ Artifacts are written to:
 runs/basic_qa/
 ```
 
-For a real OpenRouter/OpenAI-compatible run, provide the key named by each role's
-`api_key_env`. The simplest way is a gitignored `.env` file in the repo root (or next to the
-config), which `syndata` loads automatically on startup:
+For a real OpenRouter/OpenAI-compatible run, put the key named by `provider.api_key_env` in a
+gitignored `.env` file at the project root:
 
 ```bash
-echo 'OPENROUTER_API_KEY=sk-or-...' > .env   # gitignored; loaded automatically
+echo 'OPENROUTER_API_KEY=sk-or-...' > .env   # gitignored; the only source of API keys
 python -m syndata.cli taxonomy examples/query_extraction_gemini.yaml
 python -m syndata.cli generate examples/query_extraction_gemini.yaml
 ```
 
-Key resolution precedence per role: `models.<role>.api_key` (inline; avoid for real keys) →
-`os.environ[api_key_env]` → `.env`. An exported shell variable still works and takes precedence
-over `.env`. Never commit real keys.
+Key resolution: the project-root `.env` file is read directly (via `dotenv_values`) and is the
+**only** source of API keys — a shell-exported variable is deliberately ignored, so the key always
+comes from the file you can see. A missing key warns at `validate` and fails real model calls. Never
+commit real keys.
 
 The query extraction example currently uses:
 
@@ -128,18 +128,16 @@ schema:
     output:
       type: string
 
+provider:
+  base_url: "https://openrouter.ai/api/v1"
+  api_key_env: "OPENROUTER_API_KEY"   # variable name read from the project-root .env
+
 models:
   strategic:
-    base_url: "https://openrouter.ai/api/v1"
-    api_key_env: "OPENROUTER_API_KEY"
     model: "google/gemini-3-flash-preview"
   bulk:
-    base_url: "https://openrouter.ai/api/v1"
-    api_key_env: "OPENROUTER_API_KEY"
     model: "google/gemini-3-flash-preview"
   critic:
-    base_url: "https://openrouter.ai/api/v1"
-    api_key_env: "OPENROUTER_API_KEY"
     model: "google/gemini-3-flash-preview"
 
 prompts:
@@ -248,11 +246,12 @@ Valid task names are the `TaskType` values: `factor_discovery`, `node_expansion`
 
 OpenAI-compatible params (`temperature`, `top_p`, `max_tokens`, `frequency_penalty`, `presence_penalty`, `stop`, `seed`) are sent as top-level call kwargs. Anything else (`min_p`, `top_k`, `repetition_penalty`, …) is passed through `extra_body` so provider-specific knobs work without lock-in. The resolved params are recorded per call in `llm_calls.jsonl`.
 
-Connection/control keys on a role (`base_url`, `api_key`, `api_key_env`, `model`, `timeout_seconds`, `extra_body`) are never treated as decoding params.
+Connection lives on `provider` (`base_url`, `api_key_env`, `timeout_seconds`), shared by all roles;
+the non-decoding role keys (`model`, `extra_body`) are never treated as decoding params.
 
 **Per-request timeout.** Each real call uses a default timeout of **180 seconds** so a hung or
-rate-limited provider connection cannot stall a worker for the SDK default (~600s). Override per
-role with `models.<role>.timeout_seconds`.
+rate-limited provider connection cannot stall a worker for the SDK default (~600s). Override with
+`provider.timeout_seconds`.
 
 **Reasoning models.** There is no automatic model-id detection. If a model emits hidden reasoning
 tokens (e.g. DeepSeek R1/V4, OpenAI o-series) and you want them excluded from output and your

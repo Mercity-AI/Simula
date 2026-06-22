@@ -8,10 +8,12 @@ import random
 import uuid
 from typing import Any
 
+from tqdm import tqdm
+
 from .config import Config
 from .evaluate import coverage_aware_trim, dedupe_rows, validate_record
 from .models import ModelRouter
-from .tasks import TaskType
+from .data_models import TaskType
 from .taxonomy import build_strategies, choose_strategy, load_or_build_taxonomy, sample_mix
 from .utils import (
     append_jsonl,
@@ -25,13 +27,14 @@ from .utils import (
     write_jsonl,
 )
 
-try:
-    from tqdm import tqdm
-except ImportError:  # pragma: no cover - tqdm is a declared dependency, this keeps local smoke tests light.
-    tqdm = None
-
 
 async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = True, quiet: bool = False) -> list[dict[str, Any]]:
+    """Build/load taxonomy + strategies, run point generation concurrently, then dedupe + trim.
+
+    Writes raw/accepted rows as each attempt completes, checkpoints run_state.json, and finally writes
+    dataset.final.jsonl from accepted rows. Resume (the default) skips attempt indexes already present
+    and refuses to mix rows across a fingerprint change. Evaluation stays a separate command.
+    """
     taxonomy = await load_or_build_taxonomy(cfg, router)
     strategies = await build_strategies(cfg, router, taxonomy)
     raw_path = artifact_path(cfg.output_dir, "raw")
@@ -82,7 +85,7 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
         async with asyncio.TaskGroup() as tg:
             tasks = [tg.create_task(_bounded(index)) for index in indexes]
             iterator = asyncio.as_completed(tasks)
-            if tqdm is not None and not quiet:
+            if not quiet:
                 iterator = tqdm(iterator, total=len(tasks), desc="Generating")
             for future in iterator:
                 row = await future
@@ -170,16 +173,20 @@ async def _generate_one_safe(
     rng: random.Random,
     index: int,
 ) -> dict[str, Any]:
+    """Run one point generation, converting any failure into a checkpointable rejected row.
+
+    asyncio.TaskGroup cancels sibling tasks on the first unhandled exception, so this boundary stops a
+    single bad point from aborting the whole batch. Strategy + mix are sampled once up front (with
+    fallback defaults), so the failure path reuses the same lineage instead of recomputing it.
+    """
+    mix: list[dict[str, Any]] = []
+    strategy_id = "error"
     try:
-        return await _generate_one(cfg, router, taxonomy, strategies, rng, index)
+        strategy = choose_strategy(strategies, rng)
+        strategy_id = strategy.get("id", "general")
+        mix = sample_mix(taxonomy, strategy, rng)
+        return await _generate_one(cfg, router, index, mix, strategy_id, rng)
     except Exception as exc:  # noqa: BLE001 - point-level failures should checkpoint as rejected rows.
-        try:
-            strategy = choose_strategy(strategies, rng)
-            mix = sample_mix(taxonomy, strategy, rng)
-            strategy_id = strategy.get("id", "general")
-        except Exception:  # noqa: BLE001 - fallback only applies when sampling itself is broken.
-            mix = []
-            strategy_id = "error"
         return _build_row(
             cfg,
             router,
@@ -198,16 +205,13 @@ async def _generate_one_safe(
 async def _generate_one(
     cfg: Config,
     router: ModelRouter,
-    taxonomy: dict[str, Any],
-    strategies: list[dict[str, Any]],
-    rng: random.Random,
     index: int,
+    mix: list[dict[str, Any]],
+    strategy_id: str,
+    rng: random.Random,
 ) -> dict[str, Any]:
-    strategy = choose_strategy(strategies, rng)
-    mix = sample_mix(taxonomy, strategy, rng)
+    # Taxonomy/strategy were sampled by the caller; branch only at the output layer (JSON vs text).
     meta_prompt, complexified = await _make_meta_prompt(cfg, router, mix, rng)
-
-    # Branch only at the output layer: taxonomy, strategy, and meta-prompt logic are shared.
     if cfg.is_schema_free:
         record, schema_valid, rejection_reason = await _make_text(cfg, router, meta_prompt)
     else:
@@ -219,7 +223,7 @@ async def _generate_one(
         index,
         record=record,
         mix=mix,
-        strategy_id=strategy.get("id", "general"),
+        strategy_id=strategy_id,
         meta_prompt=meta_prompt,
         complexified=complexified,
         schema_valid=schema_valid,
@@ -263,6 +267,11 @@ async def _make_meta_prompt(cfg: Config, router: ModelRouter, mix: list[dict[str
 
 
 async def _make_record(cfg: Config, router: ModelRouter, meta_prompt: str) -> tuple[Any, bool, str | None]:
+    """Generate a JSON record, validate against the schema, and give one repair attempt on failure.
+
+    Returns (record, schema_valid, rejection_reason). The repair pass is the only place we re-ask the
+    model after a parse/validation miss; persistent failures become a rejected row.
+    """
     raw_response = await router.complete(
         "bulk",
         cfg.prompts.generate_record_prompt(cfg.description, cfg.schema, meta_prompt),  # type: ignore[arg-type]
@@ -292,6 +301,7 @@ async def _make_record(cfg: Config, router: ModelRouter, meta_prompt: str) -> tu
 
 
 async def _make_text(cfg: Config, router: ModelRouter, meta_prompt: str) -> tuple[str, bool, str | None]:
+    """Generate a free-text data point. Text has no schema, so it is always structurally valid."""
     text = await router.complete(
         "bulk",
         cfg.prompts.generate_text_prompt(cfg.description, meta_prompt),
@@ -307,48 +317,52 @@ async def _critic_loop(
     meta_prompt: str,
     record: Any,
 ) -> tuple[Any, bool, str | None, list[dict[str, Any]]]:
+    """Critique, then refine up to max_refine_attempts, over a loop shared by JSON and text records.
+
+    The only mode-specific parts are the critique/refine prompts and that JSON refinement re-validates
+    against the schema (a refine that breaks the schema rejects the point); text refinement just
+    replaces the candidate. Returns (record, accepted, rejection_reason, verdicts).
+    """
+    schema_free = cfg.is_schema_free
+
+    async def critique(current: Any) -> dict[str, Any]:
+        prompt = (
+            cfg.prompts.critique_text_prompt(cfg.description, meta_prompt, str(current))
+            if schema_free
+            else cfg.prompts.critique_prompt(cfg.description, cfg.schema, meta_prompt, current)
+        )
+        return await router.complete_json("critic", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.SEMANTIC_CRITIC)
+
+    async def refine(current: Any, explanation: str) -> tuple[Any, str | None]:
+        # Returns (revised, error). Text refine never errors here; JSON refine reports a schema miss.
+        if schema_free:
+            text = await router.complete(
+                "bulk",
+                cfg.prompts.refine_text_prompt(cfg.description, meta_prompt, str(current), explanation),
+                system=cfg.prompts.SYSTEM_TEXT,
+                task=TaskType.REFINE,
+            )
+            return text.strip(), None
+        revised = await router.complete_json(
+            "bulk",
+            cfg.prompts.refine_record_prompt(cfg.schema, meta_prompt, current, explanation),
+            system=cfg.prompts.SYSTEM_JSON,
+            task=TaskType.REFINE,
+        )
+        valid, error = validate_record(cfg.schema, revised, validator=cfg.validator)
+        return revised, None if valid else error
+
     verdicts: list[dict[str, Any]] = []
     current = record
     for _ in range(cfg.generation.max_refine_attempts + 1):
-        if cfg.is_schema_free:
-            critique = await router.complete_json(
-                "critic",
-                cfg.prompts.critique_text_prompt(cfg.description, meta_prompt, str(current)),
-                system=cfg.prompts.SYSTEM_JSON,
-                task=TaskType.SEMANTIC_CRITIC,
-            )
-        else:
-            critique = await router.complete_json(
-                "critic",
-                cfg.prompts.critique_prompt(cfg.description, cfg.schema, meta_prompt, current),  # type: ignore[arg-type]
-                system=cfg.prompts.SYSTEM_JSON,
-                task=TaskType.SEMANTIC_CRITIC,
-            )
-        verdicts.append(critique)
-        if critique.get("verdict") == "accept":
+        verdict = await critique(current)
+        verdicts.append(verdict)
+        if verdict.get("verdict") == "accept":
             return current, True, None, verdicts
-
-        # Refinement keeps JSON mode schema-bound and text mode direct-output only.
         try:
-            if cfg.is_schema_free:
-                current = (
-                    await router.complete(
-                        "bulk",
-                        cfg.prompts.refine_text_prompt(cfg.description, meta_prompt, str(current), critique.get("explanation", "")),
-                        system=cfg.prompts.SYSTEM_TEXT,
-                        task=TaskType.REFINE,
-                    )
-                ).strip()
-            else:
-                current = await router.complete_json(
-                    "bulk",
-                    cfg.prompts.refine_record_prompt(cfg.schema, meta_prompt, current, critique.get("explanation", "")),  # type: ignore[arg-type]
-                    system=cfg.prompts.SYSTEM_JSON,
-                    task=TaskType.REFINE,
-                )
-                valid, error = validate_record(cfg.schema, current, validator=cfg.validator)
-                if not valid:
-                    return current, False, error, verdicts
-        except Exception as exc:
+            current, error = await refine(current, verdict.get("explanation", ""))
+        except Exception as exc:  # noqa: BLE001 - a failed refine call rejects this point.
             return current, False, f"Refinement failed: {exc}", verdicts
+        if error is not None:  # JSON refinement produced a schema-invalid record.
+            return current, False, error, verdicts
     return current, False, verdicts[-1].get("explanation", "Critic rejected record."), verdicts

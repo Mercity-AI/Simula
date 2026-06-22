@@ -13,16 +13,16 @@ The project is intentionally small. Prefer clear, boring code over architectural
 Core package:
 
 - `syndata/cli.py`: CLI command dispatch for `validate`, `taxonomy`, `generate`, `evaluate`, and `run`.
-- `syndata/config.py`: YAML loading, `.env` loading, defaults, config validation (typed sections `GenerationCfg`/`TaxonomyCfg`/`EvaluationCfg`), JSON Schema subset checks.
-- `syndata/models.py`: OpenAI-compatible model router, fake model, retry/rate-limit handling, per-task sampling resolution (`resolve_sampling`), live `llm_calls.jsonl` logging.
+- `syndata/data_models.py`: Pydantic config models (the single source of defaults + validation) and the `TaskType` enum naming every model-call site. Import-leaf (no syndata imports) so config/models/generate can all use it without cycles.
+- `syndata/config.py`: YAML loading, Pydantic validation/defaults, `.env`-only API-key resolution (`resolve_api_key`), JSON Schema subset checks. `load_config` returns the validated `Config`; `cfg.data` is its derived dict view.
+- `syndata/console.py`: rich-based human-facing console output (status, warnings, the taxonomy review prompt). Separate from the machine-readable `llm_calls.jsonl` audit log.
+- `syndata/models.py`: single-provider OpenAI-compatible router (`ModelRouter`, one shared client), fake model, retry classification, per-task sampling resolution (`resolve_sampling`), live `llm_calls.jsonl` logging.
 - `syndata/prompts.py`: built-in prompt templates, the global English/JSON system instruction, and the prompt-module override loader (`PromptSet`, `load_prompt_set`).
 - `syndata/taxonomy.py`: factor discovery, breadth-first taxonomy expansion, review modes, strategy creation, strategy-aware sampling.
 - `syndata/generate.py`: generation orchestration, meta-prompts, complexification, JSON generation/repair, critic/refine loop, concurrent workers, final trimming.
 - `syndata/evaluate.py`: schema validation, dedupe, coverage reports, coverage-aware trimming, optional complexity scoring.
-- `syndata/tasks.py`: `TaskType` enum naming every model-call site (drives logging and per-task sampling).
-- `syndata/cost.py`: `summarize_cost` over the per-`(role, task, model)` totals the `ModelRouter` accumulates on `self.cost`; written to `cost_summary.json`. No class, no global singleton.
-- `syndata/diversity.py`: optional embedding-based diversity scoring used by evaluation.
-- `syndata/utils.py`: artifact names, JSON/JSONL helpers, timestamps, JSON extraction, record-to-text, checkpoint helpers.
+- `syndata/diversity.py`: optional embedding-based diversity scoring used by evaluation (deps live in the `[diversity]` extra; imported lazily only when diversity is enabled).
+- `syndata/utils.py`: artifact names, JSON/JSONL helpers, timestamps, JSON extraction, record-to-text, checkpoint helpers, and `summarize_cost` (written to `cost_summary.json`).
 
 Examples:
 
@@ -76,9 +76,9 @@ python -m syndata.cli run examples/basic_qa.yaml
 pytest -q
 ```
 
-For real OpenRouter-compatible runs, set the key named by each role's `api_key_env`. A gitignored
-`.env` (repo root or next to the config) is loaded automatically; an exported shell variable also
-works and takes precedence.
+For real OpenRouter-compatible runs, put the key named by `provider.api_key_env` in a gitignored
+`.env` at the project root. The `.env` file is the ONLY source of API keys (read with
+`dotenv_values`); a shell-exported variable is deliberately ignored.
 
 ```bash
 echo 'OPENROUTER_API_KEY=...' > .env   # gitignored, auto-loaded
@@ -90,12 +90,14 @@ Do not run real model calls unless the user explicitly asks. They cost money and
 
 ## Config Contract
 
-The config loader applies defaults from `syndata/config.py`. Required user-facing sections:
+Config is defined and validated by the Pydantic models in `syndata/data_models.py`; defaults live
+there as field defaults (a documented `examples/template.yaml` shows every key). Sections:
 
 - `project`: `name`, `output_dir`, `seed`
-- `description`: dataset description
+- `description`: dataset description (required, non-empty)
 - `schema`: JSON Schema subset, or `null`/omitted for free-text generation
-- `models`: `strategic`, `bulk`, `critic`
+- `provider`: `base_url`, `api_key_env`, `timeout_seconds` — one OpenAI-compatible endpoint for all roles
+- `models`: `strategic`, `bulk`, `critic`, each a `model` id plus optional decoding params/`extra_body`
 - `prompts`: optional Python prompt module override
 - `taxonomy`: depth/factors/review behavior
 - `strategy`: optional free-text `guidance` woven into the strategy prompt
@@ -103,22 +105,24 @@ The config loader applies defaults from `syndata/config.py`. Required user-facin
 - `generation`: target size, overgeneration, complexity ratio, refine attempts, concurrency
 - `evaluation`: dedupe, coverage, complexity
 
-The structured sections (`generation`, `taxonomy`, `evaluation`) are parsed once into typed views
-(`cfg.generation`, `cfg.taxonomy`, `cfg.evaluation`); read those instead of `cfg.data[...]`. Default
-values live ONLY in `default_config()`. `validate_config` enforces non-empty description, required
-`model`/`base_url` per role, valid `review_mode`/`coverage_mode`, and positive/in-range generation +
-taxonomy knobs (a bad `target_size`/`overgenerate_ratio`/`concurrency` fails at load, not as a silent
-zero-row run). It also prints a non-fatal stderr warning when a real model role has no resolvable API
-key. `validate` makes no model calls.
+Read typed fields off the validated model (`cfg.generation.target_size`, `cfg.provider.base_url`,
+`cfg.schema`, …); `cfg.data` is a derived dict view (`model_dump`) for the few dict consumers
+(`ModelRouter`, `resolve_sampling`, the resume fingerprint). Pydantic enforces non-empty description,
+a `model` per role, valid `review_mode`/`coverage_mode`, and positive/in-range generation + taxonomy
+knobs (a bad `target_size`/`overgenerate_ratio`/`concurrency` fails at load with a `ValueError`, not as
+a silent zero-row run). `load_config` also prints a non-fatal stderr warning when a real run has no
+resolvable API key in `.env`. `validate` makes no model calls.
 
-Supported model config fields:
+Connection lives on `provider` (one endpoint shared by all roles):
 
-- `base_url`
-- `api_key` or `api_key_env`
-- `model`
-- `temperature`
-- `max_tokens` (default 32768 when unset)
-- `timeout_seconds` (default 180; per-request timeout for real calls)
+- `provider.base_url`
+- `provider.api_key_env` (the variable name read from the project-root `.env`)
+- `provider.timeout_seconds` (default 180; per-request timeout for real calls)
+
+Per-role fields under `models.<role>`:
+
+- `model` (required model id; `"fake"` runs offline)
+- `temperature`, `max_tokens` (default 32768 when unset), and any other decoding params
 - `extra_body` (provider pass-through; set `{reasoning: {effort: low, exclude: true}}` here for reasoning models — there is no automatic model-id detection)
 
 Per-task decoding overrides live under `sampling.tasks` (task name -> param mapping). `resolve_sampling` in `syndata/models.py` layers built-in defaults <- `models.<role>` static <- `sampling.tasks[task]`, then splits OpenAI-compatible params (top-level call kwargs) from provider-specific ones (`extra_body` pass-through). Resolution is a pure function so it is safe under concurrent workers. Named policies and attempt schedules were intentionally not built; run the CLI twice for a temperature spread.
@@ -244,16 +248,16 @@ The `task` argument drives per-task decoding via `resolve_sampling`; both the re
 
 Cost accounting and the log row are produced together in `ModelRouter._account`, which computes input/output tokens once (estimating `len(text)//4` when the provider omits `usage`) so `cost_summary.json` and `llm_calls.jsonl` always agree. Logs always go to `<output_dir>/llm_calls.jsonl`; there is no env override. `flush_logs` warns on stderr if any log write failed instead of swallowing it.
 
-Rate-limit behavior:
+Retry behavior (classified, not retry-everything):
 
-- Retries 429s.
-- Uses `Retry-After` when present.
-- Otherwise backs off up to 60 seconds.
-- Raises with the provider response body when retries are exhausted.
+- Retries transient failures: transport/timeout errors (no HTTP status), 5xx, and 408/409/429.
+- Honors `Retry-After` on 429s; otherwise backs off exponentially (capped).
+- Fails fast on other 4xx (auth/bad-request) instead of burning the retry budget.
+- Re-raises the provider exception when retries are exhausted.
 
-Each real call has a per-request timeout (default 180s, `models.<role>.timeout_seconds`) so a hung connection fails fast and the point checkpoints as a rejected row instead of stalling the worker.
+Each real call has a per-request timeout (default 180s, `provider.timeout_seconds`) so a hung connection fails fast and the point checkpoints as a rejected row instead of stalling the worker.
 
-Rate control is `generation.concurrency` (bounds in-flight requests) plus the 429 retry/backoff above. There is no proactive client-side pacing knob; lower `concurrency` if a provider rate-limits.
+Rate control is `generation.concurrency` (bounds in-flight requests) plus the retry/backoff above. There is no proactive client-side pacing knob; lower `concurrency` if a provider rate-limits.
 
 ### Evaluation
 
@@ -285,14 +289,19 @@ Use `"model": "fake"` for tests. Do not require network access in tests.
 
 ## Known Cleanup / Improvement Candidates
 
-- Behavior-preserving cleanup ("Pile A", see `TODO.md` → "Simplification review (2026-06-23)"):
-  collapse the duplicated schema-free/JSON branching in `generate.py` (`_make_record`/`_make_text` +
-  the `cfg.is_schema_free` branches in `_critic_loop`) and flatten `_generate_one_safe`'s nested
-  try/except. NOTE: `ModelRouter.model_name()` looks like a trivial accessor but is a test seam (a
-  test injects a router exposing only that method, with no `.config`) — do not inline it.
+- **Per-role providers (collapsed to a single `provider` in round 4, 2026-06-23).** Connection
+  (`base_url`/`api_key_env`/`timeout_seconds`) now lives on one `provider` block shared by all roles;
+  the per-role `base_url`/`api_key` fields were removed and `ModelRouter` uses one shared client. This
+  is the common case, but a real workflow may legitimately want different endpoints/keys per role
+  (e.g. a strong `strategic` model on one provider, a cheap `bulk` model on another). If that need
+  arises, reintroduce optional per-role connection overrides that fall back to `provider`, and re-key
+  `ModelRouter`'s client cache by connection identity instead of using a single client.
+- NOTE for future edits: `ModelRouter.model_name()` looks like a trivial accessor but is a test seam
+  (`test_point_failure_becomes_rejected_row` injects a router exposing only that method, with no
+  `.config`) — do not inline it.
 - Add a command to tail/summarize `llm_calls.jsonl`.
 - Add batched and multi-turn generation modes (see `TODO.md`).
-- `monitor.py` is extraction-specific: its default `--config` and its `record["extraction"]` quality block only make sense for the extraction datasets.
+- `monitor.py` is extraction-specific: its default `--config` and its `record["extraction"]` quality block only make sense for the extraction datasets. It also parses the config YAML directly (not via `load_config`) and re-derives `overgenerate_ratio`, so it duplicates artifact/config knowledge — but it does not read the provider/models block, so the single-provider change does not affect it.
 
 ## Safety and Privacy
 

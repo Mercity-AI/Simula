@@ -22,9 +22,9 @@ def write_config(tmp_path: Path, extra: dict | None = None) -> Path:
             "properties": {"input": {"type": "string"}, "output": {"type": "string"}},
         },
         "models": {
-            "strategic": {"base_url": "fake", "model": "fake"},
-            "bulk": {"base_url": "fake", "model": "fake"},
-            "critic": {"base_url": "fake", "model": "fake"},
+            "strategic": {"model": "fake"},
+            "bulk": {"model": "fake"},
+            "critic": {"model": "fake"},
         },
         "taxonomy": {"depth": 1, "best_of_n": 1, "review_mode": "auto_accept", "children_per_node": 2},
         "generation": {"target_size": 5, "overgenerate_ratio": 1.2, "complexity_ratio": 0, "scenarios_per_mix": 2},
@@ -216,7 +216,7 @@ def test_flush_logs_reports_write_failures(tmp_path: Path, capsys, monkeypatch) 
 
     # Schedule a log write and flush it in the SAME loop so the failing task is still pending.
     async def run() -> None:
-        await router.complete("bulk", "generate something", task="generate")
+        await router.complete("bulk", "generate something", "system", task="generate")
         await router.flush_logs()
 
     asyncio.run(run())

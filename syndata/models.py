@@ -2,24 +2,29 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import os
-import sys
 import time
 from pathlib import Path
 from typing import Any
 
+from .config import resolve_api_key
+from .console import warn
 from .utils import append_jsonl, artifact_path, ensure_dir, extract_json_object, now_iso
 
 
 # Default per-request timeout (seconds). A hung/rate-limited provider connection would otherwise
-# stall a worker for the SDK default (~600s). Override per role with models.<role>.timeout_seconds.
+# stall a worker for the SDK default (~600s). Override with provider.timeout_seconds.
 DEFAULT_TIMEOUT_SECONDS = 180.0
+MAX_RETRIES = 8
 
 
 class ModelRouter:
+    """Routes every model call to the single configured provider, retries transient failures, and
+    records cost + a live llm_calls.jsonl row for each response. One AsyncOpenAI client is shared by
+    all roles (they differ only by model id and decoding params, passed per call)."""
+
     def __init__(self, config: dict[str, Any]):
         self.config = config
-        self._clients: dict[str, Any] = {}
+        self._client: Any = None
         self._fake_counter = 0
         self._fake_lock = asyncio.Lock()
         self._log_tasks: set[asyncio.Task[None]] = set()
@@ -33,9 +38,8 @@ class ModelRouter:
     def model_name(self, role: str) -> str:
         return self.config["models"][role]["model"]
 
-    async def complete(self, role: str, prompt: str, system: str | None = None, task: str = "unknown") -> str:
-        model_cfg = self.config["models"][role]
-        model = model_cfg["model"]
+    async def complete(self, role: str, prompt: str, system: str, task: str = "unknown") -> str:
+        model = self.config["models"][role]["model"]
 
         # Resolve decoding params once per call so fake and real paths log identical provenance.
         sampling, extras = resolve_sampling(self.config, role, task)
@@ -48,39 +52,29 @@ class ModelRouter:
             self._account(role, task, model, prompt, system, response, 0.0, None, extras, sampling)
             return response
 
-        client = self._client_for(role, model_cfg)
-        messages = [
-            {"role": "system", "content": system or "You are a helpful assistant."},
-            {"role": "user", "content": prompt},
-        ]
+        client = self._get_client()
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
         started = time.time()
-        last_rate_limit = None
 
-        # Retry transient provider failures, preserving Retry-After when available.
-        for attempt in range(8):
+        # Retry transient failures (transport errors, 5xx, 408/409/429); fail fast on other 4xx.
+        for attempt in range(MAX_RETRIES):
             try:
                 kwargs = {"model": model, "messages": messages, **sampling}
                 if extras:
                     kwargs["extra_body"] = extras
                 response = await client.chat.completions.create(**kwargs)
                 content = response.choices[0].message.content or ""
-                duration = time.time() - started
-                usage = getattr(response, "usage", None)
-                self._account(role, task, model, prompt, system, content, duration, usage, extras, sampling)
+                self._account(role, task, model, prompt, system, content, time.time() - started, getattr(response, "usage", None), extras, sampling)
                 return content
             except Exception as exc:  # noqa: BLE001 - provider SDKs expose several exception classes.
-                retry_after, body = _rate_limit_details(exc)
-                if retry_after is not None:
-                    last_rate_limit = body
-                    await asyncio.sleep(retry_after)
-                    continue
-                if attempt == 7:
+                wait = _retry_wait(exc, attempt)
+                if wait is None or attempt == MAX_RETRIES - 1:
                     raise
-                await asyncio.sleep(min(2.0, 0.25 * (2**attempt)))
-        raise RuntimeError(f"Rate limit retries exhausted: {last_rate_limit or 'no response body'}")
+                await asyncio.sleep(wait)
+        raise RuntimeError("unreachable: retry loop exited without returning or raising")
 
-    async def complete_json(self, role: str, prompt: str, system: str | None = None, task: str = "unknown") -> Any:
-        return extract_json_object(await self.complete(role, prompt, system=system, task=task))
+    async def complete_json(self, role: str, prompt: str, system: str, task: str = "unknown") -> Any:
+        return extract_json_object(await self.complete(role, prompt, system, task=task))
 
     async def flush_logs(self) -> None:
         if not self._log_tasks:
@@ -90,25 +84,25 @@ class ModelRouter:
         results = await asyncio.gather(*list(self._log_tasks), return_exceptions=True)
         failures = [r for r in results if isinstance(r, Exception)]
         if failures:
-            print(
-                f"Warning: {len(failures)} llm_calls.jsonl log write(s) failed; "
-                f"some calls may be unlogged ({failures[0]}).",
-                file=sys.stderr,
-            )
+            warn(f"{len(failures)} llm_calls.jsonl log write(s) failed; some calls may be unlogged ({failures[0]}).")
 
-    def _client_for(self, role: str, model_cfg: dict[str, Any]) -> Any:
-        if role in self._clients:
-            return self._clients[role]
-        api_key = model_cfg.get("api_key") or os.getenv(model_cfg.get("api_key_env", ""))
+    def _get_client(self) -> Any:
+        # One client for the whole run: all roles share the provider's base_url, key, and timeout.
+        if self._client is not None:
+            return self._client
+        provider = self.config.get("provider", {})
+        api_key = resolve_api_key(provider.get("api_key_env", "OPENROUTER_API_KEY"))
         if not api_key:
-            raise ValueError(f"Missing API key for model role {role}. Set api_key or api_key_env.")
+            raise ValueError(
+                f"Missing API key: put {provider.get('api_key_env', 'OPENROUTER_API_KEY')} in a .env file at the project root."
+            )
         try:
             from openai import AsyncOpenAI
         except ImportError as exc:
             raise RuntimeError("The openai package is required for real model calls.") from exc
-        timeout = float(model_cfg.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS))
-        self._clients[role] = AsyncOpenAI(api_key=api_key, base_url=model_cfg["base_url"], timeout=timeout)
-        return self._clients[role]
+        timeout = float(provider.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS))
+        self._client = AsyncOpenAI(api_key=api_key, base_url=provider["base_url"], timeout=timeout)
+        return self._client
 
     def _account(
         self,
@@ -116,7 +110,7 @@ class ModelRouter:
         task: str,
         model: str,
         prompt: str,
-        system: str | None,
+        system: str,
         response: str,
         duration: float,
         usage: Any,
@@ -186,16 +180,22 @@ def resolve_sampling(config: dict[str, Any], role: str, task: str) -> tuple[dict
     return call_params, extra_body
 
 
-def _rate_limit_details(exc: Exception) -> tuple[float | None, str | None]:
-    response = getattr(exc, "response", None)
-    status_code = getattr(response, "status_code", None)
-    if status_code != 429:
-        return None, None
+def _retry_after_seconds(response: Any) -> float | None:
     headers = getattr(response, "headers", {}) or {}
-    retry_after = headers.get("retry-after") or headers.get("Retry-After")
-    wait = float(retry_after) if retry_after else 2.0
-    body = getattr(response, "text", None)
-    return min(60.0, wait), body
+    value = headers.get("retry-after") or headers.get("Retry-After")
+    return min(60.0, float(value)) if value else None
+
+
+def _retry_wait(exc: Exception, attempt: int) -> float | None:
+    # Return the seconds to wait before retrying, or None to fail fast. Transient = transport errors
+    # (no HTTP status), 5xx, and 408/409/429; everything else (auth/bad-request 4xx) fails fast.
+    response = getattr(exc, "response", None)
+    status = getattr(exc, "status_code", None) or getattr(response, "status_code", None)
+    if status == 429:
+        return _retry_after_seconds(response) or 2.0
+    if status is None or status in {408, 409} or status >= 500:
+        return min(10.0, 0.5 * 2**attempt)
+    return None
 
 
 def fake_complete(prompt: str, counter: int = 0) -> str:

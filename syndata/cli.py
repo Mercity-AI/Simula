@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import sys
 import time
 
 from .config import load_config
-from .cost import summarize_cost
+from .console import error, info
 from .evaluate import run_evaluation
 from .generate import generate_dataset
 from .models import ModelRouter
 from .taxonomy import build_taxonomy
-from .utils import artifact_path, write_json
+from .utils import artifact_path, summarize_cost, write_json
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -39,24 +38,24 @@ async def _main(argv: list[str] | None = None) -> int:
 
         # Validate prints static run information and does not invoke any model calls.
         if args.command == "validate":
-            print(f"Config OK: {cfg.path}")
-            print(f"Output dir: {cfg.output_dir}")
-            print(f"Output format: {cfg.output_format}")
+            info(f"Config OK: {cfg.path}")
+            info(f"Output dir: {cfg.output_dir}")
+            info(f"Output format: {cfg.output_format}")
             return 0
 
         if args.command == "taxonomy":
             taxonomy = await build_taxonomy(cfg, router)
-            print(f"Wrote taxonomy with {len(taxonomy.get('factors', []))} factors to {cfg.output_dir}")
+            info(f"Wrote taxonomy with {len(taxonomy.get('factors', []))} factors to {cfg.output_dir}")
             return 0
 
         if args.command == "generate":
             rows = await generate_dataset(cfg, router, resume=args.resume, quiet=args.quiet)
-            print(f"Wrote {len(rows)} final records to {cfg.output_dir}")
+            info(f"Wrote {len(rows)} final records to {cfg.output_dir}")
             return 0
 
         if args.command == "evaluate":
             report = await run_evaluation(cfg, router, quiet=args.quiet)
-            print(f"Wrote eval report for {report.get('count', 0)} records to {cfg.output_dir}")
+            info(f"Wrote eval report for {report.get('count', 0)} records to {cfg.output_dir}")
             return 0
 
         if args.command == "run":
@@ -64,11 +63,11 @@ async def _main(argv: list[str] | None = None) -> int:
             # rebuild and overwrite an edited/earlier taxonomy on every resumed `run`.
             rows = await generate_dataset(cfg, router, resume=args.resume, quiet=args.quiet)
             report = await run_evaluation(cfg, router, quiet=args.quiet)
-            print(f"Run complete: {len(rows)} final records, eval count={report.get('count', 0)}")
-            print(f"Artifacts: {cfg.output_dir}")
+            info(f"Run complete: {len(rows)} final records, eval count={report.get('count', 0)}")
+            info(f"Artifacts: {cfg.output_dir}")
             return 0
     except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        error(str(exc))
         return 1
     finally:
         # Flush live LLM logs and persist cost totals before the process exits.
@@ -78,7 +77,7 @@ async def _main(argv: list[str] | None = None) -> int:
             summary = summarize_cost(router.cost, time.time() - router.started)
             write_json(artifact_path(cfg.output_dir, "cost"), summary)
             if summary["total_calls"]:
-                print(
+                info(
                     f"Cost summary: calls={summary['total_calls']} "
                     f"in_tokens={summary['total_input_tokens']} out_tokens={summary['total_output_tokens']}"
                 )

@@ -75,22 +75,21 @@ schema:
           items:
             type: string
 
+# Single OpenAI-compatible provider for every role; the key is read from the project-root .env.
+provider:
+  base_url: "https://openrouter.ai/api/v1"
+  api_key_env: "OPENROUTER_API_KEY"
+
 models:
   strategic:
-    base_url: "https://openrouter.ai/api/v1"
-    api_key_env: "OPENROUTER_API_KEY"
     model: "google/gemini-3-flash-preview"
     temperature: 0.4
     max_tokens: 4096
   bulk:
-    base_url: "https://openrouter.ai/api/v1"
-    api_key_env: "OPENROUTER_API_KEY"
     model: "google/gemini-3-flash-preview"
     temperature: 0.8
     max_tokens: 4096
   critic:
-    base_url: "https://openrouter.ai/api/v1"
-    api_key_env: "OPENROUTER_API_KEY"
     model: "google/gemini-3-flash-preview"
     temperature: 0.2
     max_tokens: 2048
