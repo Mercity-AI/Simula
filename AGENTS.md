@@ -93,7 +93,8 @@ Do not run real model calls unless the user explicitly asks. They cost money and
 ## Config Contract
 
 Config is defined and validated by the Pydantic models in `syndata/data_models.py`; defaults live
-there as field defaults (a documented `examples/template.yaml` shows every key). Sections:
+there as field defaults (a documented `examples/template.yaml` shows every key, and `CONFIG.md` is
+the full per-field human reference — keep both in sync when changing the contract). Sections:
 
 - `project`: `name`, `output_dir`, `seed`
 - `description`: dataset description (required, non-empty)

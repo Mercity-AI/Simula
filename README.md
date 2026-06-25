@@ -109,7 +109,8 @@ Runs taxonomy, generation, and evaluation end to end.
 
 ## Config Overview
 
-Each run is controlled by a single YAML file:
+Each run is controlled by a single YAML file. `examples/template.yaml` is a copy-me skeleton with
+every key at its default; **`CONFIG.md` is the full per-field reference**. The essentials:
 
 ```yaml
 project:

@@ -1,6 +1,7 @@
 # syndata config template. Copy this, edit, and point the CLI at it. Every value shown is the
 # built-in default (defined in syndata/data_models.py) unless noted — omit a key to accept its
 # default, override only what you need. Required keys: `description` and a model id per role.
+# Comments here are one-liners; see CONFIG.md for the full per-field reference.
 
 project:
   name: "pilot"
@@ -40,11 +41,12 @@ models:
 #   module: "my_prompts.py"
 
 taxonomy:
-  depth: 2                      # levels below each factor root
+  depth: 2                      # levels below each factor root (0 = factors only)
   factors: null                # null = let the model discover 3-6 factors; or list {name, description}
   best_of_n: 2                  # candidate child lists per node before the critic refines
-  review_mode: "auto_accept"   # auto_accept | write_then_edit | interactive_confirm
-  children_per_node: 4
+  # auto_accept = write & proceed | write_then_edit = write & halt for hand-editing | interactive_confirm = prompt
+  review_mode: "auto_accept"
+  children_per_node: 4          # target children requested per node when expanding
 
 strategy:
   guidance: null               # optional free-text steering for which roots combine and weights
@@ -55,25 +57,25 @@ sampling:
   tasks: {}
 
 generation:
-  target_size: 50
-  overgenerate_ratio: 1.3      # attempts = ceil(target_size * this); accepted rows are trimmed back
-  scenarios_per_mix: 3
+  target_size: 50              # rows wanted in dataset.final.jsonl (accepted rows trimmed back to this)
+  overgenerate_ratio: 1.3      # attempts = ceil(target_size * this); buffer for rejected rows
+  scenarios_per_mix: 3         # candidate meta-prompts drafted per sampled mix; each attempt picks one
   complexity_ratio: 0.3        # fraction of points routed through the complexify step
-  max_refine_attempts: 2
+  max_refine_attempts: 2       # critic->refine retries per record (0 = critique once, never refine)
   concurrency: 4               # in-flight model calls; lower this if the provider rate-limits
-  checkpoint_every: 50
+  checkpoint_every: 50         # write run_state.json every N completed attempts
 
 evaluation:
   dedupe: true
   coverage: true
   coverage_mode: "lineage"     # lineage | reassign | both (reassign/both make extra model calls)
   complexity: false            # Elo complexity scoring (extra model calls)
-  complexity_batch_size: 5
-  complexity_samples_per_item: 2
+  complexity_batch_size: 5     # records per critic batch when scoring complexity
+  complexity_samples_per_item: 2  # shuffled batches each record appears in (more = stabler, pricier)
   decontaminate_against: []    # paths to reference/test JSONL to drop overlapping rows against
   diversity:
     enabled: false             # embedding diversity; needs `pip install 'syndata[diversity]'`
     embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
-    k_local: 10
-    sample_cap: 1000
+    k_local: 10                # nearest neighbours for the local-diversity metric
+    sample_cap: 1000           # max rows embedded; beyond this a random subset is scored
     text_field: null           # dotted path into the record for the text to embed
