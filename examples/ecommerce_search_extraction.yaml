@@ -1,0 +1,110 @@
+project:
+  name: "ecommerce_search_extraction"
+  output_dir: "runs/ecommerce_search_extraction"
+  seed: 31
+
+# Search-query extraction: each row pairs a natural-language shopper search with its parsed,
+# DB-queryable structured form. The inner `extraction` is an open object, so different rows carry
+# different keys (people search for different things). Narrow/atomic-field rules, faithful extraction,
+# one-level nesting, and the 3..20-field size spread are enforced via the prompt module + critic.
+description: >
+  An e-commerce search-query extraction dataset. Each example pairs a realistic English shopper
+  search query (typed or spoken into a search box or shopping assistant) with the structured
+  extraction of that query into narrow, atomic, database-queryable fields. People search in natural
+  language ("I want a shirt, XL, navy, under 40 dollars") and the extraction parses the product and
+  its attributes into atomic keys: category/product_type, brand, size (with size_system), color,
+  material, pattern, fit, a price budget split into price_min/price_max, rating/review thresholds,
+  shipping/availability, condition, technical specs, sorting preference, and exclusions. Every field
+  is atomic (one fact per key) and ranges are split into min/max — never a "price_range" string.
+  One level of nesting is allowed for naturally grouped facts (e.g. price.min/price.max). Schemas
+  vary per row, and both the query length and the number of extracted fields range widely: the
+  smallest extractions have ~3 fields (short terse queries), the largest ~20 (long, detailed,
+  multi-constraint queries). Cover many product verticals and shopping intents. All text is English.
+
+# Envelope only: query is the NL search, extraction is the open atomic object (keys vary per row).
+schema:
+  type: object
+  required: ["query", "extraction"]
+  properties:
+    query:
+      type: string
+    extraction:
+      type: object
+
+prompts:
+  module: "ecommerce_search_extraction_prompts.py"
+
+# DeepSeek v4 via OpenRouter (single provider; key read from the project-root .env). Reasoning is
+# excluded EXPLICITLY per role (effort low, exclude true) — clean JSON, cheaper, faster. There is no
+# automatic model-id detection in this build, so the extra_body must be set on every role. max_tokens
+# is generous so the hidden reasoning fits alongside the JSON without truncating a verdict/record.
+provider:
+  base_url: "https://openrouter.ai/api/v1"
+  api_key_env: "OPENROUTER_API_KEY"
+  timeout_seconds: 240
+
+models:
+  # Strategy phase ONLY: the stronger pro model builds the taxonomy + strategies (one-time, reused).
+  strategic:
+    model: "deepseek/deepseek-v4-pro"
+    temperature: 0.5
+    max_tokens: 16384
+    extra_body: {reasoning: {effort: low, exclude: true}}
+  # Bulk generation: the cheaper/faster flash model writes meta-prompts + queries + extractions.
+  bulk:
+    model: "deepseek/deepseek-v4-flash:nitro"
+    temperature: 0.75
+    max_tokens: 16384
+    extra_body: {reasoning: {effort: low, exclude: true}}
+  # Critic: same flash model, low temperature for consistent, strict accept/reject verdicts.
+  critic:
+    model: "deepseek/deepseek-v4-flash:nitro"
+    temperature: 0.1
+    max_tokens: 16384
+    extra_body: {reasoning: {effort: low, exclude: true}}
+
+# 4-node-deep taxonomy. children_per_node=3 keeps it rich (~81 leaves/factor) without the depth-4
+# blowup of the default 4 (~256 leaves/factor) and its concurrency bursts. Built once on pro, reused.
+taxonomy:
+  depth: 4
+  factors:
+    - name: "product_vertical"
+      description: "The broad retail vertical the shopper is searching in, narrowing at deeper levels from vertical -> category -> product class -> specific item type (e.g. apparel -> tops -> t-shirts -> graphic tees). Verticals include: apparel, footwear, electronics, computers, mobile/accessories, home & kitchen, furniture, large appliances, beauty & personal care, health & wellness, grocery & gourmet, baby & kids, toys & games, sports & outdoors, books & media, automotive parts, jewelry & watches, pet supplies, office & stationery, garden & tools, musical instruments."
+    - name: "shopper_intent"
+      description: "The goal behind the search: a specific known-item hunt, open browsing/discovery, a gift search, a replacement or refill of something owned, deal/bargain hunting, comparison between options, compatibility/fitment (an accessory for a specific device or model), bulk/multipack buying, or an occasion-driven purchase."
+    - name: "attribute_focus"
+      description: "Which families of atomic attributes dominate the query and extraction: sizing & fit, color/pattern/appearance, material & composition, brand & seller preferences (including exclusions), price/budget/discount, ratings/reviews/social proof, technical specifications, condition & newness, shipping/delivery/availability, compatibility, and certifications/eco/dietary."
+    - name: "query_complexity"
+      description: "The linguistic shape and constraint count of the query, which sets the extraction size: terse keyword strings with 3-5 constraints (small JSON), normal sentences with 6-11 constraints (medium JSON), and chatty multi-sentence requests with 12-20 constraints (large JSON). Also covers negation/exclusion, ambiguity, comparative phrasing, and colloquial/typo-laden text."
+  best_of_n: 2
+  review_mode: "auto_accept"
+  children_per_node: 3
+
+strategy:
+  guidance: >
+    Cover all product verticals broadly rather than over-weighting apparel and electronics. Spread
+    query_complexity widely so the dataset spans the full size range: many small 3-5 field extractions
+    from terse queries, a solid middle band, and a meaningful share of large 12-20 field extractions
+    from long, detailed, multi-constraint queries (the query length should scale with the field count).
+    Vary between the flat price style (price_min/price_max) and the nested style (price.min/price.max).
+    Include a healthy fraction of queries with exclusions/negation and occasional ambiguity. Avoid
+    unrealistic attribute combinations for a given vertical.
+
+# Smoke values. After the smoke is reviewed and approved, bump target_size to 10000, raise
+# concurrency (~24) and lower overgenerate_ratio (~1.3), then re-run `generate` in the SAME output_dir
+# (taxonomy + strategies + smoke rows are reused via resume). The fingerprinted knobs below
+# (scenarios_per_mix, complexity_ratio, max_refine_attempts) MUST stay constant across that bump.
+generation:
+  target_size: 10000
+  overgenerate_ratio: 1.3
+  scenarios_per_mix: 3
+  complexity_ratio: 0.3
+  max_refine_attempts: 1
+  concurrency: 48
+  checkpoint_every: 50
+
+evaluation:
+  dedupe: true
+  coverage: true
+  coverage_mode: "lineage"
+  complexity: false

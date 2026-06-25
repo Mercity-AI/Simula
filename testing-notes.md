@@ -151,3 +151,127 @@ are now superseded by this work. Key changes (see commits on `code-refactor`):
   omits usage), matching `cost_summary.json`. Logs always go to `<output_dir>/llm_calls.jsonl`;
   the `SYNDATA_LLM_LOG` env override was removed, and `flush_logs` now warns (stderr) on a failed
   log write instead of swallowing it.
+
+---
+
+# E-COMMERCE SEARCH-QUERY EXTRACTION DATASET (target ~10K rows) — 2026-06-24
+
+New task on the refactored (`code-refactor`) branch: a dataset to exercise the post-refactor
+pipeline end-to-end while producing something useful. Domain: **e-commerce search → structured
+query extraction**. People search in natural language ("I want a shirt, XL, navy, under $40") and we
+extract the product + attributes into ATOMIC, DB-queryable JSON. Same spirit as job_extraction but
+input is a search query and the envelope is `{query, extraction}` (no per-row `schema` field).
+
+## Decisions (locked)
+1. **Row shape `{query, extraction}`** — query = NL shopper search; extraction = open object of atomic
+   fields. No declared schema: key variation comes from what each query mentions (user requirement:
+   "we don't want the same schema everywhere"). Envelope validates structure; atomicity/faithfulness
+   live in the prompt module + critic.
+2. **Atomic + nesting** — one fact per leaf; ranges split (price_min/price_max, never "price_range");
+   units normalized ("under $80" -> price_max 80; "cheap" alone -> NO invented number). ONE level of
+   nesting allowed for grouped facts (`price.min/price.max`, `dimensions.*`); flat and nested styles
+   varied across rows. Confirmed nested objects validate against the open `extraction` schema.
+3. **Size/length spread 3..20 fields** — steered upstream by the `query_complexity` taxonomy factor +
+   meta-prompts (query length scales with constraint count), NOT hard-enforced by the critic (critic
+   only rejects <3 fields / compound junk), so we get the spread without mass rejections.
+4. **Models (user spec):** strategic = `deepseek/deepseek-v4-pro` (strategy phase ONLY: taxonomy +
+   strategies, one-time, reused); bulk + critic = `deepseek/deepseek-v4-flash`. temps: bulk 0.75,
+   critic 0.1, strategic 0.5. All roles: `reasoning {effort:low, exclude:true}`, max_tokens 16384
+   (reasoning auto-detection was removed in the refactor, so it MUST be set explicitly per role).
+5. **Taxonomy: depth 4** (user: "4 node deep"), 4 factors (product_vertical, shopper_intent,
+   attribute_focus, query_complexity). `children_per_node=3` -> ~81 leaves/factor and ~492 pro calls;
+   the default 4 would give ~256 leaves/factor (~1032 pro calls) and 27->81-wide concurrent bursts at
+   the deep levels — overkill for 10K and a rate-limit risk. best_of_n=2.
+
+## Files
+- `examples/ecommerce_search_extraction.yaml` — config (smoke-sized; bump target_size for full run).
+- `examples/ecommerce_search_extraction_prompts.py` — overrides meta_prompt_prompt, complexify_prompt
+  (pushes toward the large 12-20 field end), generate_record_prompt, critique_prompt. Carries an
+  atomic-attribute menu spanning many verticals.
+
+## Fingerprint discipline (smoke -> full resume)
+Resume fingerprints description/schema/seed/model-ids/scenarios_per_mix/complexity_ratio/
+max_refine_attempts/prompts/taxonomy/strategies — these MUST stay constant smoke->full. target_size,
+overgenerate_ratio, concurrency, checkpoint_every are NOT fingerprinted -> safe to change. So the full
+run = edit those four only + `generate --resume` in the same output_dir (reuses taxonomy/strategies/
+smoke rows). Locked-constant: scenarios_per_mix=3, complexity_ratio=0.3, max_refine_attempts=1.
+
+## Per-attempt call flow (from generate.py)
+meta_prompt(1, bulk; produces scenarios_per_mix options, one is picked — does NOT multiply calls)
+-> maybe complexify (~30%) -> generate(1, bulk) -> maybe repair(rare) -> critic loop: critique(1,
+critic) + up to max_refine_attempts refine(+critique). Accept-first-try ~3.3 calls/attempt.
+10K @ overgen 1.3 = 13K attempts ~= 45K flash calls. Rough est: data gen ~$10-20, taxonomy ~$1-3,
+~3-5 h wall at concurrency ~24. (To be refined with real smoke numbers.)
+
+## Status log
+### 2026-06-24 — Build + offline checks: PASS
+- Wrote config + prompts. `validate` PASS. Offline: flat/nested/2-field records validate against the
+  envelope (min-field-count is correctly the critic's job, not the schema). Prompts render clean.
+- Verified auth + both model ids resolve on OpenRouter with tiny test calls (3 stray `generate` rows
+  in llm_calls.jsonl are from this check, pre-taxonomy).
+- NEXT: build depth-4 taxonomy on pro (one-time), review tree, then smoke ~24 rows, then full 10K.
+
+### 2026-06-24 — Taxonomy build (depth 4 on pro), IN PROGRESS
+- GOTCHA: `children_per_node` is a REQUEST to expand_prompt, NOT a hard cap. The refine step
+  (`refine_nodes_prompt`) consolidates the best_of_n candidate lists but is never told to cap the
+  count, so the model keeps ~5 children/node instead of 3. Effective branching ~5 -> ~5^4 leaves/
+  factor (~600 nodes/factor) instead of ~81, and ~1750+ pro calls instead of my ~492 estimate.
+  Tree is just richer than planned (fine/better for 10K diversity); cost ~$4-5 for taxonomy, one-time.
+  LEVER for a genuinely smaller tree next time: lower `depth`, or add a refine prompt that enforces
+  the child count. User confirmed spend is fine -> let it finish.
+- Health: ~1 node-expansion failure out of ~580 nodes (that branch degrades to a leaf — negligible).
+- DONE: 4 factors, 2358 total nodes, depth 4 on all. Lopsided — product_vertical = 1725 nodes / 1269
+  leaves (level-1 fanned to 21 because the description enumerated ~21 verticals), other 3 factors ~165-
+  252 nodes. Fine for sampling (one node/factor, random over the tree -> finer product granularity =
+  more diversity). Leaf quality excellent (OLED TVs, retro consoles; query_complexity split into
+  constraint_count{small/med/large} x utterance_shape x special_expressions — drives the size spread).
+
+### 2026-06-24 — SMOKE (24 rows on plain flash): PASS, high quality
+- 36 attempts -> 35 accepted (97%) -> 24 final. The 1 reject was the critic correctly catching a
+  hallucination ("stylus" extracted as a product when it was a bundled feature). Wall ~14 min @ conc 8.
+- Field-count spread 5..25 (median 13); 24/24 distinct key-sets; nesting in 10/24, arrays in 19/24;
+  budget->price_min/max, "no polyester"->material_excluded, "not an HP"->brand_excluded, size+size_system.
+- LATENCY profile (cost_summary by-task): meta_prompt is the hog at ~73s/call (46% of compute) because
+  scenarios_per_mix=3 writes 3 elaborate prompts and uses 1; generate ~26s, critic ~30s, refine ~22s.
+  Per attempt ~157 compute-seconds. deepseek v4 reasoning is the latency driver (~38s/call avg).
+- KEY-NAMING: open schema -> same concept gets synonym keys across rows (free_shipping vs shipping_free,
+  reviews_min vs review_count_min, weight_max_lb vs weight_kg_max, sort_by "rating" vs "rating_desc").
+  USER DECISION: leave as-is (max variety). Not canonicalized. (If a future run wants DB-clean keys,
+  add a canonical-vocab preference to generate_record_prompt — would also pull the >20-field outliers
+  back toward ~20.)
+
+### 2026-06-24 — FULL 10K RUN: LAUNCHED
+- Pricing (OpenRouter, web-checked): flash $0.09/M in, $0.18/M out; pro $0.435/M in, $0.87/M out.
+- SPEND so far (sunk): taxonomy ~$4.79 (1877 pro calls, 3.28M in/3.87M out) + smoke ~$0.16 = ~$5.
+- 10K estimate: scale smoke per-attempt (3752 in / 5265 out, incl. reasoning + 3-scenario meta) x 13000
+  attempts (10K/0.97 accept, overgen 1.3) -> ~48.8M in + ~68.4M out -> ~$16.7; with nitro/variance margin
+  ~$17-25. Total project ~$22-30.
+- USER DECISIONS: nitro on (bulk+critic = deepseek-v4-flash:nitro), scenarios_per_mix=3 kept (max
+  variety, spend/time not a constraint), concurrency 48, keys as-is. strategic stays pro but is NOT
+  re-called (strategies.json reused). Launched `generate --no-resume` (model id change invalidated the
+  smoke-row fingerprint; taxonomy.json + strategies.json reused from disk).
+- Config block now: target_size 10000, overgenerate 1.3, scenarios_per_mix 3, complexity_ratio 0.3,
+  max_refine_attempts 1, concurrency 48, checkpoint_every 50.
+- Early health (90s in): 48 raw / 47 accepted (98%), generator_model=flash:nitro, no errors. Throughput
+  ~32 attempts/min @ conc 48 -> ETA ~5-7 h. Background task bvoqgvq6q notifies on exit (success or crash).
+- NEXT (on completion): audit final 10K (accept rate, size dist, atomicity, dupes, empty lineage),
+  then `evaluate` for coverage report (dataset.evaluated.jsonl + eval_report.json), then summarize.
+
+### 2026-06-25 — FULL 10K RUN: COMPLETE
+- 13,000 attempts -> 10,985 accepted -> trimmed to dataset.final.jsonl = 10,000 rows. Wall ~5h @ conc 48.
+- TAIL THROTTLE (known pattern, infra not quality): last 1500 attempts accepted only 384 — 1083 of the
+  rejects were OpenRouter timeouts/rate-limits, just 33 critic-rejects. Overgen 1.3 absorbed it (had
+  10,985 accepted >> 10,000), so the final set is unaffected. If pushing higher targets, either lower
+  concurrency for the tail or raise overgenerate_ratio.
+- ACTUAL COST (cost_summary.json, this process only — excludes the separate taxonomy build): 48,447
+  calls, 44.49M in / 71.73M out -> ~$16.9 (flash:nitro $0.09/$0.18). + sunk ~$5 (taxonomy+smoke) =
+  ~$22 total. Matched the pre-run estimate ($17-25).
+- FINAL AUDIT (all 10,000): all accepted + schema_valid + nitro; 0 empty lineage; envelope exactly
+  {query,extraction} on every row; 5 exact-dup queries (0.05%); 1 junk compound key (price_range) in
+  10K. Variety: 9,625 distinct key-sets (96% unique), 8,241 distinct keys total. Size buckets: 3-5=1230,
+  6-11=2882, 12-20=4417, 21+=1459, <3=12; median 14 fields, p90 22, max 58. Query length 1-288 words
+  (median 45). Nesting 52%, arrays 78%. Both flat price_min/max and nested price{min,max} coexist.
+- Artifacts in runs/ecommerce_search_extraction/: dataset.final.jsonl (deliverable), dataset.raw/
+  accepted.jsonl, taxonomy.json, strategies.json, llm_calls.jsonl, cost_summary.json, run_state.json.
+- Refactored pipeline validated end-to-end (taxonomy -> strategy -> generate -> critic -> trim) on a
+  real 10K run. No code changes were needed; config + prompt-module overrides only.

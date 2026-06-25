@@ -29,6 +29,8 @@ Examples:
 - `examples/basic_qa.yaml`: fake-model smoke test.
 - `examples/query_extraction_gemini.yaml`: real query-extraction pilot config using Gemini via OpenRouter.
 - `examples/cat_stories_freetext.yaml`: fake-model smoke test for schema-free text generation.
+- `examples/job_extraction.yaml` (+ `job_extraction_prompts.py`): schema-guided `{schema, text, extraction}` envelope with a prompt-module override enforcing narrow atomic fields; DeepSeek v4 via OpenRouter.
+- `examples/ecommerce_search_extraction.yaml` (+ `ecommerce_search_extraction_prompts.py`): `{query, extraction}` envelope turning NL shopper searches into atomic DB-queryable JSON (varying schema, one-level nesting, 3..20-field spread). Depth-4 taxonomy; strategic=deepseek-v4-pro, bulk/critic=deepseek-v4-flash:nitro. Used to generate a 10K dataset that validated the post-refactor pipeline end-to-end.
 
 Tests:
 
