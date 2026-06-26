@@ -44,9 +44,6 @@ Design principle the user emphasized: **fields must be narrow/atomic**.
   target_size=1000, overgenerate=1.4 (1400 attempts), concurrency=25.
 - Sanity-checked flash:nitro: narrow fields hold (salary split, omits absent fields), ~5s/call w/
   reasoning low (~$0.0003), ~2.5s without (~$0.0001). Est full run ~$1-2, ~30-45 min.
-- Monitor: `python monitor.py [--watch N]` reads run_state/raw/llm_calls -> progress, accept rate,
-  throughput+ETA, calls-by-task, key-set variety, reject reasons. (NOTE: llm_calls.jsonl still holds
-  the earlier taxonomy/smoke calls; cost_summary.json resets per process so final cost is clean.)
 - ~100/1400 in: 97% accept, ~39 rows/min, 92 distinct key-sets / 96 rows. Critic correctly rejecting
   compound fields (benefits_description, salary_per_year range string) -> accepted rows stay narrow.
 

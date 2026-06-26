@@ -21,10 +21,7 @@ A larger sanctioned refactor landed (60 tests pass). Highlights:
   `run_evaluation`; dropped the `tqdm` try/except; diversity deps top-of-file behind one guard with
   the import boundary in `run_evaluation`; `examples/template.yaml` added.
 
-Note: `monitor.py` parses the config YAML directly (not via `load_config`) and only reads the
-`generation` section + artifacts, so the single-provider change does NOT break it; it remains
-extraction-specific and duplicates artifact knowledge (pre-existing). Deferred findings below (output
-normalizers, silent-below-target) are unaffected by this refactor.
+Note: deferred findings below (output normalizers, silent-below-target) are unaffected by this refactor.
 
 ## Done: Add Configurable Prompt Overrides
 
@@ -148,7 +145,7 @@ Reason: a global plan is compact and helps keep same-level taxonomy nodes compar
 ## Done: Removed the `SYNDATA_LLM_LOG` global override
 
 The env override is gone. `ModelRouter._write_log` always writes to `<output_dir>/llm_calls.jsonl`,
-so concurrent runs stay isolated and `monitor.py`/resume always read the right file. We deliberately
+so concurrent runs stay isolated and resume always reads the right file. We deliberately
 did NOT route logging through `logging`/`structlog`: a per-run JSONL sink is all this tool needs and
 a logging framework is ceremony at this size. `flush_logs` now reports failed log writes on stderr
 instead of swallowing them (the `llm_calls.jsonl` contract says every response is logged).
@@ -176,11 +173,6 @@ deliberately deferred — keep any fix compact:
   408/409/429), retry transport errors + 5xx.
 - **Config booleans use Python truthiness.** `bool("false") is True` (config.py), so a quoted YAML
   bool silently inverts. Add a tiny `_require_bool` that fails loudly on non-bools.
-- **`monitor.py` duplicates artifact knowledge and is extraction-specific.** It hardcodes artifact
-  filenames and re-parses config with a different `overgenerate_ratio` default (1.0 vs 1.3), and its
-  quality block assumes `record["extraction"]`. Reuse `syndata.utils.artifact_path`/`read_jsonl` and
-  `load_config` defaults; gate the extraction block behind a presence check. (Unpackaged, untested
-  dev tool, so low priority.)
 - **Sampling includes abstract internal/root nodes.** `_sample_descendant` samples every node
   uniformly, so a mix can be just a vague root. Not a bug — it adds breadth. Add a single
   `prefer_leaf`/leaf-only sampling knob only if real meta-prompts come out too vague (see the

@@ -304,7 +304,6 @@ Use `"model": "fake"` for tests. Do not require network access in tests.
   `.config`) — do not inline it.
 - Add a command to tail/summarize `llm_calls.jsonl`.
 - Add batched and multi-turn generation modes (see `TODO.md`).
-- `monitor.py` is extraction-specific: its default `--config` and its `record["extraction"]` quality block only make sense for the extraction datasets. It also parses the config YAML directly (not via `load_config`) and re-derives `overgenerate_ratio`, so it duplicates artifact/config knowledge — but it does not read the provider/models block, so the single-provider change does not affect it.
 
 ## Safety and Privacy
 
