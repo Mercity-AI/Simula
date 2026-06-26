@@ -14,15 +14,16 @@ schema:
     output:
       type: string
 
+# Fake models run fully offline (no API key needed). base_url is unused in fake mode.
+provider:
+  base_url: "fake"
+
 models:
   strategic:
-    base_url: "fake"
     model: "fake"
   bulk:
-    base_url: "fake"
     model: "fake"
   critic:
-    base_url: "fake"
     model: "fake"
 
 taxonomy:

@@ -2,24 +2,35 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import os
 import time
 from pathlib import Path
 from typing import Any
 
-from .cost import COST
+from .config import resolve_api_key
+from .console import warn
 from .utils import append_jsonl, artifact_path, ensure_dir, extract_json_object, now_iso
 
 
+# Default per-request timeout (seconds). A hung/rate-limited provider connection would otherwise
+# stall a worker for the SDK default (~600s). Override with provider.timeout_seconds.
+DEFAULT_TIMEOUT_SECONDS = 180.0
+MAX_RETRIES = 8
+
+
 class ModelRouter:
+    """Routes every model call to the single configured provider, retries transient failures, and
+    records cost + a live llm_calls.jsonl row for each response. One AsyncOpenAI client is shared by
+    all roles (they differ only by model id and decoding params, passed per call)."""
+
     def __init__(self, config: dict[str, Any]):
         self.config = config
-        self._clients: dict[str, Any] = {}
+        self._client: Any = None
         self._fake_counter = 0
         self._fake_lock = asyncio.Lock()
-        self._pace_lock = asyncio.Lock()
-        self._last_api_call = 0.0
         self._log_tasks: set[asyncio.Task[None]] = set()
+        # Cost accounting keyed by (role, task, model) -> [calls, in_tokens, out_tokens, duration].
+        self.cost: dict[tuple[str, str, str], list[float]] = {}
+        self.started = time.time()
         self._output_dir = Path(config["project"]["output_dir"]) if config.get("project", {}).get("output_dir") else None
         if self._output_dir is not None:
             ensure_dir(self._output_dir)
@@ -27,9 +38,8 @@ class ModelRouter:
     def model_name(self, role: str) -> str:
         return self.config["models"][role]["model"]
 
-    async def complete(self, role: str, prompt: str, system: str | None = None, task: str = "unknown") -> str:
-        model_cfg = self.config["models"][role]
-        model = model_cfg["model"]
+    async def complete(self, role: str, prompt: str, system: str, task: str = "unknown") -> str:
+        model = self.config["models"][role]["model"]
 
         # Resolve decoding params once per call so fake and real paths log identical provenance.
         sampling, extras = resolve_sampling(self.config, role, task)
@@ -39,113 +49,86 @@ class ModelRouter:
             async with self._fake_lock:
                 self._fake_counter += 1
                 response = fake_complete(prompt, self._fake_counter)
-            self._record_cost(role, task, model, prompt, response, 0.0, None)
-            self._schedule_log(role, task, model, prompt, system, response, 0.0, None, extras, sampling)
+            self._account(role, task, model, prompt, system, response, 0.0, None, extras, sampling)
             return response
 
-        client = self._client_for(role, model_cfg)
-        messages = [
-            {"role": "system", "content": system or "You are a helpful assistant."},
-            {"role": "user", "content": prompt},
-        ]
+        client = self._get_client()
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
         started = time.time()
-        last_rate_limit = None
 
-        # Retry transient provider failures, preserving Retry-After when available.
-        for attempt in range(8):
+        # Retry transient failures (transport errors, 5xx, 408/409/429); fail fast on other 4xx.
+        for attempt in range(MAX_RETRIES):
             try:
-                await self._pace(float(model_cfg.get("min_interval_seconds", 0.0)))
                 kwargs = {"model": model, "messages": messages, **sampling}
                 if extras:
                     kwargs["extra_body"] = extras
                 response = await client.chat.completions.create(**kwargs)
                 content = response.choices[0].message.content or ""
-                duration = time.time() - started
-                usage = getattr(response, "usage", None)
-                self._record_cost(role, task, model, prompt, content, duration, usage)
-                self._schedule_log(role, task, model, prompt, system, content, duration, usage, extras, sampling)
+                self._account(role, task, model, prompt, system, content, time.time() - started, getattr(response, "usage", None), extras, sampling)
                 return content
             except Exception as exc:  # noqa: BLE001 - provider SDKs expose several exception classes.
-                retry_after, body = _rate_limit_details(exc)
-                if retry_after is not None:
-                    last_rate_limit = body
-                    await asyncio.sleep(retry_after)
-                    continue
-                if attempt == 7:
+                wait = _retry_wait(exc, attempt)
+                if wait is None or attempt == MAX_RETRIES - 1:
                     raise
-                await asyncio.sleep(min(2.0, 0.25 * (2**attempt)))
-        raise RuntimeError(f"Rate limit retries exhausted: {last_rate_limit or 'no response body'}")
+                await asyncio.sleep(wait)
+        raise RuntimeError("unreachable: retry loop exited without returning or raising")
 
-    async def complete_json(self, role: str, prompt: str, system: str | None = None, task: str = "unknown") -> Any:
-        return extract_json_object(await self.complete(role, prompt, system=system, task=task))
+    async def complete_json(self, role: str, prompt: str, system: str, task: str = "unknown") -> Any:
+        return extract_json_object(await self.complete(role, prompt, system, task=task))
 
     async def flush_logs(self) -> None:
         if not self._log_tasks:
             return
-        await asyncio.gather(*list(self._log_tasks), return_exceptions=True)
+        # A failed log write must not abort shutdown, but it must not vanish silently either: the
+        # llm_calls.jsonl contract says every response is logged, so report any losses on stderr.
+        results = await asyncio.gather(*list(self._log_tasks), return_exceptions=True)
+        failures = [r for r in results if isinstance(r, Exception)]
+        if failures:
+            warn(f"{len(failures)} llm_calls.jsonl log write(s) failed; some calls may be unlogged ({failures[0]}).")
 
-    def _client_for(self, role: str, model_cfg: dict[str, Any]) -> Any:
-        if role in self._clients:
-            return self._clients[role]
-        api_key = model_cfg.get("api_key") or os.getenv(model_cfg.get("api_key_env", ""))
+    def _get_client(self) -> Any:
+        # One client for the whole run: all roles share the provider's base_url, key, and timeout.
+        if self._client is not None:
+            return self._client
+        provider = self.config.get("provider", {})
+        api_key = resolve_api_key(provider.get("api_key_env", "OPENROUTER_API_KEY"))
         if not api_key:
-            raise ValueError(f"Missing API key for model role {role}. Set api_key or api_key_env.")
+            raise ValueError(
+                f"Missing API key: put {provider.get('api_key_env', 'OPENROUTER_API_KEY')} in a .env file at the project root."
+            )
         try:
             from openai import AsyncOpenAI
         except ImportError as exc:
             raise RuntimeError("The openai package is required for real model calls.") from exc
-        self._clients[role] = AsyncOpenAI(api_key=api_key, base_url=model_cfg["base_url"])
-        return self._clients[role]
+        timeout = float(provider.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS))
+        self._client = AsyncOpenAI(api_key=api_key, base_url=provider["base_url"], timeout=timeout)
+        return self._client
 
-    async def _pace(self, min_interval_seconds: float) -> None:
-        if min_interval_seconds <= 0:
-            return
-        async with self._pace_lock:
-            elapsed = time.time() - self._last_api_call
-            if elapsed < min_interval_seconds:
-                await asyncio.sleep(min_interval_seconds - elapsed)
-            self._last_api_call = time.time()
-
-    def _record_cost(self, role: str, task: str, model: str, prompt: str, response: str, duration: float, usage: Any) -> None:
+    def _account(
+        self,
+        role: str,
+        task: str,
+        model: str,
+        prompt: str,
+        system: str,
+        response: str,
+        duration: float,
+        usage: Any,
+        extra_body: dict[str, Any] | None,
+        sampling: dict[str, Any] | None,
+    ) -> None:
+        # Compute tokens once (estimating when the provider omits usage) so cost accounting and
+        # the llm_calls log always agree, then accumulate cost and schedule the log row.
         in_tokens = getattr(usage, "prompt_tokens", None) or max(1, len(prompt) // 4)
         out_tokens = getattr(usage, "completion_tokens", None) or max(1, len(response) // 4)
-        COST.record(role, str(task), model, in_tokens, out_tokens, duration)
+        agg = self.cost.setdefault((role, str(task), model), [0, 0, 0, 0.0])
+        agg[0] += 1
+        agg[1] += in_tokens
+        agg[2] += out_tokens
+        agg[3] += duration
 
-    def _schedule_log(
-        self,
-        role: str,
-        task: str,
-        model: str,
-        prompt: str,
-        system: str | None,
-        response: str,
-        duration: float,
-        usage: Any,
-        extra_body: dict[str, Any] | None,
-        sampling: dict[str, Any] | None,
-    ) -> None:
         if self._output_dir is None:
             return
-        task_obj = asyncio.create_task(
-            self._log_call_async(role, task, model, prompt, system, response, duration, usage, extra_body, sampling)
-        )
-        self._log_tasks.add(task_obj)
-        task_obj.add_done_callback(self._log_tasks.discard)
-
-    async def _log_call_async(
-        self,
-        role: str,
-        task: str,
-        model: str,
-        prompt: str,
-        system: str | None,
-        response: str,
-        duration: float,
-        usage: Any,
-        extra_body: dict[str, Any] | None,
-        sampling: dict[str, Any] | None,
-    ) -> None:
-        log_path = Path(os.getenv("SYNDATA_LLM_LOG", "")) if os.getenv("SYNDATA_LLM_LOG") else artifact_path(self._output_dir, "llm_calls")  # type: ignore[arg-type]
         row = {
             "created_at": now_iso(),
             "role": role,
@@ -155,19 +138,24 @@ class ModelRouter:
             "system": system,
             "prompt": prompt,
             "response": response,
-            "in_tokens": getattr(usage, "prompt_tokens", None),
-            "out_tokens": getattr(usage, "completion_tokens", None),
+            "in_tokens": in_tokens,
+            "out_tokens": out_tokens,
             "sampling": sampling,
             "extra_body": extra_body,
         }
-        await asyncio.to_thread(append_jsonl, log_path, row)
+        log_task = asyncio.create_task(self._write_log(row))
+        self._log_tasks.add(log_task)
+        log_task.add_done_callback(self._log_tasks.discard)
+
+    async def _write_log(self, row: dict[str, Any]) -> None:
+        await asyncio.to_thread(append_jsonl, artifact_path(self._output_dir, "llm_calls"), row)  # type: ignore[arg-type]
 
 
 # OpenAI-compatible decoding params sent as top-level call kwargs; everything else rides extra_body.
 KNOWN_PARAMS = ("temperature", "top_p", "max_tokens", "frequency_penalty", "presence_penalty", "stop", "seed")
 SAMPLING_DEFAULTS = {"temperature": 0.7, "max_tokens": 32768}
 # Connection/control keys on a model role are not decoding params and must not be sent as sampling kwargs.
-_CONNECTION_KEYS = frozenset({"base_url", "api_key", "api_key_env", "model", "min_interval_seconds", "extra_body"})
+_CONNECTION_KEYS = frozenset({"base_url", "api_key", "api_key_env", "model", "timeout_seconds", "extra_body"})
 
 
 def resolve_sampling(config: dict[str, Any], role: str, task: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -186,34 +174,28 @@ def resolve_sampling(config: dict[str, Any], role: str, task: str) -> tuple[dict
     for key, value in layered.items():
         (call_params if key in KNOWN_PARAMS else extra_overrides)[key] = value
 
-    extra_body = dict(_merged_extra_body(model_cfg))
+    # Per-task provider params merge on top of the role's static extra_body (task wins on conflict).
+    extra_body = dict(model_cfg.get("extra_body") or {})
     extra_body.update(extra_overrides)
     return call_params, extra_body
 
 
-def _merged_extra_body(model_cfg: dict[str, Any]) -> dict[str, Any]:
-    if "extra_body" in model_cfg:
-        return model_cfg.get("extra_body") or {}
-    return _reasoning_extras(model_cfg["model"])
-
-
-def _reasoning_extras(model_id: str) -> dict[str, Any]:
-    mid = model_id.casefold()
-    if any(tag in mid for tag in ("deepseek", "o1", "o3", "o4", "reason")):
-        return {"reasoning": {"effort": "low", "exclude": True}}
-    return {}
-
-
-def _rate_limit_details(exc: Exception) -> tuple[float | None, str | None]:
-    response = getattr(exc, "response", None)
-    status_code = getattr(response, "status_code", None)
-    if status_code != 429:
-        return None, None
+def _retry_after_seconds(response: Any) -> float | None:
     headers = getattr(response, "headers", {}) or {}
-    retry_after = headers.get("retry-after") or headers.get("Retry-After")
-    wait = float(retry_after) if retry_after else 2.0
-    body = getattr(response, "text", None)
-    return min(60.0, wait), body
+    value = headers.get("retry-after") or headers.get("Retry-After")
+    return min(60.0, float(value)) if value else None
+
+
+def _retry_wait(exc: Exception, attempt: int) -> float | None:
+    # Return the seconds to wait before retrying, or None to fail fast. Transient = transport errors
+    # (no HTTP status), 5xx, and 408/409/429; everything else (auth/bad-request 4xx) fails fast.
+    response = getattr(exc, "response", None)
+    status = getattr(exc, "status_code", None) or getattr(response, "status_code", None)
+    if status == 429:
+        return _retry_after_seconds(response) or 2.0
+    if status is None or status in {408, 409} or status >= 500:
+        return min(10.0, 0.5 * 2**attempt)
+    return None
 
 
 def fake_complete(prompt: str, counter: int = 0) -> str:
@@ -222,9 +204,7 @@ def fake_complete(prompt: str, counter: int = 0) -> str:
         return f"Once upon a time there was a cat with id {counter}. The cat had adventures."
     if '"factors"' in prompt:
         return '{"factors":[{"name":"topic","description":"Subject area"},{"name":"difficulty","description":"Difficulty level"}]}'
-    if '"children"' in prompt and "Refine" not in prompt:
-        return '{"children":[{"name":"alpha","description":"Alpha branch"},{"name":"beta","description":"Beta branch"}]}'
-    if '"children"' in prompt and "Refine" in prompt:
+    if '"children"' in prompt:
         return '{"children":[{"name":"alpha","description":"Alpha branch"},{"name":"beta","description":"Beta branch"}]}'
     if '"plan"' in prompt:
         return '{"plan":"Expand each node into two concrete and balanced child nodes."}'

@@ -1,0 +1,82 @@
+# syndata config template. Copy this, edit, and point the CLI at it. Every value shown is the
+# built-in default (defined in syndata/data_models.py) unless noted — omit a key to accept its
+# default, override only what you need. Required keys: `description` and a model id per role.
+# Comments here are one-liners; see CONFIG.md for the full per-field reference.
+
+project:
+  name: "pilot"
+  output_dir: "runs/pilot"      # all artifacts (datasets, logs, cost, state) land here
+  seed: 42
+
+# REQUIRED. Describe the dataset to generate; this steers every prompt.
+description: "Describe the dataset to generate."
+
+# JSON Schema subset (object/string/number/integer/boolean/array/enum/required/properties/items).
+# Set to null (or omit) for free-text generation instead of structured records.
+schema: null
+
+# Single OpenAI-compatible provider shared by all roles. The API key is read ONLY from a .env file
+# at the project root, under the variable named by api_key_env (a shell export is ignored).
+provider:
+  base_url: "https://openrouter.ai/api/v1"
+  api_key_env: "OPENROUTER_API_KEY"
+  timeout_seconds: 180
+
+# Per-role model id + optional decoding params. Use "fake" to run fully offline (no key needed).
+# Unknown params (min_p, top_k, repetition_penalty, ...) and `extra_body` pass through to the provider.
+models:
+  strategic:                    # taxonomy + strategy building
+    model: ""                   # REQUIRED, e.g. "google/gemini-3-flash-preview"
+    temperature: 0.7
+  bulk:                         # meta-prompts + record/text generation + refinement
+    model: ""
+    temperature: 0.7
+  critic:                       # critique + optional complexity/reassignment scoring
+    model: ""
+    temperature: 0.7
+    # extra_body: {reasoning: {effort: low, exclude: true}}   # for reasoning models
+
+# Optional: point at a Python module that overrides any subset of prompt builders + SYSTEM_JSON/TEXT.
+# prompts:
+#   module: "my_prompts.py"
+
+taxonomy:
+  depth: 2                      # levels below each factor root (0 = factors only)
+  factors: null                # null = let the model discover 3-6 factors; or list {name, description}
+  best_of_n: 2                  # candidate child lists per node before the critic refines
+  # auto_accept = write & proceed | write_then_edit = write & halt for hand-editing | interactive_confirm = prompt
+  review_mode: "auto_accept"
+  children_per_node: 4          # target children requested per node when expanding
+  log_style: "light"           # how the build is shown: light (flat breadcrumbs) | tree (live-growing tree)
+
+strategy:
+  guidance: null               # optional free-text steering for which roots combine and weights
+
+# Optional per-task decoding overrides: sampling.tasks.<task> -> {param: value}. Task names are the
+# TaskType values (generate, meta_prompt, complexify, refine, ...). Run the CLI twice for a spread.
+sampling:
+  tasks: {}
+
+generation:
+  target_size: 50              # rows wanted in dataset.final.jsonl (accepted rows trimmed back to this)
+  overgenerate_ratio: 1.3      # attempts = ceil(target_size * this); buffer for rejected rows
+  scenarios_per_mix: 3         # candidate meta-prompts drafted per sampled mix; each attempt picks one
+  complexity_ratio: 0.3        # fraction of points routed through the complexify step
+  max_refine_attempts: 2       # critic->refine retries per record (0 = critique once, never refine)
+  concurrency: 4               # in-flight model calls; lower this if the provider rate-limits
+  checkpoint_every: 50         # write run_state.json every N completed attempts
+
+evaluation:
+  dedupe: true
+  coverage: true
+  coverage_mode: "lineage"     # lineage | reassign | both (reassign/both make extra model calls)
+  complexity: false            # Elo complexity scoring (extra model calls)
+  complexity_batch_size: 5     # records per critic batch when scoring complexity
+  complexity_samples_per_item: 2  # shuffled batches each record appears in (more = stabler, pricier)
+  decontaminate_against: []    # paths to reference/test JSONL to drop overlapping rows against
+  diversity:
+    enabled: false             # embedding diversity; needs `pip install 'syndata[diversity]'`
+    embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+    k_local: 10                # nearest neighbours for the local-diversity metric
+    sample_cap: 1000           # max rows embedded; beyond this a random subset is scored
+    text_field: null           # dotted path into the record for the text to embed

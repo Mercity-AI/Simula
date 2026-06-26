@@ -6,6 +6,67 @@ import yaml
 from syndata.config import load_config, validate_schema_subset
 
 
+def _fake_models() -> dict:
+    return {
+        "strategic": {"model": "fake"},
+        "bulk": {"model": "fake"},
+        "critic": {"model": "fake"},
+    }
+
+
+def _write_config(tmp_path: Path, extra: dict | None = None) -> Path:
+    data = {
+        "description": "Generate examples.",
+        "project": {"output_dir": str(tmp_path / "run")},
+        "models": _fake_models(),
+    }
+    if extra:
+        data.update(extra)
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    return path
+
+
+def test_env_key_read_from_project_root_only(tmp_path: Path, monkeypatch) -> None:
+    from syndata.config import resolve_api_key
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("SYNDATA_TEST_ENV_KEY_XYZ=secret-123\n", encoding="utf-8")
+    assert resolve_api_key("SYNDATA_TEST_ENV_KEY_XYZ") == "secret-123"
+    # A shell-exported variable is deliberately ignored: only the project-root .env file is read.
+    monkeypatch.setenv("SYNDATA_NOT_IN_ENV_FILE", "from-shell")
+    assert resolve_api_key("SYNDATA_NOT_IN_ENV_FILE") is None
+
+
+def test_null_section_falls_back_to_defaults(tmp_path: Path) -> None:
+    cfg = load_config(_write_config(tmp_path, {"evaluation": None}))
+    assert cfg.evaluation.coverage_mode == "lineage"
+    assert cfg.evaluation.dedupe is True
+
+
+def test_rejects_nonpositive_target_size(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="target_size"):
+        load_config(_write_config(tmp_path, {"generation": {"target_size": 0}}))
+
+
+def test_rejects_overgenerate_ratio_below_one(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="overgenerate_ratio"):
+        load_config(_write_config(tmp_path, {"generation": {"overgenerate_ratio": 0.5}}))
+
+
+def test_missing_api_key_warns_but_does_not_fail(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)  # no .env here, so the provider key cannot resolve
+    real_models = {role: {"model": "vendor/real-model"} for role in ("strategic", "bulk", "critic")}
+    cfg = load_config(
+        _write_config(
+            tmp_path,
+            {"provider": {"base_url": "https://example", "api_key_env": "SYNDATA_DEFINITELY_MISSING_KEY"}, "models": real_models},
+        )
+    )  # must not raise
+    assert cfg.data["models"]["bulk"]["model"] == "vendor/real-model"
+    assert "no API key resolved" in capsys.readouterr().err
+
+
 def test_config_defaults(tmp_path: Path) -> None:
     path = tmp_path / "config.yaml"
     path.write_text(

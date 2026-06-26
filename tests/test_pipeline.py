@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import asyncio
+import pytest
 import yaml
 
 from syndata.cli import main
@@ -21,9 +22,9 @@ def write_config(tmp_path: Path, extra: dict | None = None) -> Path:
             "properties": {"input": {"type": "string"}, "output": {"type": "string"}},
         },
         "models": {
-            "strategic": {"base_url": "fake", "model": "fake"},
-            "bulk": {"base_url": "fake", "model": "fake"},
-            "critic": {"base_url": "fake", "model": "fake"},
+            "strategic": {"model": "fake"},
+            "bulk": {"model": "fake"},
+            "critic": {"model": "fake"},
         },
         "taxonomy": {"depth": 1, "best_of_n": 1, "review_mode": "auto_accept", "children_per_node": 2},
         "generation": {"target_size": 5, "overgenerate_ratio": 1.2, "complexity_ratio": 0, "scenarios_per_mix": 2},
@@ -174,6 +175,54 @@ def test_resume_skips_completed_attempts(tmp_path: Path) -> None:
     assert len(read_jsonl(artifact_path(cfg.output_dir, "raw"))) == raw_count
 
 
+def test_write_then_edit_halts_before_generation(tmp_path: Path) -> None:
+    cfg = load_config(
+        write_config(tmp_path, {"taxonomy": {"depth": 1, "best_of_n": 1, "review_mode": "write_then_edit", "children_per_node": 2}})
+    )
+    router = ModelRouter(cfg.data)
+    # write_then_edit must STOP the run after writing the taxonomy, not fall through to generation.
+    with pytest.raises(SystemExit):
+        asyncio.run(generate_dataset(cfg, router, quiet=True))
+    assert artifact_path(cfg.output_dir, "taxonomy").exists()  # written so the user can edit it
+    assert read_jsonl(artifact_path(cfg.output_dir, "raw")) == []  # nothing generated
+
+
+def test_resume_rejects_changed_config(tmp_path: Path) -> None:
+    base = {"generation": {"target_size": 3, "overgenerate_ratio": 1.0, "complexity_ratio": 0}}
+    cfg = load_config(write_config(tmp_path, base))
+    asyncio.run(generate_dataset(cfg, ModelRouter(cfg.data), quiet=True, resume=False))
+
+    # Same output_dir, different seed (a fingerprint-changing input) must block resume.
+    changed = dict(base)
+    changed["project"] = {"name": "test", "output_dir": str(tmp_path / "run"), "seed": 999}
+    cfg2 = load_config(write_config(tmp_path, changed))
+    with pytest.raises(ValueError, match="--no-resume"):
+        asyncio.run(generate_dataset(cfg2, ModelRouter(cfg2.data), quiet=True, resume=True))
+
+    # --no-resume starts a clean run under the new config.
+    rows = asyncio.run(generate_dataset(cfg2, ModelRouter(cfg2.data), quiet=True, resume=False))
+    assert rows
+
+
+def test_flush_logs_reports_write_failures(tmp_path: Path, capsys, monkeypatch) -> None:
+    import syndata.models as models_mod
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(models_mod, "append_jsonl", boom)
+    cfg = load_config(write_config(tmp_path))
+    router = ModelRouter(cfg.data)
+
+    # Schedule a log write and flush it in the SAME loop so the failing task is still pending.
+    async def run() -> None:
+        await router.complete("bulk", "generate something", "system", task="generate")
+        await router.flush_logs()
+
+    asyncio.run(run())
+    assert "log write" in capsys.readouterr().err
+
+
 def test_generation_concurrency_is_bounded(tmp_path: Path) -> None:
     # generation.concurrency must cap in-flight attempts; otherwise every attempt launches at once.
     class TrackingRouter(ModelRouter):
@@ -206,6 +255,22 @@ def test_generation_concurrency_is_bounded(tmp_path: Path) -> None:
     asyncio.run(router.flush_logs())
     # 8 attempts with a limit of 2 must never exceed 2 concurrent calls, and should reach it.
     assert router.max_active == 2
+
+
+def test_evaluate_writes_its_own_artifact_and_preserves_final(tmp_path: Path) -> None:
+    from syndata.evaluate import run_evaluation
+
+    cfg = load_config(write_config(tmp_path))
+    router = ModelRouter(cfg.data)
+    asyncio.run(build_taxonomy(cfg, router))
+    asyncio.run(generate_dataset(cfg, router, quiet=True))
+    final_before = read_jsonl(artifact_path(cfg.output_dir, "final"))
+    asyncio.run(run_evaluation(cfg, router, quiet=True))
+    asyncio.run(router.flush_logs())
+    # evaluate must not rewrite the generator's final dataset; it writes a separate artifact.
+    assert read_jsonl(artifact_path(cfg.output_dir, "final")) == final_before
+    evaluated = read_jsonl(artifact_path(cfg.output_dir, "evaluated"))
+    assert isinstance(evaluated, list) and len(evaluated) <= len(final_before)
 
 
 def test_point_failure_becomes_rejected_row(tmp_path: Path) -> None:

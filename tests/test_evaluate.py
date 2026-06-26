@@ -1,6 +1,15 @@
 from pathlib import Path
 
-from syndata.evaluate import coverage_aware_trim, coverage_report, decontaminate_rows, dedupe_rows, validate_record
+from jsonschema import Draft202012Validator
+
+from syndata.evaluate import (
+    _complexity_schedule,
+    coverage_aware_trim,
+    coverage_report,
+    decontaminate_rows,
+    dedupe_rows,
+    validate_record,
+)
 
 
 def test_validate_record() -> None:
@@ -9,11 +18,36 @@ def test_validate_record() -> None:
     assert validate_record(schema, {"x": 1})[0] is False
 
 
+def test_validate_record_uses_precompiled_validator() -> None:
+    schema = {"type": "object", "required": ["x"], "properties": {"x": {"type": "string"}}}
+    validator = Draft202012Validator(schema)
+    # A precompiled validator is reused and takes precedence over the schema argument.
+    assert validate_record(None, {"x": "ok"}, validator=validator) == (True, None)
+    assert validate_record(None, {"x": 1}, validator=validator)[0] is False
+
+
+def test_complexity_schedule_keeps_every_row_without_singletons() -> None:
+    # 3 rows in batches of 2 would leave a trailing batch of 1; it must merge, not drop.
+    rows = [{"id": str(i), "record": {}} for i in range(3)]
+    schedule = _complexity_schedule(rows, batch_size=2, appearances=1)
+    assert all(len(batch) >= 2 for batch in schedule)
+    assert {row["id"] for batch in schedule for row in batch} == {"0", "1", "2"}
+
+
 def test_dedupe_rows() -> None:
     rows = [{"id": "a", "record": {"x": "same"}}, {"id": "b", "record": {"x": "same"}}]
     kept, removed = dedupe_rows(rows)
     assert [row["id"] for row in kept] == ["a"]
     assert removed == ["b"]
+
+
+def test_dedupe_does_not_collapse_records_without_word_tokens() -> None:
+    # `{}` and `[]` both render to text with no word tokens, so they yield empty n-grams.
+    # They must NOT be treated as duplicates of each other (the old jaccard(set(),set())==1.0 bug).
+    rows = [{"id": "a", "record": {}}, {"id": "b", "record": []}]
+    kept, removed = dedupe_rows(rows)
+    assert [row["id"] for row in kept] == ["a", "b"]
+    assert removed == []
 
 
 def test_decontaminate_rows(tmp_path: Path) -> None:
@@ -30,6 +64,8 @@ def test_coverage_report_from_lineage() -> None:
     rows = [{"taxonomy_mix": [{"factor": "topic", "node": "alpha", "level": 1, "path": ["topic", "alpha"]}]}]
     report = coverage_report(taxonomy, rows)
     assert report["topic"]["1"]["ratio"] == 1.0
+    # A leaf/branch sample also covers its ancestors: the root level must not read as uncovered.
+    assert report["topic"]["0"]["ratio"] == 1.0
 
 
 def test_coverage_aware_trim_prefers_new_branches() -> None:

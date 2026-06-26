@@ -24,6 +24,13 @@ From the repository root:
 python -m pip install -e ".[dev]"
 ```
 
+The base install is light. The optional embedding-based **diversity** metric needs heavier packages
+(numpy, scikit-learn, sentence-transformers / PyTorch); install them only if you enable it:
+
+```bash
+python -m pip install -e ".[diversity]"
+```
+
 You can also run the CLI without installing:
 
 ```bash
@@ -44,13 +51,19 @@ Artifacts are written to:
 runs/basic_qa/
 ```
 
-For a real OpenRouter/OpenAI-compatible run:
+For a real OpenRouter/OpenAI-compatible run, put the key named by `provider.api_key_env` in a
+gitignored `.env` file at the project root:
 
 ```bash
-export OPENROUTER_API_KEY="..."
+echo 'OPENROUTER_API_KEY=sk-or-...' > .env   # gitignored; the only source of API keys
 python -m syndata.cli taxonomy examples/query_extraction_gemini.yaml
 python -m syndata.cli generate examples/query_extraction_gemini.yaml
 ```
+
+Key resolution: the project-root `.env` file is read directly (via `dotenv_values`) and is the
+**only** source of API keys — a shell-exported variable is deliberately ignored, so the key always
+comes from the file you can see. A missing key warns at `validate` and fails real model calls. Never
+commit real keys.
 
 The query extraction example currently uses:
 
@@ -66,7 +79,7 @@ through the OpenRouter-compatible API.
 syndata validate CONFIG.yaml
 ```
 
-Validates the YAML config, JSON Schema subset, model role config, and output path. It also prints a rough call estimate.
+Validates the YAML config, JSON Schema subset, model role config, and output path. It makes no model calls.
 
 ```bash
 syndata taxonomy CONFIG.yaml
@@ -84,7 +97,9 @@ Loads or builds the taxonomy, builds strategies if missing, generates data, vali
 syndata evaluate CONFIG.yaml
 ```
 
-Runs dedupe, coverage, and optional complexity scoring against `dataset.final.jsonl`.
+Runs dedupe, coverage, and optional complexity scoring. It reads `dataset.final.jsonl` and writes
+the deduped/decontaminated result to a separate `dataset.evaluated.jsonl` (it never rewrites
+`dataset.final.jsonl`), plus `eval_report.json`.
 
 ```bash
 syndata run CONFIG.yaml
@@ -94,7 +109,8 @@ Runs taxonomy, generation, and evaluation end to end.
 
 ## Config Overview
 
-Each run is controlled by a single YAML file:
+Each run is controlled by a single YAML file. `examples/template.yaml` is a copy-me skeleton with
+every key at its default; **`CONFIG.md` is the full per-field reference**. The essentials:
 
 ```yaml
 project:
@@ -113,18 +129,16 @@ schema:
     output:
       type: string
 
+provider:
+  base_url: "https://openrouter.ai/api/v1"
+  api_key_env: "OPENROUTER_API_KEY"   # variable name read from the project-root .env
+
 models:
   strategic:
-    base_url: "https://openrouter.ai/api/v1"
-    api_key_env: "OPENROUTER_API_KEY"
     model: "google/gemini-3-flash-preview"
   bulk:
-    base_url: "https://openrouter.ai/api/v1"
-    api_key_env: "OPENROUTER_API_KEY"
     model: "google/gemini-3-flash-preview"
   critic:
-    base_url: "https://openrouter.ai/api/v1"
-    api_key_env: "OPENROUTER_API_KEY"
     model: "google/gemini-3-flash-preview"
 
 prompts:
@@ -233,6 +247,25 @@ Valid task names are the `TaskType` values: `factor_discovery`, `node_expansion`
 
 OpenAI-compatible params (`temperature`, `top_p`, `max_tokens`, `frequency_penalty`, `presence_penalty`, `stop`, `seed`) are sent as top-level call kwargs. Anything else (`min_p`, `top_k`, `repetition_penalty`, …) is passed through `extra_body` so provider-specific knobs work without lock-in. The resolved params are recorded per call in `llm_calls.jsonl`.
 
+Connection lives on `provider` (`base_url`, `api_key_env`, `timeout_seconds`), shared by all roles;
+the non-decoding role keys (`model`, `extra_body`) are never treated as decoding params.
+
+**Per-request timeout.** Each real call uses a default timeout of **180 seconds** so a hung or
+rate-limited provider connection cannot stall a worker for the SDK default (~600s). Override with
+`provider.timeout_seconds`.
+
+**Reasoning models.** There is no automatic model-id detection. If a model emits hidden reasoning
+tokens (e.g. DeepSeek R1/V4, OpenAI o-series) and you want them excluded from output and your
+`max_tokens` budget, set it explicitly per role:
+
+```yaml
+models:
+  bulk:
+    model: "deepseek/deepseek-v4-flash"
+    max_tokens: 16384
+    extra_body: {reasoning: {effort: low, exclude: true}}
+```
+
 `syndata validate` rejects unknown task names and non-numeric values before any model call runs. With no `sampling` block, behavior is unchanged except the larger default `max_tokens`. That 32K default is batteries-included: roles without an explicit `max_tokens` can now emit much larger (and pricier) completions than before — set `models.<role>.max_tokens` or a per-task `max_tokens` to cap it.
 
 ### Schema Support
@@ -263,12 +296,17 @@ strategies.json
 dataset.raw.jsonl
 dataset.accepted.jsonl
 dataset.final.jsonl
+dataset.evaluated.jsonl
 run_state.json
 llm_calls.jsonl
 eval_report.json
 cost_summary.json
 embeddings.cache.npz
 ```
+
+`dataset.final.jsonl` is the generator's output. `dataset.evaluated.jsonl` is written by
+`evaluate`/`run` and holds the deduped/decontaminated rows, leaving `dataset.final.jsonl`
+untouched.
 
 `llm_calls.jsonl` is especially useful while a run is still active. Every successful model response is appended immediately with:
 
@@ -339,7 +377,7 @@ Evaluation is separate:
 python -m syndata.cli evaluate examples/query_extraction_gemini.yaml
 ```
 
-For diversity in JSON mode, set `evaluation.diversity.text_field` to a JSONPath such as `$.query` to embed a specific text field instead of the full JSON blob. Embeddings are cached under the run directory and reused on later `evaluate` runs.
+For diversity in JSON mode, set `evaluation.diversity.text_field` to a dotted field path such as `query` or `extraction.intent` to embed a specific field instead of the full JSON blob (a leading `$.` is accepted too). This is plain nested-key access, not full JSONPath. Embeddings are cached under the run directory and reused on later `evaluate` runs.
 
 ## Tests
 

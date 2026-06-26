@@ -2,19 +2,36 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import sys
+import time
 
-from .config import estimate_calls, load_config
-from .cost import COST
+from .config import load_config
+from .console import error, info, phase, set_quiet
 from .evaluate import run_evaluation
 from .generate import generate_dataset
 from .models import ModelRouter
 from .taxonomy import build_taxonomy
-from .utils import artifact_path, write_json
+from .utils import artifact_path, summarize_cost, write_json
 
 
 def main(argv: list[str] | None = None) -> int:
     return asyncio.run(_main(argv))
+
+
+def _run_header(cfg, resume: bool) -> None:
+    # Echo the run's key parameters up front so a long generate/run isn't a silent black box.
+    # One key per line. phase() supplies the blank line above (separating it from the shell prompt);
+    # the trailing blank here plus the taxonomy phase's own blank give two lines before the build.
+    models = cfg.models
+    fmt = "text" if cfg.is_schema_free else "json"
+    phase(f"{cfg.project.name} → {cfg.output_dir}")
+    info(f"[dim]format = {fmt}[/dim]")
+    info(f"[dim]target = {cfg.generation.target_size}[/dim]")
+    info(f"[dim]resume = {resume}[/dim]")
+    info("[dim]models:[/dim]")
+    info(f"[dim]  strategic = {models.strategic.model}[/dim]")
+    info(f"[dim]  bulk      = {models.bulk.model}[/dim]")
+    info(f"[dim]  critic    = {models.critic.model}[/dim]")
+    info("")
 
 
 async def _main(argv: list[str] | None = None) -> int:
@@ -23,63 +40,68 @@ async def _main(argv: list[str] | None = None) -> int:
     for name in ("validate", "taxonomy", "generate", "evaluate", "run"):
         cmd = sub.add_parser(name)
         cmd.add_argument("config")
-        cmd.add_argument("--quiet", action="store_true", help="Suppress progress bars.")
+        cmd.add_argument("--quiet", action="store_true", help="Suppress live spinners/progress bars (keep phase markers and the final summary).")
         if name in {"generate", "run"}:
             resume = cmd.add_mutually_exclusive_group()
             resume.add_argument("--resume", dest="resume", action="store_true", default=True)
             resume.add_argument("--no-resume", dest="resume", action="store_false")
 
     args = parser.parse_args(argv)
+    set_quiet(getattr(args, "quiet", False))
     cfg = None
     router = None
     try:
         cfg = load_config(args.config)
         router = ModelRouter(cfg.data)
-        COST.reset()
 
         # Validate prints static run information and does not invoke any model calls.
         if args.command == "validate":
-            calls = estimate_calls(cfg)
-            print(f"Config OK: {cfg.path}")
-            print(f"Output dir: {cfg.output_dir}")
-            print(f"Output format: {cfg.output_format}")
-            print(f"Estimated calls: taxonomy={calls['taxonomy']} generation={calls['generation']} complexity={calls['complexity']}")
+            info(f"Config OK: {cfg.path}")
+            info(f"Output dir: {cfg.output_dir}")
+            info(f"Output format: {cfg.output_format}")
             return 0
 
         if args.command == "taxonomy":
             taxonomy = await build_taxonomy(cfg, router)
-            print(f"Wrote taxonomy with {len(taxonomy.get('factors', []))} factors to {cfg.output_dir}")
+            info("")
+            info(f"Wrote taxonomy with {len(taxonomy.get('factors', []))} factors to {cfg.output_dir}")
             return 0
 
         if args.command == "generate":
+            _run_header(cfg, args.resume)
             rows = await generate_dataset(cfg, router, resume=args.resume, quiet=args.quiet)
-            print(f"Wrote {len(rows)} final records to {cfg.output_dir}")
+            info("")
+            info(f"Wrote {len(rows)} final records to {cfg.output_dir}")
             return 0
 
         if args.command == "evaluate":
             report = await run_evaluation(cfg, router, quiet=args.quiet)
-            print(f"Wrote eval report for {report.get('count', 0)} records to {cfg.output_dir}")
+            info("")
+            info(f"Wrote eval report for {report.get('count', 0)} records to {cfg.output_dir}")
             return 0
 
         if args.command == "run":
-            await build_taxonomy(cfg, router)
+            # generate_dataset loads-or-builds the taxonomy itself; building it here too would
+            # rebuild and overwrite an edited/earlier taxonomy on every resumed `run`.
+            _run_header(cfg, args.resume)
             rows = await generate_dataset(cfg, router, resume=args.resume, quiet=args.quiet)
             report = await run_evaluation(cfg, router, quiet=args.quiet)
-            print(f"Run complete: {len(rows)} final records, eval count={report.get('count', 0)}")
-            print(f"Artifacts: {cfg.output_dir}")
+            info("")
+            info(f"Run complete: {len(rows)} final records, eval count={report.get('count', 0)}")
+            info(f"Artifacts: {cfg.output_dir}")
             return 0
     except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        error(str(exc))
         return 1
     finally:
         # Flush live LLM logs and persist cost totals before the process exits.
         if router is not None:
             await router.flush_logs()
-        if cfg is not None:
-            summary = COST.summary()
+        if cfg is not None and router is not None:
+            summary = summarize_cost(router.cost, time.time() - router.started)
             write_json(artifact_path(cfg.output_dir, "cost"), summary)
             if summary["total_calls"]:
-                print(
+                info(
                     f"Cost summary: calls={summary['total_calls']} "
                     f"in_tokens={summary['total_input_tokens']} out_tokens={summary['total_output_tokens']}"
                 )

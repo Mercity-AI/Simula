@@ -5,75 +5,105 @@ import random
 from typing import Any
 
 from .config import Config
+from .console import console, info, phase, spinner, taxonomy_logger, warn
+from .data_models import TaskType
 from .models import ModelRouter
-from .tasks import TaskType
 from .utils import artifact_path, read_json, write_json
 
 
 async def build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, Any]:
-    tax_cfg = cfg.data["taxonomy"]
-    factors = tax_cfg.get("factors") or await _discover_factors(cfg, router)
+    """Breadth-first expand each factor into a depth-bounded taxonomy tree, then write + review it.
+
+    Per level: expand every node concurrently (best_of_n proposals + a critic refine), then ask for one
+    global plan that guides the next level. The review step may halt the run so the user can edit.
+    """
+    depth = cfg.taxonomy.depth
     taxonomy = {"description": cfg.description, "factors": []}
 
-    # Expand each factor breadth-first so all branches stay at comparable depth.
-    for factor in factors:
-        root = {"name": factor["name"], "description": factor.get("description", ""), "level": 0, "children": []}
-        queue = [root]
-        plan = "Expand into useful, balanced child categories."
-        for level in range(1, int(tax_cfg["depth"]) + 1):
-            next_queue: list[dict[str, Any]] = []
-            tasks: list[tuple[dict[str, Any], asyncio.Task[list[dict[str, Any]]]]] = []
+    phase("Building taxonomy")
+    # Surface nodes as they are generated, in the configured style (tree/light). The logger is driven
+    # with the JSON node dicts; a tree logger's live display closes before the review prompt below
+    # (only one rich live display at a time).
+    with taxonomy_logger(style=cfg.taxonomy.log_style) as log:
+        factors = cfg.taxonomy.factors or await _discover_factors(cfg, router)
 
-            # Expand all nodes in this level concurrently while preserving BFS ordering.
-            async with asyncio.TaskGroup() as tg:
-                for node in queue:
-                    siblings = [s["name"] for s in queue if s is not node]
-                    task = tg.create_task(_expand_one_node(cfg, router, factor, node, siblings, plan, level))
-                    tasks.append((node, task))
+        # Expand each factor breadth-first so all branches stay at comparable depth.
+        for factor in factors:
+            root = {"name": factor["name"], "description": factor.get("description", ""), "level": 0, "children": []}
+            log.add_factor(root)
+            queue = [root]
+            plan = "Expand into useful, balanced child categories."
+            for level in range(1, depth + 1):
+                next_queue: list[dict[str, Any]] = []
+                tasks: list[tuple[dict[str, Any], asyncio.Task[list[dict[str, Any]]]]] = []
 
-            # Attach successful child lists; failed nodes have already degraded into leaves.
-            for node, task in tasks:
-                node["children"] = task.result()
-                next_queue.extend(node["children"])
-            if level < int(tax_cfg["depth"]):
-                plan_data = await router.complete_json(
-                    "strategic",
-                    cfg.prompts.level_plan_prompt(cfg.description, next_queue),
-                    system=cfg.prompts.SYSTEM_JSON,
-                    task=TaskType.LEVEL_PLAN,
-                )
-                plan = plan_data.get("plan", plan)
-            queue = next_queue
-        taxonomy["factors"].append(root)
+                # Expand all nodes in this level concurrently while preserving BFS ordering.
+                async with asyncio.TaskGroup() as tg:
+                    for node in queue:
+                        siblings = [s["name"] for s in queue if s is not node]
+                        task = tg.create_task(_expand_one_node(cfg, router, factor, node, siblings, plan, level))
+                        tasks.append((node, task))
 
-    taxonomy = _review_taxonomy(cfg, taxonomy)
+                # Attach successful child lists (failed nodes already degraded into leaves) and log
+                # each expanded node as its children land.
+                for node, task in tasks:
+                    node["children"] = task.result()
+                    log.add_children(node, node["children"])
+                    next_queue.extend(node["children"])
+                if level < depth:
+                    plan_data = await router.complete_json(
+                        "strategic",
+                        cfg.prompts.level_plan_prompt(cfg.description, next_queue),
+                        system=cfg.prompts.SYSTEM_JSON,
+                        task=TaskType.LEVEL_PLAN,
+                    )
+                    plan = plan_data.get("plan", plan)
+                queue = next_queue
+            log.finish_factor(root)
+            taxonomy["factors"].append(root)
+
     write_json(artifact_path(cfg.output_dir, "taxonomy"), taxonomy)
+    info(f"[dim]Taxonomy: {len(taxonomy['factors'])} factors, depth {depth}[/dim]")
+    _review_taxonomy(cfg)
     return taxonomy
 
 
 async def load_or_build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, Any]:
+    """Reuse taxonomy.json if present (so a resumed run keeps an edited tree), else build it."""
     path = artifact_path(cfg.output_dir, "taxonomy")
     existing = read_json(path)
-    return existing if existing else await build_taxonomy(cfg, router)
+    if existing:
+        info(f"[dim]Reusing taxonomy.json ({len(existing.get('factors', []))} factors)[/dim]")
+        return existing
+    return await build_taxonomy(cfg, router)
 
 
 async def build_strategies(cfg: Config, router: ModelRouter, taxonomy: dict[str, Any]) -> list[dict[str, Any]]:
+    """Reuse strategies.json if present, else ask the model for weighted sampling strategies."""
+    info("")  # separate the strategies step from the taxonomy block above
     path = artifact_path(cfg.output_dir, "strategies")
     existing = read_json(path)
     if existing:
+        info(f"[dim]Reusing strategies.json ({len(existing['strategies'])} strategies)[/dim]")
         return existing["strategies"]
-    response = await router.complete_json(
-        "strategic",
-        cfg.prompts.strategy_prompt(cfg.description, taxonomy, cfg.data["strategy"].get("guidance")),
-        system=cfg.prompts.SYSTEM_JSON,
-        task=TaskType.STRATEGY,
-    )
-    strategies = response.get("strategies") or [{"id": "general", "description": "Sample all taxonomies.", "taxonomy_roots": [f["name"] for f in taxonomy["factors"]], "weight": 1.0}]
-    write_json(path, {"strategies": strategies})
+    with spinner("Building strategies"):
+        response = await router.complete_json(
+            "strategic",
+            cfg.prompts.strategy_prompt(cfg.description, taxonomy, cfg.strategy.guidance),
+            system=cfg.prompts.SYSTEM_JSON,
+            task=TaskType.STRATEGY,
+        )
+        strategies = response.get("strategies") or [{"id": "general", "description": "Sample all taxonomies.", "taxonomy_roots": [f["name"] for f in taxonomy["factors"]], "weight": 1.0}]
+        write_json(path, {"strategies": strategies})
     return strategies
 
 
 def sample_mix(taxonomy: dict[str, Any], strategy: dict[str, Any], rng: random.Random) -> list[dict[str, Any]]:
+    """Sample one taxonomy node per factor under the strategy's roots; one lineage entry per factor.
+
+    If no factor matches the strategy's roots, fall back to sampling every factor so the returned mix
+    (and thus row lineage) is never empty.
+    """
     roots = strategy.get("taxonomy_roots") or [f["name"] for f in taxonomy["factors"]]
     mix = []
     for factor in taxonomy["factors"]:
@@ -89,11 +119,13 @@ def sample_mix(taxonomy: dict[str, Any], strategy: dict[str, Any], rng: random.R
 
 
 def choose_strategy(strategies: list[dict[str, Any]], rng: random.Random) -> dict[str, Any]:
+    """Weighted-random pick of one strategy (higher weight -> sampled more often)."""
     weights = [float(s.get("weight", 1.0)) for s in strategies]
     return rng.choices(strategies, weights=weights, k=1)[0]
 
 
 def taxonomy_nodes_by_level(taxonomy: dict[str, Any]) -> dict[str, dict[int, set[str]]]:
+    """Map factor -> level -> set of node paths; the denominator for coverage ratios."""
     coverage: dict[str, dict[int, set[str]]] = {}
     for factor in taxonomy.get("factors", []):
         coverage[factor["name"]] = {}
@@ -121,7 +153,7 @@ def taxonomy_to_text(node: dict[str, Any], indent: int = 0) -> str:
 async def _discover_factors(cfg: Config, router: ModelRouter) -> list[dict[str, Any]]:
     response = await router.complete_json(
         "strategic",
-        cfg.prompts.factor_prompt(cfg.description, cfg.data["taxonomy"].get("factors")),
+        cfg.prompts.factor_prompt(cfg.description, cfg.taxonomy.factors),
         system=cfg.prompts.SYSTEM_JSON,
         task=TaskType.FACTOR_DISCOVERY,
     )
@@ -137,15 +169,14 @@ async def _expand_one_node(
     plan: str,
     level: int,
 ) -> list[dict[str, Any]]:
-    tax_cfg = cfg.data["taxonomy"]
     try:
         raw_children: list[dict[str, Any]] = []
 
         # Best-of-N asks for several candidate child lists before the critic refines them.
-        for _ in range(int(tax_cfg["best_of_n"])):
+        for _ in range(cfg.taxonomy.best_of_n):
             response = await router.complete_json(
                 "strategic",
-                cfg.prompts.expand_prompt(cfg.description, factor, node, siblings, plan, int(tax_cfg.get("children_per_node", 4))),
+                cfg.prompts.expand_prompt(cfg.description, factor, node, siblings, plan, cfg.taxonomy.children_per_node),
                 system=cfg.prompts.SYSTEM_JSON,
                 task=TaskType.NODE_EXPANSION,
             )
@@ -160,7 +191,7 @@ async def _expand_one_node(
         )
         return [_child(child, level, node.get("path", [node["name"]])) for child in refined.get("children", [])]
     except Exception as exc:  # noqa: BLE001 - malformed provider output should only prune one branch.
-        print(f"[warn] node expansion failed for {node.get('name')}: {exc}")
+        warn(f"node expansion failed for {node.get('name')}: {exc}")
         return []
 
 
@@ -180,6 +211,12 @@ def _sample_descendant(root: dict[str, Any], rng: random.Random) -> dict[str, An
 
 
 def _strategy_node_for_factor(factor: dict[str, Any], roots: list[str], rng: random.Random) -> dict[str, Any] | None:
+    """Pick a node inside `factor` for a strategy whose roots are dot-separated taxonomy paths.
+
+    Strict subtree matching: a root that exactly names the factor samples anywhere in its tree; a
+    deeper root must exactly name an existing node path and samples that node's subtree. Roots that
+    match no path (or belong to another factor) contribute nothing here, so the caller can fall back.
+    """
     factor_key = _path_key([factor["name"]])
     subtree_roots: list[tuple[str, ...]] = []
 
@@ -218,19 +255,23 @@ def _norm_segment(value: str) -> str:
     return "".join(ch for ch in value.casefold() if ch.isalnum())
 
 
-def _review_taxonomy(cfg: Config, taxonomy: dict[str, Any]) -> dict[str, Any]:
-    mode = cfg.data["taxonomy"].get("review_mode", "auto_accept")
+def _review_taxonomy(cfg: Config) -> None:
+    """Gate generation on the review mode after taxonomy.json is written.
+
+    write_then_edit and a rejected interactive_confirm STOP the process (not just print) so the user
+    can edit the file before generating — otherwise generation runs on the unedited tree.
+    """
+    mode = cfg.taxonomy.review_mode
     if mode == "auto_accept":
-        return taxonomy
+        return
 
     path = artifact_path(cfg.output_dir, "taxonomy")
-    write_json(path, taxonomy)
     if mode == "write_then_edit":
-        print(f"Taxonomy written to {path}. Edit it, then rerun generation.")
-        return taxonomy
+        info(f"Taxonomy written to {path}. Edit it, then rerun to generate.")
+        raise SystemExit(0)
 
-    answer = input("Accept generated taxonomy? [Y/n] ").strip().lower()
+    answer = console.input("Accept generated taxonomy? [Y/n] ").strip().lower()
     if answer in {"", "y", "yes"}:
-        return taxonomy
-    print(f"Taxonomy left at {path}. Edit it before generation.")
+        return
+    info(f"Taxonomy left at {path}. Edit it before generation.")
     raise SystemExit(1)

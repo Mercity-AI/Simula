@@ -1,8 +1,9 @@
+"""Shared helpers: artifact filenames, JSON/JSONL IO, timestamps, text extraction, cost summary."""
+
 from __future__ import annotations
 
 import json
 import re
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -14,6 +15,7 @@ ARTIFACTS = {
     "raw": "dataset.raw.jsonl",
     "accepted": "dataset.accepted.jsonl",
     "final": "dataset.final.jsonl",
+    "evaluated": "dataset.evaluated.jsonl",
     "eval": "eval_report.json",
     "state": "run_state.json",
     "llm_calls": "llm_calls.jsonl",
@@ -45,18 +47,9 @@ def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if line.strip():
-                rows.append(json.loads(line))
-    return rows
-
-
-def read_jsonl_tolerant(path: Path) -> list[dict[str, Any]]:
+def read_jsonl(path: Path, *, tolerant: bool = False) -> list[dict[str, Any]]:
+    # tolerant=True skips blank/corrupt lines, which matters for files appended to live
+    # (a SIGKILL mid-append can leave a torn final line). Strict mode raises on bad JSON.
     if not path.exists():
         return []
     rows: list[dict[str, Any]] = []
@@ -64,10 +57,13 @@ def read_jsonl_tolerant(path: Path) -> list[dict[str, Any]]:
         for line in handle:
             if not line.strip():
                 continue
-            try:
+            if tolerant:
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+            else:
                 rows.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
     return rows
 
 
@@ -88,7 +84,7 @@ def record_to_text(record: Any, text_field: str | None = None) -> str:
     if isinstance(record, str):
         return record
     if text_field:
-        matches = _jsonpath_matches(record, text_field)
+        matches = _field_value(record, text_field)
         if matches:
             return "\n".join(str(match) for match in matches)
     return json.dumps(record, sort_keys=True, ensure_ascii=False)
@@ -105,7 +101,7 @@ def ngrams_for_text(text: str, n: int = 13) -> set[tuple[str, ...]]:
 
 def load_completed_attempt_indexes(path: Path) -> set[int]:
     indexes: set[int] = set()
-    for row in read_jsonl_tolerant(path):
+    for row in read_jsonl(path, tolerant=True):
         if isinstance(row.get("attempt_index"), int):
             indexes.add(row["attempt_index"])
             continue
@@ -116,7 +112,13 @@ def load_completed_attempt_indexes(path: Path) -> set[int]:
 
 
 def extract_json_object(text: str) -> Any:
-    """Pull the first JSON object/array out of a model response."""
+    """Parse a model response as JSON, unwrapping a ```json fence if the model added one.
+
+    The system prompt already demands raw JSON with no commentary, so we deliberately do NOT try
+    to slice JSON out of surrounding prose: a first-brace-to-last-brace heuristic splices unrelated
+    braces together and corrupts otherwise-recoverable output. Record generation has its own repair
+    pass for the rare model that ignores the instruction.
+    """
     text = text.strip()
     try:
         return json.loads(text)
@@ -126,33 +128,53 @@ def extract_json_object(text: str) -> Any:
     fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
     if fenced:
         return json.loads(fenced.group(1).strip())
-
-    starts = [i for i in [text.find("{"), text.find("[")] if i >= 0]
-    if not starts:
-        raise ValueError("No JSON object or array found in response.")
-    start = min(starts)
-    end = max(text.rfind("}"), text.rfind("]"))
-    if end <= start:
-        raise ValueError("Incomplete JSON object or array in response.")
-    return json.loads(text[start : end + 1])
+    raise ValueError("Response was not valid JSON.")
 
 
-def retry_sleep(attempt: int) -> None:
-    time.sleep(min(2.0, 0.25 * (2**attempt)))
-
-
-def _jsonpath_matches(record: Any, expression: str) -> list[Any]:
-    try:
-        from jsonpath_ng import parse
-
-        return [match.value for match in parse(expression).find(record)]
-    except Exception:
-        if not expression.startswith("$."):
+def _field_value(record: Any, field: str) -> list[Any]:
+    # Direct nested-key access into a record dict: "query" or "extraction.intent" (a leading "$."
+    # is tolerated). Records share a fixed shape, so this is all the field-targeting we need — no
+    # JSONPath engine. Returns [value] when the path resolves, else [] (caller falls back to JSON).
+    current = record
+    for part in field.lstrip("$.").split("."):
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
             return []
-        current = record
-        for part in expression[2:].split("."):
-            if isinstance(current, dict) and part in current:
-                current = current[part]
-            else:
-                return []
-        return [current]
+    return [current]
+
+
+def summarize_cost(cost: dict[tuple[str, str, str], list[float]], elapsed_seconds: float) -> dict[str, Any]:
+    """Roll up the ModelRouter's per-(role, task, model) accumulator into cost_summary.json.
+
+    `cost` maps (role, task, model) -> [calls, in_tokens, out_tokens, duration]; this flattens it
+    into sorted per-key rows plus run-wide totals.
+    """
+    rows = []
+    total_calls = total_in = total_out = 0
+    total_duration = 0.0
+    for role, task, model in sorted(cost):
+        calls, in_toks, out_toks, duration = cost[(role, task, model)]
+        rows.append(
+            {
+                "role": role,
+                "task": task,
+                "model": model,
+                "calls": int(calls),
+                "input_tokens": int(in_toks),
+                "output_tokens": int(out_toks),
+                "duration_seconds": round(duration, 3),
+            }
+        )
+        total_calls += int(calls)
+        total_in += int(in_toks)
+        total_out += int(out_toks)
+        total_duration += duration
+    return {
+        "elapsed_seconds": round(elapsed_seconds, 3),
+        "total_calls": total_calls,
+        "total_input_tokens": total_in,
+        "total_output_tokens": total_out,
+        "total_duration_seconds": round(total_duration, 3),
+        "by_role_task_model": rows,
+    }

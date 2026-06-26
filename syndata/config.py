@@ -1,175 +1,58 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import dotenv_values
 from jsonschema import Draft202012Validator
+from pydantic import ValidationError
 
 from . import prompts
-from .tasks import TaskType
+from .console import warn
+from .data_models import Config, TaskType  # noqa: F401 - re-exported for the rest of the package
 from .utils import ensure_dir
 
 
-DEFAULT_SCHEMA = None
-
-
-@dataclass
-class Config:
-    path: Path
-    data: dict[str, Any]
-    prompts: prompts.PromptSet
-
-    @property
-    def output_dir(self) -> Path:
-        return Path(self.data["project"]["output_dir"])
-
-    @property
-    def description(self) -> str:
-        return self.data["description"]
-
-    @property
-    def schema(self) -> dict[str, Any] | None:
-        return self.data["schema"]
-
-    @property
-    def is_schema_free(self) -> bool:
-        return self.schema is None
-
-    @property
-    def output_format(self) -> str:
-        return "text" if self.is_schema_free else "json"
-
-
-def _deep_merge(defaults: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(defaults)
-    for key, value in override.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _deep_merge(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
-
-
-def default_config() -> dict[str, Any]:
-    # Defaults define the public config contract; YAML files can override any nested key.
-    return {
-        "project": {"name": "pilot", "output_dir": "runs/pilot", "seed": 42},
-        "description": "Describe the dataset to generate.",
-        "schema": DEFAULT_SCHEMA,
-        "models": {
-            "strategic": {"base_url": "https://openrouter.ai/api/v1", "api_key_env": "OPENROUTER_API_KEY", "model": ""},
-            "bulk": {"base_url": "https://openrouter.ai/api/v1", "api_key_env": "OPENROUTER_API_KEY", "model": ""},
-            "critic": {"base_url": "https://openrouter.ai/api/v1", "api_key_env": "OPENROUTER_API_KEY", "model": ""},
-        },
-        "prompts": {"module": None},
-        "taxonomy": {"depth": 2, "factors": None, "best_of_n": 2, "review_mode": "auto_accept", "children_per_node": 4},
-        "strategy": {"guidance": None},
-        "sampling": {"tasks": {}},
-        "generation": {
-            "target_size": 50,
-            "overgenerate_ratio": 1.3,
-            "scenarios_per_mix": 3,
-            "complexity_ratio": 0.3,
-            "max_refine_attempts": 2,
-            "concurrency": 4,
-            "checkpoint_every": 50,
-        },
-        "evaluation": {
-            "dedupe": True,
-            "coverage": True,
-            "coverage_mode": "lineage",
-            "complexity": False,
-            "complexity_batch_size": 5,
-            "complexity_samples_per_item": 2,
-            "decontaminate_against": [],
-            "diversity": {
-                "enabled": False,
-                "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
-                "k_local": 10,
-                "sample_cap": 1000,
-                "text_field": None,
-            },
-        },
-    }
+def resolve_api_key(api_key_env: str) -> str | None:
+    # The project-root .env is the ONLY source of API keys: we read it directly with dotenv_values
+    # (not load_dotenv + os.getenv), so a shell-exported variable is deliberately ignored. Keep the
+    # secret out of the config object/logs — it is read here only when a real client is built.
+    return dotenv_values(Path.cwd() / ".env").get(api_key_env)
 
 
 def load_config(path: str | Path) -> Config:
-    # Load YAML, overlay defaults, validate, then ensure artifact output exists.
+    # Load YAML, validate via the Pydantic Config model (defaults + ranges + enums live there),
+    # attach the prompt set, check the optional schema subset, then ensure the output dir exists.
     config_path = Path(path)
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    data = _deep_merge(default_config(), raw)
-    prompt_set = prompts.load_prompt_set(config_path, data.get("prompts"))
-    cfg = Config(path=config_path, data=data, prompts=prompt_set)
-    validate_config(cfg)
+
+    # The prompt module is a runtime object, not validated config data, so load it separately.
+    prompts_ref = raw.pop("prompts", None)
+    try:
+        cfg = Config.model_validate({**raw, "path": config_path})
+    except ValidationError as exc:
+        # Present a single ValueError to callers; the field path + reason stay in the message.
+        raise ValueError(str(exc)) from exc
+
+    cfg.prompts = prompts.load_prompt_set(config_path, prompts_ref)
+    if cfg.record_schema is not None:
+        validate_schema_subset(cfg.record_schema)
+    _warn_missing_api_key(cfg)
     ensure_dir(cfg.output_dir)
     return cfg
 
 
-def validate_config(cfg: Config) -> None:
-    # Required text and model-role checks catch most config mistakes before any API call.
-    if not isinstance(cfg.description, str) or not cfg.description.strip():
-        raise ValueError("Config requires a non-empty description.")
-
-    # Schema is optional: absent/null configs switch the generator into text mode.
-    if cfg.schema is not None:
-        validate_schema_subset(cfg.schema)
-
-    for role in ("strategic", "bulk", "critic"):
-        model_cfg = cfg.data["models"].get(role, {})
-        if not model_cfg.get("model"):
-            raise ValueError(f"models.{role}.model is required.")
-        if not model_cfg.get("base_url"):
-            raise ValueError(f"models.{role}.base_url is required.")
-
-    review_mode = cfg.data["taxonomy"].get("review_mode")
-    if review_mode not in {"auto_accept", "write_then_edit", "interactive_confirm"}:
-        raise ValueError("taxonomy.review_mode must be auto_accept, write_then_edit, or interactive_confirm.")
-
-    # Strategy guidance is free-text steering woven into the strategy prompt; reject non-text early.
-    guidance = cfg.data.get("strategy", {}).get("guidance")
-    if guidance is not None and not isinstance(guidance, str):
-        raise ValueError("strategy.guidance must be a string when set.")
-
-    # Per-task sampling overrides must name real tasks; param names stay open for extra_body pass-through.
-    validate_sampling(cfg.data.get("sampling"))
-
-    # Evaluation modes are explicit because they change cost and whether model calls happen.
-    coverage_mode = cfg.data["evaluation"].get("coverage_mode", "lineage")
-    if coverage_mode not in {"lineage", "reassign", "both"}:
-        raise ValueError("evaluation.coverage_mode must be lineage, reassign, or both.")
-
-    diversity = cfg.data["evaluation"].get("diversity", {})
-    if int(diversity.get("sample_cap", 1000)) <= 0:
-        raise ValueError("evaluation.diversity.sample_cap must be positive.")
-    if int(diversity.get("k_local", 10)) <= 0:
-        raise ValueError("evaluation.diversity.k_local must be positive.")
-
-
-def validate_sampling(sampling: Any) -> None:
-    # Validate per-task decoding overrides early so a typo fails during `validate`, not mid-run.
-    if sampling is None:
+def _warn_missing_api_key(cfg: Config) -> None:
+    # Warn (don't fail — keep `validate` offline-friendly) when a real run has no key in .env.
+    roles = ("strategic", "bulk", "critic")
+    if all(getattr(cfg.models, role).model == "fake" for role in roles):
         return
-    if not isinstance(sampling, dict):
-        raise ValueError("sampling must be a mapping.")
-    tasks = sampling.get("tasks") or {}
-    if not isinstance(tasks, dict):
-        raise ValueError("sampling.tasks must be a mapping of task name to decoding params.")
-
-    valid_tasks = {t.value for t in TaskType}
-    numeric_params = {"temperature", "top_p", "frequency_penalty", "presence_penalty", "min_p", "repetition_penalty"}
-    for name, params in tasks.items():
-        if name not in valid_tasks:
-            raise ValueError(f"sampling.tasks has unknown task '{name}'. Valid tasks: {sorted(valid_tasks)}.")
-        if not isinstance(params, dict):
-            raise ValueError(f"sampling.tasks.{name} must be a mapping of decoding params.")
-        # Param names stay open (unknowns pass through to extra_body), but known numerics must be numbers.
-        for key, value in params.items():
-            if key in numeric_params and not isinstance(value, (int, float)):
-                raise ValueError(f"sampling.tasks.{name}.{key} must be a number.")
-            if key == "max_tokens" and not isinstance(value, int):
-                raise ValueError(f"sampling.tasks.{name}.max_tokens must be an integer.")
+    if resolve_api_key(cfg.provider.api_key_env) is None:
+        warn(
+            f"no API key resolved from .env (api_key_env={cfg.provider.api_key_env}); "
+            "real model calls will fail. Put the key in a .env file at the project root."
+        )
 
 
 def validate_schema_subset(schema: dict[str, Any]) -> None:
@@ -195,15 +78,3 @@ def validate_schema_subset(schema: dict[str, Any]) -> None:
             walk(node["items"], f"{path}[]")
 
     walk(schema, "$")
-
-
-def estimate_calls(cfg: Config) -> dict[str, int]:
-    target = int(cfg.data["generation"]["target_size"])
-    over = float(cfg.data["generation"]["overgenerate_ratio"])
-    attempts = max(1, int(target * over + 0.999))
-    complexity = bool(cfg.data["evaluation"].get("complexity"))
-    return {
-        "taxonomy": 1 + int(cfg.data["taxonomy"]["depth"]) * int(cfg.data["taxonomy"]["best_of_n"]) * 4,
-        "generation": attempts * 4,
-        "complexity": attempts * int(cfg.data["evaluation"].get("complexity_samples_per_item", 2)) if complexity else 0,
-    }

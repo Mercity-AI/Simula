@@ -1,5 +1,31 @@
 # TODO
 
+## Done: Structural refactor (round 4, 2026-06-23)
+
+A larger sanctioned refactor landed (60 tests pass). Highlights:
+
+- **Pydantic config.** `syndata/data_models.py` holds the config models (single source of defaults +
+  validation) and `TaskType`. `config.py` shrank to YAML load + Pydantic validate + schema-subset
+  check + the missing-key warning. `cfg.data` is now a derived `model_dump()` view, not a
+  hand-merged dict. Deleted `_deep_merge`/`_section`/`_parse_sections`/`default_config`/the
+  dataclasses. `tasks.py` merged into `data_models.py`; `cost.py` merged into `utils.summarize_cost`.
+- **Single provider.** Per-role `base_url`/`api_key` are gone from the contract; connection lives on a
+  `provider` block (`base_url`/`api_key_env`/`timeout_seconds`). `ModelRouter` uses one shared client.
+- **.env-only keys.** `resolve_api_key` reads the project-root `.env` directly (`dotenv_values`); a
+  shell export is ignored. No `os.getenv`, no two-location load.
+- **rich logging.** `syndata/console.py` routes human-facing status/warnings/the review prompt;
+  `llm_calls.jsonl` stays plain JSONL.
+- **Retry classification.** Fail fast on 4xx (except 408/409/429), retry transport/5xx/429.
+- **Pile A done.** `_critic_loop` schema-free branches consolidated; `_generate_one_safe` flattened.
+- **Misc.** required `system` param (dropped the "helpful assistant" fallback); required `router` in
+  `run_evaluation`; dropped the `tqdm` try/except; diversity deps top-of-file behind one guard with
+  the import boundary in `run_evaluation`; `examples/template.yaml` added.
+
+Note: `monitor.py` parses the config YAML directly (not via `load_config`) and only reads the
+`generation` section + artifacts, so the single-provider change does NOT break it; it remains
+extraction-specific and duplicates artifact knowledge (pre-existing). Deferred findings below (output
+normalizers, silent-below-target) are unaffected by this refactor.
+
 ## Done: Add Configurable Prompt Overrides
 
 Runs can now point at a Python prompt module from config:
@@ -118,3 +144,70 @@ Improve the global plan prompt so it explicitly asks for a plan that applies acr
 - preserve flexibility for each node's own domain
 
 Reason: a global plan is compact and helps keep same-level taxonomy nodes comparable, but if it becomes too specific to one branch, it can distort expansion for unrelated siblings.
+
+## Done: Removed the `SYNDATA_LLM_LOG` global override
+
+The env override is gone. `ModelRouter._write_log` always writes to `<output_dir>/llm_calls.jsonl`,
+so concurrent runs stay isolated and `monitor.py`/resume always read the right file. We deliberately
+did NOT route logging through `logging`/`structlog`: a per-run JSONL sink is all this tool needs and
+a logging framework is ceremony at this size. `flush_logs` now reports failed log writes on stderr
+instead of swallowing them (the `llm_calls.jsonl` contract says every response is logged).
+
+## Deferred review findings (recorded 2026-06-17)
+
+A review pass produced a batch of findings. The correctness/cleanup ones were done on
+`code-refactor`: `write_then_edit` now halts before generation; resume aborts on a run-fingerprint
+change; lineage coverage counts ancestor prefixes; `extract_json_object` no longer slices JSON out
+of prose; diversity deps moved to a `[diversity]` extra and `httpx` was dropped. The following were
+deliberately deferred — keep any fix compact:
+
+- **Generation can finish below target silently.** `generate_dataset` runs a fixed
+  `ceil(target * overgenerate_ratio)` attempts and trims; a low accept rate yields fewer than
+  `target` rows while the CLI still exits 0. Minimum fix: warn loudly (stderr) with the accept rate
+  when `len(final) < target`. Only build a bounded adaptive-refill loop if hitting target must be a
+  guarantee — it adds cost and weakens determinism, so gate it behind a knob/flag.
+- **Model-output shapes are under-validated.** `_discover_factors` → `factor["name"]` is outside any
+  try/except, so one nameless factor crashes the whole taxonomy build; a non-numeric strategy
+  `weight` makes every row fail (silent zero-accept). Add small normalizers (drop nameless
+  factors/children, coerce weights to positive floats, guarantee a non-empty strategy list). No
+  schema framework.
+- **Retry policy is too broad.** `ModelRouter.complete` retries every non-429 exception 8×, so a
+  400/401/403 burns pointless retries before failing. Classify: fail fast on 4xx (except
+  408/409/429), retry transport errors + 5xx.
+- **Config booleans use Python truthiness.** `bool("false") is True` (config.py), so a quoted YAML
+  bool silently inverts. Add a tiny `_require_bool` that fails loudly on non-bools.
+- **`monitor.py` duplicates artifact knowledge and is extraction-specific.** It hardcodes artifact
+  filenames and re-parses config with a different `overgenerate_ratio` default (1.0 vs 1.3), and its
+  quality block assumes `record["extraction"]`. Reuse `syndata.utils.artifact_path`/`read_jsonl` and
+  `load_config` defaults; gate the extraction block behind a presence check. (Unpackaged, untested
+  dev tool, so low priority.)
+- **Sampling includes abstract internal/root nodes.** `_sample_descendant` samples every node
+  uniformly, so a mix can be just a vague root. Not a bug — it adds breadth. Add a single
+  `prefer_leaf`/leaf-only sampling knob only if real meta-prompts come out too vague (see the
+  structured sampling-knobs note above).
+
+## Simplification review (2026-06-23): decisions + sanctioned cleanup
+
+A complexity/bloat review concluded that most of the perceived bloat is **feature accumulation, not
+bad style** — roughly half the codebase is optional/off-by-default capability (the eval metrics),
+safety layers (typed config), and quality multipliers (best_of_n, complexify, critic/refine), each
+added deliberately. Decisions (no code changed in this pass):
+
+- **Keep all features**, including Elo complexity scoring and LLM reassignment coverage. Both are
+  off by default and DO write into `eval_report.json` when enabled (confirmed). Known gap, left as-is:
+  the complexity ranking is reported but not consumed by any dataset-shaping step — it would only
+  earn its weight once `coverage_aware_trim` or a curriculum export actually uses it.
+- **Keep the generation methodology unchanged** (meta-prompt indirection, best_of_n, critic/refine).
+- Only **behavior-preserving cleanup ("Pile A")** is sanctioned. DONE in round 4 (2026-06-23):
+
+  1. Collapse the schema-free-vs-JSON duality duplicated across `_make_record` / `_make_text` and the
+     `if cfg.is_schema_free` branches inside `_critic_loop`. The two flows are genuinely different
+     (JSON parses/validates/repairs; text doesn't), so this consolidates shared structure — it does
+     not fully merge them.
+  2. Flatten the nested try/except in `_generate_one_safe`: compute the strategy+mix once and build
+     the row progressively so the failure path doesn't recompute the mix.
+
+  CAVEAT: `ModelRouter.model_name()` looks like a trivial accessor but is a **test seam** —
+  `test_point_failure_becomes_rejected_row` injects a `BadRouter` with no `.config`, only
+  `model_name()`. Do NOT inline it. Realistic Pile A savings are modest (~30–50 lines); the big
+  reductions only come from cutting features, which was declined.
