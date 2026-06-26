@@ -99,6 +99,7 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
                             {"attempted": completed, "target_attempts": attempts, "accepted": accepted_count, "fingerprint": fingerprint},
                         )
     else:
+        info("")
         info("[dim]All attempts already complete; nothing to generate.[/dim]")
 
     # Build the final artifact from accepted rows only; evaluation remains a separate command.

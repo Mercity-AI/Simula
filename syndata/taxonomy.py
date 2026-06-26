@@ -80,6 +80,7 @@ async def load_or_build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, 
 
 async def build_strategies(cfg: Config, router: ModelRouter, taxonomy: dict[str, Any]) -> list[dict[str, Any]]:
     """Reuse strategies.json if present, else ask the model for weighted sampling strategies."""
+    info("")  # separate the strategies step from the taxonomy block above
     path = artifact_path(cfg.output_dir, "strategies")
     existing = read_json(path)
     if existing:

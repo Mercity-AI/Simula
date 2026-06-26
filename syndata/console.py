@@ -56,7 +56,9 @@ def error(message: str) -> None:
 
 
 def phase(title: str) -> None:
-    # A static, single-line phase marker. Printed even under --quiet so piped logs keep their shape.
+    # A phase marker with a leading blank line so each section gets breathing room above it.
+    # Printed even under --quiet so piped logs keep their shape.
+    console.print("")
     console.print(f"[bold cyan]›[/bold cyan] {title}")
 
 

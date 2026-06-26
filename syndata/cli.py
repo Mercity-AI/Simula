@@ -19,11 +19,10 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_header(cfg, resume: bool) -> None:
     # Echo the run's key parameters up front so a long generate/run isn't a silent black box.
-    # One key per line; a blank line before separates it from the shell prompt, two after from the
-    # first build phase.
+    # One key per line. phase() supplies the blank line above (separating it from the shell prompt);
+    # the trailing blank here plus the taxonomy phase's own blank give two lines before the build.
     models = cfg.models
     fmt = "text" if cfg.is_schema_free else "json"
-    info("")
     phase(f"{cfg.project.name} → {cfg.output_dir}")
     info(f"[dim]format = {fmt}[/dim]")
     info(f"[dim]target = {cfg.generation.target_size}[/dim]")
@@ -32,7 +31,6 @@ def _run_header(cfg, resume: bool) -> None:
     info(f"[dim]  strategic = {models.strategic.model}[/dim]")
     info(f"[dim]  bulk      = {models.bulk.model}[/dim]")
     info(f"[dim]  critic    = {models.critic.model}[/dim]")
-    info("")
     info("")
 
 
@@ -65,17 +63,20 @@ async def _main(argv: list[str] | None = None) -> int:
 
         if args.command == "taxonomy":
             taxonomy = await build_taxonomy(cfg, router)
+            info("")
             info(f"Wrote taxonomy with {len(taxonomy.get('factors', []))} factors to {cfg.output_dir}")
             return 0
 
         if args.command == "generate":
             _run_header(cfg, args.resume)
             rows = await generate_dataset(cfg, router, resume=args.resume, quiet=args.quiet)
+            info("")
             info(f"Wrote {len(rows)} final records to {cfg.output_dir}")
             return 0
 
         if args.command == "evaluate":
             report = await run_evaluation(cfg, router, quiet=args.quiet)
+            info("")
             info(f"Wrote eval report for {report.get('count', 0)} records to {cfg.output_dir}")
             return 0
 
@@ -85,6 +86,7 @@ async def _main(argv: list[str] | None = None) -> int:
             _run_header(cfg, args.resume)
             rows = await generate_dataset(cfg, router, resume=args.resume, quiet=args.quiet)
             report = await run_evaluation(cfg, router, quiet=args.quiet)
+            info("")
             info(f"Run complete: {len(rows)} final records, eval count={report.get('count', 0)}")
             info(f"Artifacts: {cfg.output_dir}")
             return 0
