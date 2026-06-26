@@ -23,6 +23,7 @@ except ImportError as exc:  # pragma: no cover - exercised only without the opti
         "Install them with: pip install 'syndata[diversity]'"
     ) from exc
 
+from .console import info
 from .utils import ensure_dir
 
 
@@ -41,7 +42,7 @@ def embedding_diversity(
     # Diversity is O(n^2); sample deterministically past the cap. The metric is then an estimate
     # from this subset (reported via sample_size/sample_cap).
     if len(texts) > sample_cap:
-        print(f"[diversity] {len(texts)} texts exceed sample_cap={sample_cap}; computing on a random sample of {sample_cap}.")
+        info(f"[dim][diversity] {len(texts)} texts exceed sample_cap={sample_cap}; sampling {sample_cap}.[/dim]")
         texts = random.Random(0).sample(texts, sample_cap)
 
     embeddings = _load_embeddings(texts, model_name, cache_path)

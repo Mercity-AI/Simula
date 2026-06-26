@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
-from tqdm import tqdm
 
 from .config import Config
+from .console import phase, track
 from .data_models import TaskType
 from .models import ModelRouter
 from .taxonomy import taxonomy_nodes_by_level, taxonomy_to_text, walk_nodes
@@ -124,6 +124,7 @@ async def run_evaluation(cfg: Config, router: ModelRouter, *, quiet: bool = Fals
     by the CLI (constructing one is free), so reassignment/complexity modes can rely on it.
     """
     eval_cfg = cfg.evaluation
+    phase("Evaluating")
     taxonomy = read_json(artifact_path(cfg.output_dir, "taxonomy"), {"factors": []})
     # Read the generator's final dataset tolerantly (a torn line from a killed run must not abort eval).
     rows = read_jsonl(artifact_path(cfg.output_dir, "final"), tolerant=True)
@@ -201,12 +202,11 @@ async def complexity_scores(cfg: Config, router: ModelRouter, rows: list[dict[st
     results: list[dict[str, float]] = [{} for _ in schedule]
     async with asyncio.TaskGroup() as tg:
         tasks = [tg.create_task(score_indexed(idx, batch)) for idx, batch in enumerate(schedule)]
-        iterator = asyncio.as_completed(tasks)
-        if not quiet:
-            iterator = tqdm(iterator, total=len(tasks), desc="Scoring complexity")
-        for future in iterator:
-            idx, score_map = await future
-            results[idx] = score_map
+        with track(len(tasks), "Scoring complexity", quiet=quiet) as advance:
+            for future in asyncio.as_completed(tasks):
+                idx, score_map = await future
+                results[idx] = score_map
+                advance()
 
     for batch, score_map in zip(schedule, results):
         for row in batch:
@@ -254,19 +254,18 @@ async def reassignment_coverage(
         for row in rows:
             for factor_root in taxonomy.get("factors", []):
                 tasks.append(tg.create_task(assign(row, factor_root)))
-        iterator = asyncio.as_completed(tasks)
-        if not quiet:
-            iterator = tqdm(iterator, total=len(tasks), desc="Reassigning coverage")
-        for future in iterator:
-            factor_name, node_name = await future
-            factor_root = next((f for f in taxonomy.get("factors", []) if f["name"] == factor_name), None)
-            if factor_root is None or node_name is None:
-                continue
-            node = _find_node_by_name(factor_root, node_name)
-            if node is None:
-                continue
-            for level, path in enumerate(_path_prefixes(node.get("path", [node["name"]]))):
-                covered.setdefault(factor_name, {}).setdefault(level, set()).add("/".join(path))
+        with track(len(tasks), "Reassigning coverage", quiet=quiet) as advance:
+            for future in asyncio.as_completed(tasks):
+                factor_name, node_name = await future
+                advance()
+                factor_root = next((f for f in taxonomy.get("factors", []) if f["name"] == factor_name), None)
+                if factor_root is None or node_name is None:
+                    continue
+                node = _find_node_by_name(factor_root, node_name)
+                if node is None:
+                    continue
+                for level, path in enumerate(_path_prefixes(node.get("path", [node["name"]]))):
+                    covered.setdefault(factor_name, {}).setdefault(level, set()).add("/".join(path))
     return _coverage_from_sets(total, covered)
 
 

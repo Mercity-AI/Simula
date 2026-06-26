@@ -94,12 +94,20 @@ class TaxonomyCfg(BaseModel):
     best_of_n: int = Field(2, gt=0)
     review_mode: str = "auto_accept"
     children_per_node: int = Field(4, gt=0)
+    log_style: str = "light"  # how the build is surfaced: flat per-node breadcrumbs, or a live tree
 
     @field_validator("review_mode")
     @classmethod
     def _known_review_mode(cls, value: str) -> str:
         if value not in {"auto_accept", "write_then_edit", "interactive_confirm"}:
             raise ValueError("taxonomy.review_mode must be auto_accept, write_then_edit, or interactive_confirm.")
+        return value
+
+    @field_validator("log_style")
+    @classmethod
+    def _known_log_style(cls, value: str) -> str:
+        if value not in {"tree", "light"}:
+            raise ValueError("taxonomy.log_style must be tree or light.")
         return value
 
 

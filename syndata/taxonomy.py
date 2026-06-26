@@ -5,7 +5,7 @@ import random
 from typing import Any
 
 from .config import Config
-from .console import console, info, warn
+from .console import console, info, phase, spinner, taxonomy_logger, warn
 from .data_models import TaskType
 from .models import ModelRouter
 from .utils import artifact_path, read_json, write_json
@@ -18,41 +18,52 @@ async def build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, Any]:
     global plan that guides the next level. The review step may halt the run so the user can edit.
     """
     depth = cfg.taxonomy.depth
-    factors = cfg.taxonomy.factors or await _discover_factors(cfg, router)
     taxonomy = {"description": cfg.description, "factors": []}
 
-    # Expand each factor breadth-first so all branches stay at comparable depth.
-    for factor in factors:
-        root = {"name": factor["name"], "description": factor.get("description", ""), "level": 0, "children": []}
-        queue = [root]
-        plan = "Expand into useful, balanced child categories."
-        for level in range(1, depth + 1):
-            next_queue: list[dict[str, Any]] = []
-            tasks: list[tuple[dict[str, Any], asyncio.Task[list[dict[str, Any]]]]] = []
+    phase("Building taxonomy")
+    # Surface nodes as they are generated, in the configured style (tree/light). The logger is driven
+    # with the JSON node dicts; a tree logger's live display closes before the review prompt below
+    # (only one rich live display at a time).
+    with taxonomy_logger(style=cfg.taxonomy.log_style) as log:
+        factors = cfg.taxonomy.factors or await _discover_factors(cfg, router)
 
-            # Expand all nodes in this level concurrently while preserving BFS ordering.
-            async with asyncio.TaskGroup() as tg:
-                for node in queue:
-                    siblings = [s["name"] for s in queue if s is not node]
-                    task = tg.create_task(_expand_one_node(cfg, router, factor, node, siblings, plan, level))
-                    tasks.append((node, task))
+        # Expand each factor breadth-first so all branches stay at comparable depth.
+        for factor in factors:
+            root = {"name": factor["name"], "description": factor.get("description", ""), "level": 0, "children": []}
+            log.add_factor(root)
+            queue = [root]
+            plan = "Expand into useful, balanced child categories."
+            for level in range(1, depth + 1):
+                next_queue: list[dict[str, Any]] = []
+                tasks: list[tuple[dict[str, Any], asyncio.Task[list[dict[str, Any]]]]] = []
 
-            # Attach successful child lists; failed nodes have already degraded into leaves.
-            for node, task in tasks:
-                node["children"] = task.result()
-                next_queue.extend(node["children"])
-            if level < depth:
-                plan_data = await router.complete_json(
-                    "strategic",
-                    cfg.prompts.level_plan_prompt(cfg.description, next_queue),
-                    system=cfg.prompts.SYSTEM_JSON,
-                    task=TaskType.LEVEL_PLAN,
-                )
-                plan = plan_data.get("plan", plan)
-            queue = next_queue
-        taxonomy["factors"].append(root)
+                # Expand all nodes in this level concurrently while preserving BFS ordering.
+                async with asyncio.TaskGroup() as tg:
+                    for node in queue:
+                        siblings = [s["name"] for s in queue if s is not node]
+                        task = tg.create_task(_expand_one_node(cfg, router, factor, node, siblings, plan, level))
+                        tasks.append((node, task))
+
+                # Attach successful child lists (failed nodes already degraded into leaves) and log
+                # each expanded node as its children land.
+                for node, task in tasks:
+                    node["children"] = task.result()
+                    log.add_children(node, node["children"])
+                    next_queue.extend(node["children"])
+                if level < depth:
+                    plan_data = await router.complete_json(
+                        "strategic",
+                        cfg.prompts.level_plan_prompt(cfg.description, next_queue),
+                        system=cfg.prompts.SYSTEM_JSON,
+                        task=TaskType.LEVEL_PLAN,
+                    )
+                    plan = plan_data.get("plan", plan)
+                queue = next_queue
+            log.finish_factor(root)
+            taxonomy["factors"].append(root)
 
     write_json(artifact_path(cfg.output_dir, "taxonomy"), taxonomy)
+    info(f"[dim]Taxonomy: {len(taxonomy['factors'])} factors, depth {depth}[/dim]")
     _review_taxonomy(cfg)
     return taxonomy
 
@@ -61,7 +72,10 @@ async def load_or_build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, 
     """Reuse taxonomy.json if present (so a resumed run keeps an edited tree), else build it."""
     path = artifact_path(cfg.output_dir, "taxonomy")
     existing = read_json(path)
-    return existing if existing else await build_taxonomy(cfg, router)
+    if existing:
+        info(f"[dim]Reusing taxonomy.json ({len(existing.get('factors', []))} factors)[/dim]")
+        return existing
+    return await build_taxonomy(cfg, router)
 
 
 async def build_strategies(cfg: Config, router: ModelRouter, taxonomy: dict[str, Any]) -> list[dict[str, Any]]:
@@ -69,15 +83,17 @@ async def build_strategies(cfg: Config, router: ModelRouter, taxonomy: dict[str,
     path = artifact_path(cfg.output_dir, "strategies")
     existing = read_json(path)
     if existing:
+        info(f"[dim]Reusing strategies.json ({len(existing['strategies'])} strategies)[/dim]")
         return existing["strategies"]
-    response = await router.complete_json(
-        "strategic",
-        cfg.prompts.strategy_prompt(cfg.description, taxonomy, cfg.strategy.guidance),
-        system=cfg.prompts.SYSTEM_JSON,
-        task=TaskType.STRATEGY,
-    )
-    strategies = response.get("strategies") or [{"id": "general", "description": "Sample all taxonomies.", "taxonomy_roots": [f["name"] for f in taxonomy["factors"]], "weight": 1.0}]
-    write_json(path, {"strategies": strategies})
+    with spinner("Building strategies"):
+        response = await router.complete_json(
+            "strategic",
+            cfg.prompts.strategy_prompt(cfg.description, taxonomy, cfg.strategy.guidance),
+            system=cfg.prompts.SYSTEM_JSON,
+            task=TaskType.STRATEGY,
+        )
+        strategies = response.get("strategies") or [{"id": "general", "description": "Sample all taxonomies.", "taxonomy_roots": [f["name"] for f in taxonomy["factors"]], "weight": 1.0}]
+        write_json(path, {"strategies": strategies})
     return strategies
 
 

@@ -8,9 +8,8 @@ import random
 import uuid
 from typing import Any
 
-from tqdm import tqdm
-
 from .config import Config
+from .console import info, phase, track
 from .evaluate import coverage_aware_trim, dedupe_rows, validate_record
 from .models import ModelRouter
 from .data_models import TaskType
@@ -74,6 +73,7 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
     accepted_count = len([row for row in read_jsonl(accepted_path, tolerant=True) if row.get("accepted")]) if resume else 0
     checkpoint_every = max(1, cfg.generation.checkpoint_every)
     if indexes:
+        phase(f"Generating {len(indexes)} attempts (target {target})")
         # Bound in-flight attempts so a large target does not launch every attempt at once
         # (which would exhaust the HTTP pool and trigger provider rate limits).
         limiter = asyncio.Semaphore(cfg.generation.concurrency)
@@ -84,28 +84,31 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
 
         async with asyncio.TaskGroup() as tg:
             tasks = [tg.create_task(_bounded(index)) for index in indexes]
-            iterator = asyncio.as_completed(tasks)
-            if not quiet:
-                iterator = tqdm(iterator, total=len(tasks), desc="Generating")
-            for future in iterator:
-                row = await future
-                completed += 1
-                append_jsonl(raw_path, row)
-                if row["accepted"]:
-                    accepted_count += 1
-                    append_jsonl(accepted_path, row)
-                if completed % checkpoint_every == 0 or completed >= attempts:
-                    write_json(
-                        state_path,
-                        {"attempted": completed, "target_attempts": attempts, "accepted": accepted_count, "fingerprint": fingerprint},
-                    )
+            with track(len(tasks), "Generating", quiet=quiet) as advance:
+                for future in asyncio.as_completed(tasks):
+                    row = await future
+                    completed += 1
+                    append_jsonl(raw_path, row)
+                    if row["accepted"]:
+                        accepted_count += 1
+                        append_jsonl(accepted_path, row)
+                    advance(description=f"Generating · {accepted_count} accepted")
+                    if completed % checkpoint_every == 0 or completed >= attempts:
+                        write_json(
+                            state_path,
+                            {"attempted": completed, "target_attempts": attempts, "accepted": accepted_count, "fingerprint": fingerprint},
+                        )
+    else:
+        info("[dim]All attempts already complete; nothing to generate.[/dim]")
 
     # Build the final artifact from accepted rows only; evaluation remains a separate command.
     accepted = [row for row in read_jsonl(accepted_path, tolerant=True) if row.get("accepted")]
+    accepted_total = len(accepted)
     if cfg.evaluation.dedupe:
         accepted, _ = dedupe_rows(accepted)
     final = coverage_aware_trim(accepted, target)
     write_jsonl(final_path, final)
+    info(f"[dim]Accepted {accepted_total} → {len(final)} final after dedupe/trim (target {target})[/dim]")
     return final
 
 

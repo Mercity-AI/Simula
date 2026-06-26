@@ -89,6 +89,7 @@ Knobs for the breadth-first taxonomy build (`syndata taxonomy`).
 | `best_of_n` | `2` | Candidate child-lists drafted per node before a critic refine picks/merges. Higher = more diverse children, more cost. |
 | `children_per_node` | `4` | Target number of children requested when expanding each node (passed to the expand prompt). |
 | `review_mode` | `"auto_accept"` | Gate after the taxonomy is built — see below. |
+| `log_style` | `"light"` | How the build is surfaced live — see below. |
 
 `review_mode` values:
 
@@ -96,6 +97,15 @@ Knobs for the breadth-first taxonomy build (`syndata taxonomy`).
 - `write_then_edit` — write `taxonomy.json` and **halt**, telling you to hand-edit it before running
   `generate`. Use when you want to curate the space manually.
 - `interactive_confirm` — print the taxonomy and prompt in the terminal for yes/no.
+
+`log_style` values (both surface nodes as they are generated; `--quiet` suppresses either):
+
+- `light` — flat, append-only breadcrumb lines: a `▸ factor` header per factor, then
+  `+ <path> → k children` per expanded node. Compact and chronological; best when you just want a
+  pulse, especially for large/deep taxonomies where the tree gets unwieldy. The default.
+- `tree` — a tree that grows as nodes are generated. On a TTY it redraws live (each factor shows an
+  `(expanding…)` marker until its subtree completes); off a TTY the finished tree prints once. Best
+  for reviewing the *shape*. Note a deep taxonomy can be a tall tree.
 
 ## `strategy`
 

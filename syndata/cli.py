@@ -5,7 +5,7 @@ import asyncio
 import time
 
 from .config import load_config
-from .console import error, info
+from .console import error, info, phase, set_quiet
 from .evaluate import run_evaluation
 from .generate import generate_dataset
 from .models import ModelRouter
@@ -17,19 +17,39 @@ def main(argv: list[str] | None = None) -> int:
     return asyncio.run(_main(argv))
 
 
+def _run_header(cfg, resume: bool) -> None:
+    # Echo the run's key parameters up front so a long generate/run isn't a silent black box.
+    # One key per line; a blank line before separates it from the shell prompt, two after from the
+    # first build phase.
+    models = cfg.models
+    fmt = "text" if cfg.is_schema_free else "json"
+    info("")
+    phase(f"{cfg.project.name} → {cfg.output_dir}")
+    info(f"[dim]format = {fmt}[/dim]")
+    info(f"[dim]target = {cfg.generation.target_size}[/dim]")
+    info(f"[dim]resume = {resume}[/dim]")
+    info("[dim]models:[/dim]")
+    info(f"[dim]  strategic = {models.strategic.model}[/dim]")
+    info(f"[dim]  bulk      = {models.bulk.model}[/dim]")
+    info(f"[dim]  critic    = {models.critic.model}[/dim]")
+    info("")
+    info("")
+
+
 async def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="syndata", description="Schema-driven synthetic data generator.")
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("validate", "taxonomy", "generate", "evaluate", "run"):
         cmd = sub.add_parser(name)
         cmd.add_argument("config")
-        cmd.add_argument("--quiet", action="store_true", help="Suppress progress bars.")
+        cmd.add_argument("--quiet", action="store_true", help="Suppress live spinners/progress bars (keep phase markers and the final summary).")
         if name in {"generate", "run"}:
             resume = cmd.add_mutually_exclusive_group()
             resume.add_argument("--resume", dest="resume", action="store_true", default=True)
             resume.add_argument("--no-resume", dest="resume", action="store_false")
 
     args = parser.parse_args(argv)
+    set_quiet(getattr(args, "quiet", False))
     cfg = None
     router = None
     try:
@@ -49,6 +69,7 @@ async def _main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "generate":
+            _run_header(cfg, args.resume)
             rows = await generate_dataset(cfg, router, resume=args.resume, quiet=args.quiet)
             info(f"Wrote {len(rows)} final records to {cfg.output_dir}")
             return 0
@@ -61,6 +82,7 @@ async def _main(argv: list[str] | None = None) -> int:
         if args.command == "run":
             # generate_dataset loads-or-builds the taxonomy itself; building it here too would
             # rebuild and overwrite an edited/earlier taxonomy on every resumed `run`.
+            _run_header(cfg, args.resume)
             rows = await generate_dataset(cfg, router, resume=args.resume, quiet=args.quiet)
             report = await run_evaluation(cfg, router, quiet=args.quiet)
             info(f"Run complete: {len(rows)} final records, eval count={report.get('count', 0)}")

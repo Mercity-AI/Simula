@@ -47,6 +47,7 @@ taxonomy:
   # auto_accept = write & proceed | write_then_edit = write & halt for hand-editing | interactive_confirm = prompt
   review_mode: "auto_accept"
   children_per_node: 4          # target children requested per node when expanding
+  log_style: "light"           # how the build is shown: light (flat breadcrumbs) | tree (live-growing tree)
 
 strategy:
   guidance: null               # optional free-text steering for which roots combine and weights
