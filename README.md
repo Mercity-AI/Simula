@@ -1,3 +1,15 @@
+<p align="center">
+  <img src="assets/hero.png" alt="Simula" width="640">
+</p>
+
+<p align="center">
+  <img alt="Python" src="https://img.shields.io/badge/python-%E2%89%A53.11-blue">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-blue">
+  <img alt="Status" src="https://img.shields.io/badge/status-pilot-orange">
+  <img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen">
+</p>
+
 # syndata
 
 `syndata` is a small CLI-first framework for generating schema-shaped or free-text synthetic datasets with taxonomy-guided coverage. It is inspired by the Simula-style workflow: map the conceptual space first, sample from that space, generate records, critique them, preserve lineage, and then trim/evaluate the result.

@@ -2,6 +2,10 @@
 
 This file is the operating guide for agents working on this repository. Read it before changing code.
 
+For the task of **walking a user through generating a dataset** (rather than changing the code), use
+[`SKILL.md`](SKILL.md) — the decision playbook for what to ask, what to default, and when to bring
+the user in. It builds on this file.
+
 ## Project Purpose
 
 `syndata` is a compact Python CLI for schema-driven or free-text synthetic data generation. It builds taxonomies, samples taxonomy-conditioned mixes, asks an OpenAI-compatible model to generate records, critiques/refines them, and writes auditable JSON/JSONL artifacts.
