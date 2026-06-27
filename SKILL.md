@@ -143,6 +143,53 @@ Copy from `template.yaml`; change only these per the task. Don't ask about any o
 - **`complexity_ratio` / `max_refine_attempts`** — leave at template defaults unless quality demands
   more refinement.
 
+## Custom prompts (a Python prompt module)
+
+YAML + schema control *what* shape to produce; the **prompt module** controls *how* the model is
+asked, and it's how you enforce the representation decisions above (atomic fields, absent-field
+policy, per-row varying schema, a stricter critic, a specific free-text style). Reach for one when
+the config can't express the task's rules. Simple datasets don't need one — don't add it reflexively.
+
+How it works:
+
+1. Write a `.py` file next to the config (convention: `examples/<name>_prompts.py`) and point the
+   config at it. The path resolves **relative to the YAML file**:
+   ```yaml
+   prompts:
+     module: "<name>_prompts.py"
+   ```
+2. The module **overrides any subset** of the built-in prompt functions in `simula/prompts.py`, plus
+   the `SYSTEM_JSON` / `SYSTEM_TEXT` system strings. Anything you don't define falls back to the
+   built-in — so override only what you need.
+3. Each override must keep the **same parameter names** as its built-in counterpart (signature-
+   compatible). `simula validate` imports the module and rejects a missing file, an import error, a
+   non-string system prompt, or an incompatible signature — always `validate` before generating.
+
+The high-leverage functions to override (see `simula/prompts.py` for the full list + exact
+signatures — don't guess them):
+
+- **`meta_prompt_prompt(...)`** — the main lever. It plans each example (context, the concrete target
+  schema for that row, which fields are present/absent). Most task-specific rules go here.
+- **`critique_prompt(...)`** (JSON) / **`critique_text_prompt(...)`** (free-text) — make the critic
+  actively reject your anti-patterns (compound fields, hallucinated values, wrong absent-field policy).
+- **`generate_record_prompt(...)`**, **`strategy_prompt(...)`**, the taxonomy prompts
+  (`factor_prompt`, `expand_prompt`, `level_plan_prompt`, …) — override only if the defaults fight
+  your task.
+
+Minimal skeleton:
+
+```python
+# examples/my_task_prompts.py — only the param NAMES must match simula/prompts.py
+SYSTEM_JSON = "Return one valid JSON object. No prose, no code fences."
+
+def critique_prompt(description, schema, meta_prompt, record):
+    return f"Reject the record if any field is compound or not stated in the source. Record:\n{record}"
+```
+
+Copy `examples/job_extraction_prompts.py` (atomic fields + omit-when-absent + strict critic) or
+`examples/ecommerce_search_extraction_prompts.py` (per-row varying schema) as a working starting
+point rather than writing from scratch.
+
 ## Guardrails (never violate)
 
 - **Smoke with `"fake"` before any real call.** It's free and offline; it catches schema and
@@ -161,8 +208,16 @@ Copy from `template.yaml`; change only these per the task. Don't ask about any o
 
 - Config mechanics + every field: `CONFIG.md`, `examples/template.yaml`.
 - Architecture, hard constraints, behaviors, debugging: `AGENTS.md`.
-- Prompt-module pattern for atomic fields / absent-field policy / per-row schema:
-  `examples/job_extraction_prompts.py`, `examples/ecommerce_search_extraction_prompts.py`.
-- Worked examples: `examples/basic_qa.yaml` (fake smoke), `examples/cat_stories_freetext.yaml`
-  (free-text), `examples/query_extraction_gemini.yaml`, `examples/job_extraction.yaml`,
-  `examples/ecommerce_search_extraction.yaml`.
+- **`examples/` — copy the closest one to start.** Pick by task and adapt rather than writing config
+  from a blank file:
+
+  | Example | Copy it when the task is… |
+  |---|---|
+  | `basic_qa.yaml` | a quick fake-model smoke test / simplest schema run |
+  | `template.yaml` | you want every knob visible at its default to fill in |
+  | `cat_stories_freetext.yaml` | free-text generation (`schema: null`), no JSON |
+  | `query_extraction_gemini.yaml` | NL query → structured JSON, fixed schema |
+  | `job_extraction.yaml` + `job_extraction_prompts.py` | text → atomic JSON, **omit-when-absent**, strict critic (the prompt-module reference) |
+  | `ecommerce_search_extraction.yaml` + `ecommerce_search_extraction_prompts.py` | extraction with a **per-row varying schema** |
+
+  The `*_prompts.py` files are the worked references for the custom-prompts section above.
