@@ -2,7 +2,7 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
-from syndata.evaluate import (
+from simula.evaluate import (
     _complexity_schedule,
     coverage_aware_trim,
     coverage_report,

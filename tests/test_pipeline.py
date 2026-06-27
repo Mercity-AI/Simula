@@ -4,12 +4,12 @@ import asyncio
 import pytest
 import yaml
 
-from syndata.cli import main
-from syndata.config import load_config
-from syndata.generate import _generate_one_safe, generate_dataset
-from syndata.models import ModelRouter
-from syndata.utils import artifact_path, read_jsonl
-from syndata.taxonomy import build_strategies, build_taxonomy, sample_mix
+from simula.cli import main
+from simula.config import load_config
+from simula.generate import _generate_one_safe, generate_dataset
+from simula.models import ModelRouter
+from simula.utils import artifact_path, read_jsonl
+from simula.taxonomy import build_strategies, build_taxonomy, sample_mix
 
 
 def write_config(tmp_path: Path, extra: dict | None = None) -> Path:
@@ -68,7 +68,7 @@ def test_sampling_override_is_logged_in_llm_calls(tmp_path: Path) -> None:
 
 
 def test_malformed_json_repair_path(tmp_path: Path) -> None:
-    from syndata.generate import _make_record
+    from simula.generate import _make_record
 
     class RepairRouter:
         def __init__(self) -> None:
@@ -205,7 +205,7 @@ def test_resume_rejects_changed_config(tmp_path: Path) -> None:
 
 
 def test_flush_logs_reports_write_failures(tmp_path: Path, capsys, monkeypatch) -> None:
-    import syndata.models as models_mod
+    import simula.models as models_mod
 
     def boom(*args, **kwargs):
         raise OSError("disk full")
@@ -258,7 +258,7 @@ def test_generation_concurrency_is_bounded(tmp_path: Path) -> None:
 
 
 def test_evaluate_writes_its_own_artifact_and_preserves_final(tmp_path: Path) -> None:
-    from syndata.evaluate import run_evaluation
+    from simula.evaluate import run_evaluation
 
     cfg = load_config(write_config(tmp_path))
     router = ModelRouter(cfg.data)

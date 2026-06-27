@@ -13,7 +13,7 @@ The global YAML schema validates the envelope (schema/text/extraction) and leave
 overrides supply the real task rules the loose envelope cannot express: narrow atomic
 fields, faithful (non-hallucinated) extraction, omit-when-absent, and strict critique.
 
-Only the parameter *names* must match the built-ins in syndata/prompts.py.
+Only the parameter *names* must match the built-ins in simula/prompts.py.
 """
 
 from __future__ import annotations

@@ -6,7 +6,7 @@ Completed work, newest first. Forward-looking items live in the root `TODO.md`.
 
 A larger sanctioned refactor landed (60 tests pass).
 
-- **Pydantic config.** `syndata/data_models.py` holds the config models (single source of defaults +
+- **Pydantic config.** `simula/data_models.py` holds the config models (single source of defaults +
   validation) and `TaskType`. `config.py` shrank to YAML load + Pydantic validate + schema-subset
   check + the missing-key warning. `cfg.data` is now a derived `model_dump()` view, not a
   hand-merged dict. Deleted `_deep_merge`/`_section`/`_parse_sections`/`default_config`/the
@@ -15,7 +15,7 @@ A larger sanctioned refactor landed (60 tests pass).
   `provider` block (`base_url`/`api_key_env`/`timeout_seconds`). `ModelRouter` uses one shared client.
 - **.env-only keys.** `resolve_api_key` reads the project-root `.env` directly (`dotenv_values`); a
   shell export is ignored. No `os.getenv`, no two-location load.
-- **rich logging.** `syndata/console.py` routes human-facing status/warnings/the review prompt;
+- **rich logging.** `simula/console.py` routes human-facing status/warnings/the review prompt;
   `llm_calls.jsonl` stays plain JSONL.
 - **Retry classification.** Fail fast on 4xx (except 408/409/429), retry transport/5xx/429.
 - **Pile A done.** `_critic_loop` schema-free branches consolidated; `_generate_one_safe` flattened.
@@ -61,7 +61,7 @@ were *deferred* remain open in `TODO.md`.)
 
 Runs can point at a Python prompt module from config (`prompts.module: "config/prompts.py"`). The
 module may override any subset of built-in prompt functions plus `SYSTEM_JSON` and `SYSTEM_TEXT`;
-missing overrides fall back to the built-ins in `syndata/prompts.py`. The loader resolves paths
+missing overrides fall back to the built-ins in `simula/prompts.py`. The loader resolves paths
 relative to the YAML file and validates imports, string system prompts, and compatible function
 signatures during config loading. Python modules (not text templates) so advanced users can
 customize prompt-building logic, not only wording.
@@ -75,7 +75,7 @@ to `null` (built-in prompt unchanged); `validate` rejects non-string guidance.
 ### Per-task sampling overrides
 
 Decoding params are no longer static per role. `sampling.tasks` maps a task name to a decoding-param
-mapping, and `resolve_sampling` in `syndata/models.py` layers built-in defaults <- `models.<role>`
+mapping, and `resolve_sampling` in `simula/models.py` layers built-in defaults <- `models.<role>`
 static <- `sampling.tasks[task]`. OpenAI-compatible params go top-level; provider-specific ones
 (`min_p`, `top_k`, `repetition_penalty`, …) pass through `extra_body`. Resolution is pure (safe under
 concurrent workers); resolved params are logged per call. `validate` rejects unknown task names and

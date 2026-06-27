@@ -1,11 +1,11 @@
 ---
 name: generate-dataset
-description: Use when the user wants to generate a synthetic dataset with this repo (syndata) — e.g. "make me an extraction dataset", "generate ~5k QA pairs", "build training data for X". Walks the user through it asking only what dataset and how much, deciding the rest from baked-in defaults and surfacing only the few high-leverage choices.
+description: Use when the user wants to generate a synthetic dataset with this repo (simula) — e.g. "make me an extraction dataset", "generate ~5k QA pairs", "build training data for X". Walks the user through it asking only what dataset and how much, deciding the rest from baked-in defaults and surfacing only the few high-leverage choices.
 ---
 
-# Generate a dataset with syndata
+# Generate a dataset with simula
 
-You are driving `syndata` for a user who wants a dataset, not a config tutorial. This skill
+You are driving `simula` for a user who wants a dataset, not a config tutorial. This skill
 encodes the judgment so you can do almost all of it yourself. **Read `AGENTS.md` once** for the
 architecture and hard constraints; this file is the *process and decision* layer on top of it.
 
@@ -51,10 +51,10 @@ re-derive defaults — copy the template and change only what the decisions belo
    task needs atomic fields / an absent-field policy / a varying schema, also write
    `examples/<name>_prompts.py` (model after `examples/job_extraction_prompts.py` or
    `examples/ecommerce_search_extraction_prompts.py`).
-2. **Validate.** `python -m syndata.cli validate examples/<name>.yaml` — catches config/schema/
+2. **Validate.** `python -m simula.cli validate examples/<name>.yaml` — catches config/schema/
    prompt-module errors with zero model calls. Always do this before anything real.
 3. **Smoke test, free.** Set every model role to `"fake"` and run
-   `python -m syndata.cli run examples/<name>.yaml`. This is offline and deterministic — it proves
+   `python -m simula.cli run examples/<name>.yaml`. This is offline and deterministic — it proves
    the pipeline, schema, lineage, and prompt module work end to end before spending a cent. Inspect
    the artifacts in `runs/<name>/` (especially row shape and `taxonomy_mix`).
 4. **Pilot, real (gate: spend + key).** Switch roles to real models, set `generation.target_size`
@@ -150,7 +150,7 @@ Copy from `template.yaml`; change only these per the task. Don't ask about any o
 - **No real model calls without explicit user go-ahead** (spend gate) and a key in root `.env`.
   Never put a real API key in a YAML — only `api_key_env`.
 - **Don't commit** `runs/`, `.env`, or `llm_calls.jsonl` (prompts/responses can be sensitive).
-- **Check it actually worked.** After a real run, read the accept rate — `syndata` can finish
+- **Check it actually worked.** After a real run, read the accept rate — `simula` can finish
   *below* target silently if the accept rate is low. If `len(final) < target`, say so and either
   raise `overgenerate_ratio` or investigate rejections in `dataset.raw.jsonl`. Confirm
   `taxonomy_mix` is non-empty on rows (lineage) and that fields are atomic.

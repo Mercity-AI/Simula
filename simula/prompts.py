@@ -71,7 +71,7 @@ def _prompt_module_ref(prompt_config: Any) -> str | None:
 
 def _load_module(module_path: Path) -> ModuleType:
     digest = hashlib.sha1(str(module_path).encode("utf-8")).hexdigest()[:12]
-    spec = importlib.util.spec_from_file_location(f"syndata_user_prompts_{digest}", module_path)
+    spec = importlib.util.spec_from_file_location(f"simula_user_prompts_{digest}", module_path)
     if spec is None or spec.loader is None:
         raise ValueError(f"Could not load prompt module: {module_path}")
     module = importlib.util.module_from_spec(spec)

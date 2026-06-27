@@ -20,7 +20,7 @@ try:
 except ImportError as exc:  # pragma: no cover - exercised only without the optional extra installed.
     raise ImportError(
         "Embedding diversity needs the optional deps (numpy, scikit-learn, sentence-transformers). "
-        "Install them with: pip install 'syndata[diversity]'"
+        "Install them with: pip install 'simula[diversity]'"
     ) from exc
 
 from .console import info

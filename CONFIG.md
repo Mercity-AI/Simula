@@ -1,9 +1,9 @@
 # Config Reference
 
-Every `syndata` run is driven by one YAML file. This document explains every field: what it does,
+Every `simula` run is driven by one YAML file. This document explains every field: what it does,
 its default, and when it matters. It is the human-facing companion to two other sources:
 
-- `syndata/data_models.py` is the **single source of truth** — Pydantic defines defaults, bounds, and
+- `simula/data_models.py` is the **single source of truth** — Pydantic defines defaults, bounds, and
   validation. If this doc and the models ever disagree, the models win.
 - `examples/template.yaml` is a **copy-me skeleton** with every key set to its default and a one-line
   comment each. Copy it, edit, and point the CLI at it.
@@ -80,7 +80,7 @@ See README → *Prompt Overrides* for the function-signature rules.
 
 ## `taxonomy`
 
-Knobs for the breadth-first taxonomy build (`syndata taxonomy`).
+Knobs for the breadth-first taxonomy build (`simula taxonomy`).
 
 | Key | Default | What it does |
 |---|---|---|
@@ -135,7 +135,7 @@ sampling:
 
 ## `generation`
 
-Volume and behavior of the generation pass (`syndata generate`).
+Volume and behavior of the generation pass (`simula generate`).
 
 | Key | Default | What it does |
 |---|---|---|
@@ -154,7 +154,7 @@ prompts/sampling/taxonomy) invalidates resume and requires `--no-resume`.
 
 ## `evaluation`
 
-What `syndata evaluate` / `run` compute. Reads `dataset.final.jsonl`, writes
+What `simula evaluate` / `run` compute. Reads `dataset.final.jsonl`, writes
 `dataset.evaluated.jsonl` + `eval_report.json` — it never rewrites `final`.
 
 | Key | Default | What it does | Extra model calls? |
@@ -174,7 +174,7 @@ What `syndata evaluate` / `run` compute. Reads `dataset.final.jsonl`, writes
 
 ### `evaluation.diversity`
 
-Embedding-based diversity. Off by default; needs the extra: `pip install 'syndata[diversity]'`
+Embedding-based diversity. Off by default; needs the extra: `pip install 'simula[diversity]'`
 (numpy / scikit-learn / sentence-transformers). Embeddings are cached under the run dir and reused.
 
 | Key | Default | What it does |

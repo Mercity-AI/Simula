@@ -2,9 +2,9 @@ from pathlib import Path
 
 import numpy as np
 
-from syndata import diversity
-from syndata.diversity import embedding_diversity
-from syndata.utils import record_to_text
+from simula import diversity
+from simula.diversity import embedding_diversity
+from simula.utils import record_to_text
 
 
 def _fake_embed(model_name: str, texts: list[str]):

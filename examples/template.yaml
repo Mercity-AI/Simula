@@ -1,5 +1,5 @@
-# syndata config template. Copy this, edit, and point the CLI at it. Every value shown is the
-# built-in default (defined in syndata/data_models.py) unless noted — omit a key to accept its
+# simula config template. Copy this, edit, and point the CLI at it. Every value shown is the
+# built-in default (defined in simula/data_models.py) unless noted — omit a key to accept its
 # default, override only what you need. Required keys: `description` and a model id per role.
 # Comments here are one-liners; see CONFIG.md for the full per-field reference.
 
@@ -75,7 +75,7 @@ evaluation:
   complexity_samples_per_item: 2  # shuffled batches each record appears in (more = stabler, pricier)
   decontaminate_against: []    # paths to reference/test JSONL to drop overlapping rows against
   diversity:
-    enabled: false             # embedding diversity; needs `pip install 'syndata[diversity]'`
+    enabled: false             # embedding diversity; needs `pip install 'simula[diversity]'`
     embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
     k_local: 10                # nearest neighbours for the local-diversity metric
     sample_cap: 1000           # max rows embedded; beyond this a random subset is scored

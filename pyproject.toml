@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "syndata"
+name = "simula"
 version = "0.1.0"
 description = "Schema-driven synthetic data generator inspired by reasoning-first taxonomy coverage."
 requires-python = ">=3.11"
@@ -24,13 +24,13 @@ diversity = [
   "sentence-transformers>=2.7.0",
 ]
 dev = [
-  "syndata[diversity]",
+  "simula[diversity]",
   "pytest>=8.0.0",
   "pytest-asyncio>=0.23.0",
 ]
 
 [project.scripts]
-syndata = "syndata.cli:main"
+simula = "simula.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["syndata*"]
+include = ["simula*"]

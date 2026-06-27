@@ -8,7 +8,7 @@ constraints in `AGENTS.md`.
 
 Prompt-level `strategy.guidance` (done) is a nudge, not a guarantee. If users need hard control,
 consider small compact config knobs that plug into `sample_mix`/`choose_strategy` in
-`syndata/taxonomy.py`:
+`simula/taxonomy.py`:
 
 - leaf-only sampling
 - explicit per-branch weights

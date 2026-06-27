@@ -14,7 +14,7 @@ envelope cannot express: narrow ATOMIC fields ready for a DB query, faithful
 (non-hallucinated) extraction, length/size variation (3..20 fields), optional one-
 level nesting for naturally grouped facts, and a strict critic.
 
-Only the parameter *names* must match the built-ins in syndata/prompts.py.
+Only the parameter *names* must match the built-ins in simula/prompts.py.
 """
 
 from __future__ import annotations

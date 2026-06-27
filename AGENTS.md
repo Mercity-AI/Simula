@@ -8,7 +8,7 @@ the user in. It builds on this file.
 
 ## Project Purpose
 
-`syndata` is a compact Python CLI for schema-driven or free-text synthetic data generation. It builds taxonomies, samples taxonomy-conditioned mixes, asks an OpenAI-compatible model to generate records, critiques/refines them, and writes auditable JSON/JSONL artifacts.
+`simula` is a compact Python CLI for schema-driven or free-text synthetic data generation. It builds taxonomies, samples taxonomy-conditioned mixes, asks an OpenAI-compatible model to generate records, critiques/refines them, and writes auditable JSON/JSONL artifacts.
 
 The project is intentionally small. Prefer clear, boring code over architectural ceremony.
 
@@ -16,17 +16,17 @@ The project is intentionally small. Prefer clear, boring code over architectural
 
 Core package:
 
-- `syndata/cli.py`: CLI command dispatch for `validate`, `taxonomy`, `generate`, `evaluate`, and `run`.
-- `syndata/data_models.py`: Pydantic config models (the single source of defaults + validation) and the `TaskType` enum naming every model-call site. Import-leaf (no syndata imports) so config/models/generate can all use it without cycles.
-- `syndata/config.py`: YAML loading, Pydantic validation/defaults, `.env`-only API-key resolution (`resolve_api_key`), JSON Schema subset checks. `load_config` returns the validated `Config`; `cfg.data` is its derived dict view.
-- `syndata/console.py`: rich-based human-facing console output — the run header, phase markers (`phase`), indeterminate-phase spinners (`spinner`), the generation progress bar (`track`), and the taxonomy build logger (`taxonomy_logger` returning a `TaxonomyLogger`: a live-growing tree or flat `light` breadcrumbs, chosen by `taxonomy.log_style`), plus warnings and the taxonomy review prompt. This is the single progress system (rich, no tqdm dependency); only one live display runs at a time, so phases stay sequential (e.g. the taxonomy tree closes before the review prompt). On a TTY displays render live; off a TTY the tree prints once on close and spinners/bars fall back to plain lines; `--quiet` keeps phase markers + summary but renders no live display. Separate from the machine-readable `llm_calls.jsonl` audit log.
-- `syndata/models.py`: single-provider OpenAI-compatible router (`ModelRouter`, one shared client), fake model, retry classification, per-task sampling resolution (`resolve_sampling`), live `llm_calls.jsonl` logging.
-- `syndata/prompts.py`: built-in prompt templates, the global English/JSON system instruction, and the prompt-module override loader (`PromptSet`, `load_prompt_set`).
-- `syndata/taxonomy.py`: factor discovery, breadth-first taxonomy expansion, review modes, strategy creation, strategy-aware sampling.
-- `syndata/generate.py`: generation orchestration, meta-prompts, complexification, JSON generation/repair, critic/refine loop, concurrent workers, final trimming.
-- `syndata/evaluate.py`: schema validation, dedupe, coverage reports, coverage-aware trimming, optional complexity scoring.
-- `syndata/diversity.py`: optional embedding-based diversity scoring used by evaluation (deps live in the `[diversity]` extra; imported lazily only when diversity is enabled).
-- `syndata/utils.py`: artifact names, JSON/JSONL helpers, timestamps, JSON extraction, record-to-text, checkpoint helpers, and `summarize_cost` (written to `cost_summary.json`).
+- `simula/cli.py`: CLI command dispatch for `validate`, `taxonomy`, `generate`, `evaluate`, and `run`.
+- `simula/data_models.py`: Pydantic config models (the single source of defaults + validation) and the `TaskType` enum naming every model-call site. Import-leaf (no simula imports) so config/models/generate can all use it without cycles.
+- `simula/config.py`: YAML loading, Pydantic validation/defaults, `.env`-only API-key resolution (`resolve_api_key`), JSON Schema subset checks. `load_config` returns the validated `Config`; `cfg.data` is its derived dict view.
+- `simula/console.py`: rich-based human-facing console output — the run header, phase markers (`phase`), indeterminate-phase spinners (`spinner`), the generation progress bar (`track`), and the taxonomy build logger (`taxonomy_logger` returning a `TaxonomyLogger`: a live-growing tree or flat `light` breadcrumbs, chosen by `taxonomy.log_style`), plus warnings and the taxonomy review prompt. This is the single progress system (rich, no tqdm dependency); only one live display runs at a time, so phases stay sequential (e.g. the taxonomy tree closes before the review prompt). On a TTY displays render live; off a TTY the tree prints once on close and spinners/bars fall back to plain lines; `--quiet` keeps phase markers + summary but renders no live display. Separate from the machine-readable `llm_calls.jsonl` audit log.
+- `simula/models.py`: single-provider OpenAI-compatible router (`ModelRouter`, one shared client), fake model, retry classification, per-task sampling resolution (`resolve_sampling`), live `llm_calls.jsonl` logging.
+- `simula/prompts.py`: built-in prompt templates, the global English/JSON system instruction, and the prompt-module override loader (`PromptSet`, `load_prompt_set`).
+- `simula/taxonomy.py`: factor discovery, breadth-first taxonomy expansion, review modes, strategy creation, strategy-aware sampling.
+- `simula/generate.py`: generation orchestration, meta-prompts, complexification, JSON generation/repair, critic/refine loop, concurrent workers, final trimming.
+- `simula/evaluate.py`: schema validation, dedupe, coverage reports, coverage-aware trimming, optional complexity scoring.
+- `simula/diversity.py`: optional embedding-based diversity scoring used by evaluation (deps live in the `[diversity]` extra; imported lazily only when diversity is enabled).
+- `simula/utils.py`: artifact names, JSON/JSONL helpers, timestamps, JSON extraction, record-to-text, checkpoint helpers, and `summarize_cost` (written to `cost_summary.json`).
 
 Examples:
 
@@ -67,7 +67,7 @@ Generated artifacts:
 - Add comments around logical blocks in orchestration code, especially generation and taxonomy expansion.
 - Every major logical block in `config.py`, `models.py`, `generate.py`, `taxonomy.py`, and `evaluate.py` should have a short orienting comment. Do not comment obvious assignments.
 - Do not over-comment obvious assignments.
-- Keep built-in prompt changes in `syndata/prompts.py`; use configured prompt modules for per-run overrides.
+- Keep built-in prompt changes in `simula/prompts.py`; use configured prompt modules for per-run overrides.
 - Keep schema/task behavior in YAML config where possible.
 - Use deterministic fake-model tests for behavior that should not require network access.
 - When adding network/model behavior, ensure tests still pass offline.
@@ -77,8 +77,8 @@ Generated artifacts:
 Use these from the repository root:
 
 ```bash
-python -m syndata.cli validate examples/basic_qa.yaml
-python -m syndata.cli run examples/basic_qa.yaml
+python -m simula.cli validate examples/basic_qa.yaml
+python -m simula.cli run examples/basic_qa.yaml
 pytest -q
 ```
 
@@ -88,15 +88,15 @@ For real OpenRouter-compatible runs, put the key named by `provider.api_key_env`
 
 ```bash
 echo 'OPENROUTER_API_KEY=...' > .env   # gitignored, auto-loaded
-python -m syndata.cli taxonomy examples/query_extraction_gemini.yaml
-python -m syndata.cli generate examples/query_extraction_gemini.yaml
+python -m simula.cli taxonomy examples/query_extraction_gemini.yaml
+python -m simula.cli generate examples/query_extraction_gemini.yaml
 ```
 
 Do not run real model calls unless the user explicitly asks. They cost money and can take time.
 
 ## Config Contract
 
-**Source of truth:** the Pydantic models in `syndata/data_models.py` (defaults are field defaults).
+**Source of truth:** the Pydantic models in `simula/data_models.py` (defaults are field defaults).
 `examples/template.yaml` is the copy-me skeleton; `CONFIG.md` is the full per-field human reference;
 `README.md` carries the prose for prompt overrides, strategy guidance, sampling layering, and the
 schema subset. Do not re-list fields here — change them in `data_models.py` and update
@@ -117,20 +117,20 @@ The invariants an agent must preserve (these are not written down in the field t
   real run has no resolvable key. `validate` makes no model calls.
 - Per-role `models.<role>` carries `model` (`"fake"` runs offline), decoding params, and `extra_body`
   (provider pass-through — set `{reasoning: {effort: low, exclude: true}}` here for reasoning models;
-  there is no model-id auto-detection). `resolve_sampling` in `syndata/models.py` layers built-in
+  there is no model-id auto-detection). `resolve_sampling` in `simula/models.py` layers built-in
   defaults <- `models.<role>` static <- `sampling.tasks[task]`, then splits OpenAI-compatible params
   (top-level kwargs) from provider-specific ones (`extra_body`). It is a pure function — keep it that
   way so it is safe under concurrent workers. Named policies / attempt schedules were intentionally
   not built; run the CLI twice for a temperature spread.
 
 The supported JSON Schema subset is documented in `README.md` (§Schema Support) and enforced in
-`syndata/config.py`. If you extend it, update `syndata/config.py`, the tests, and `README.md`.
+`simula/config.py`. If you extend it, update `simula/config.py`, the tests, and `README.md`.
 
 ## Artifact Contract
 
-Artifact filenames are defined in `syndata/utils.py` and explained for users in `README.md`
+Artifact filenames are defined in `simula/utils.py` and explained for users in `README.md`
 (§Artifacts) — that is the canonical list; do not duplicate it here. The generated dataset row shape
-is also documented in `README.md` (§Artifacts) and written by the generator in `syndata/generate.py`.
+is also documented in `README.md` (§Artifacts) and written by the generator in `simula/generate.py`.
 
 The invariant: the row shape (`id`, `attempt_index`, `record`, `output_format`, `taxonomy_mix`,
 `strategy_id`, `meta_prompt`, `complexified`, `generator_model`, `critic_verdicts`, `schema_valid`,

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from syndata.utils import append_jsonl, ngrams_for_text, read_jsonl, record_to_text
+from simula.utils import append_jsonl, ngrams_for_text, read_jsonl, record_to_text
 
 
 def test_jsonl_roundtrip(tmp_path: Path) -> None:

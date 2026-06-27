@@ -1,4 +1,4 @@
-from syndata.models import resolve_sampling
+from simula.models import resolve_sampling
 
 
 def _config(role_cfg: dict, sampling: dict | None = None) -> dict:

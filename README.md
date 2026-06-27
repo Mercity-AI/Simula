@@ -8,11 +8,12 @@
   <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-blue">
   <img alt="Status" src="https://img.shields.io/badge/status-pilot-orange">
   <img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen">
+  <a href="https://github.com/Mercity-AI"><img alt="Built by Mercity" src="https://img.shields.io/badge/built%20by-Mercity-1f6feb"></a>
 </p>
 
-# syndata
+# simula
 
-`syndata` is a small CLI-first framework for generating schema-shaped or free-text synthetic datasets with taxonomy-guided coverage. It is inspired by the Simula-style workflow: map the conceptual space first, sample from that space, generate records, critique them, preserve lineage, and then trim/evaluate the result.
+`simula` is a small CLI-first framework for generating schema-shaped or free-text synthetic datasets with taxonomy-guided coverage. It is inspired by the Simula-style workflow: map the conceptual space first, sample from that space, generate records, critique them, preserve lineage, and then trim/evaluate the result.
 
 The current implementation is intentionally lean. It uses JSON/YAML files, OpenAI-compatible chat endpoints, JSON Schema validation, and human-inspectable artifacts.
 
@@ -46,7 +47,7 @@ python -m pip install -e ".[diversity]"
 You can also run the CLI without installing:
 
 ```bash
-python -m syndata.cli validate examples/basic_qa.yaml
+python -m simula.cli validate examples/basic_qa.yaml
 ```
 
 ## Quick Start
@@ -54,7 +55,7 @@ python -m syndata.cli validate examples/basic_qa.yaml
 Run the fake-model smoke test. This does not call any external API:
 
 ```bash
-python -m syndata.cli run examples/basic_qa.yaml
+python -m simula.cli run examples/basic_qa.yaml
 ```
 
 Artifacts are written to:
@@ -68,8 +69,8 @@ gitignored `.env` file at the project root:
 
 ```bash
 echo 'OPENROUTER_API_KEY=sk-or-...' > .env   # gitignored; the only source of API keys
-python -m syndata.cli taxonomy examples/query_extraction_gemini.yaml
-python -m syndata.cli generate examples/query_extraction_gemini.yaml
+python -m simula.cli taxonomy examples/query_extraction_gemini.yaml
+python -m simula.cli generate examples/query_extraction_gemini.yaml
 ```
 
 Key resolution: the project-root `.env` file is read directly (via `dotenv_values`) and is the
@@ -88,25 +89,25 @@ through the OpenRouter-compatible API.
 ## CLI Commands
 
 ```bash
-syndata validate CONFIG.yaml
+simula validate CONFIG.yaml
 ```
 
 Validates the YAML config, JSON Schema subset, model role config, and output path. It makes no model calls.
 
 ```bash
-syndata taxonomy CONFIG.yaml
+simula taxonomy CONFIG.yaml
 ```
 
 Builds `taxonomy.json` and, depending on `taxonomy.review_mode`, either accepts it automatically or lets the user review it.
 
 ```bash
-syndata generate CONFIG.yaml
+simula generate CONFIG.yaml
 ```
 
 Loads or builds the taxonomy, builds strategies if missing, generates data, validates records, runs critic/refine, and writes dataset artifacts. It does not run evaluation.
 
 ```bash
-syndata evaluate CONFIG.yaml
+simula evaluate CONFIG.yaml
 ```
 
 Runs dedupe, coverage, and optional complexity scoring. It reads `dataset.final.jsonl` and writes
@@ -114,7 +115,7 @@ the deduped/decontaminated result to a separate `dataset.evaluated.jsonl` (it ne
 `dataset.final.jsonl`), plus `eval_report.json`.
 
 ```bash
-syndata run CONFIG.yaml
+simula run CONFIG.yaml
 ```
 
 Runs taxonomy, generation, and evaluation end to end.
@@ -159,7 +160,7 @@ All model roles use the same OpenAI-compatible chat completions interface. A rol
 
 ### Prompt Overrides
 
-Built-in prompt defaults live in `syndata/prompts.py`. To override them for one run, point config at a Python module:
+Built-in prompt defaults live in `simula/prompts.py`. To override them for one run, point config at a Python module:
 
 ```yaml
 prompts:
@@ -185,7 +186,7 @@ Return JSON with a strategies array.
 """.strip()
 ```
 
-Override functions must keep the same parameter names as their built-in counterparts in `syndata/prompts.py`. `syndata validate` imports the module and rejects missing files, import failures, non-string system prompts, and incompatible function signatures before any model call runs.
+Override functions must keep the same parameter names as their built-in counterparts in `simula/prompts.py`. `simula validate` imports the module and rejects missing files, import failures, non-string system prompts, and incompatible function signatures before any model call runs.
 
 ### Strategy Guidance
 
@@ -236,7 +237,7 @@ models:
     extra_body: {reasoning: {effort: low, exclude: true}}
 ```
 
-`syndata validate` rejects unknown task names and non-numeric values before any model call runs. With no `sampling` block, behavior is unchanged except the larger default `max_tokens`. That 32K default is batteries-included: roles without an explicit `max_tokens` can now emit much larger (and pricier) completions than before — set `models.<role>.max_tokens` or a per-task `max_tokens` to cap it.
+`simula validate` rejects unknown task names and non-numeric values before any model call runs. With no `sampling` block, behavior is unchanged except the larger default `max_tokens`. That 32K default is batteries-included: roles without an explicit `max_tokens` can now emit much larger (and pricier) completions than before — set `models.<role>.max_tokens` or a per-task `max_tokens` to cap it.
 
 ### Schema Support
 
@@ -337,14 +338,14 @@ Run it in two phases if you want to inspect the taxonomy before spending generat
 
 ```bash
 export OPENROUTER_API_KEY="..."
-python -m syndata.cli taxonomy examples/query_extraction_gemini.yaml
-python -m syndata.cli generate examples/query_extraction_gemini.yaml
+python -m simula.cli taxonomy examples/query_extraction_gemini.yaml
+python -m simula.cli generate examples/query_extraction_gemini.yaml
 ```
 
 Evaluation is separate:
 
 ```bash
-python -m syndata.cli evaluate examples/query_extraction_gemini.yaml
+python -m simula.cli evaluate examples/query_extraction_gemini.yaml
 ```
 
 For diversity in JSON mode, set `evaluation.diversity.text_field` to a dotted field path such as `query` or `extraction.intent` to embed a specific field instead of the full JSON blob (a leading `$.` is accepted too). This is plain nested-key access, not full JSONPath. Embeddings are cached under the run directory and reused on later `evaluate` runs.
@@ -381,5 +382,5 @@ Current test coverage includes:
 - Keep generated outputs under `runs/`; it is gitignored.
 - Avoid committing API keys or local `.env` files.
 - Prefer editing example YAMLs rather than hardcoding task-specific behavior.
-- Keep built-in prompt defaults centralized in `syndata/prompts.py`; use prompt modules for per-run overrides.
+- Keep built-in prompt defaults centralized in `simula/prompts.py`; use prompt modules for per-run overrides.
 - Use `llm_calls.jsonl` when debugging model behavior.

@@ -1,6 +1,6 @@
 # Testing Notes — Data Extraction Dataset (~1K rows)
 
-Goal: build a ~1,000-row **text → narrow neat JSON** extraction dataset using `syndata`,
+Goal: build a ~1,000-row **text → narrow neat JSON** extraction dataset using `simula`,
 with `deepseek/deepseek-v4-pro` for every model role (strategic, bulk, critic).
 
 Design principle the user emphasized: **fields must be narrow/atomic**.

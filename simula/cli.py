@@ -35,7 +35,7 @@ def _run_header(cfg, resume: bool) -> None:
 
 
 async def _main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="syndata", description="Schema-driven synthetic data generator.")
+    parser = argparse.ArgumentParser(prog="simula", description="Schema-driven synthetic data generator.")
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("validate", "taxonomy", "generate", "evaluate", "run"):
         cmd = sub.add_parser(name)

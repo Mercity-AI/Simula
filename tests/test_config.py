@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from syndata.config import load_config, validate_schema_subset
+from simula.config import load_config, validate_schema_subset
 
 
 def _fake_models() -> dict:
@@ -28,14 +28,14 @@ def _write_config(tmp_path: Path, extra: dict | None = None) -> Path:
 
 
 def test_env_key_read_from_project_root_only(tmp_path: Path, monkeypatch) -> None:
-    from syndata.config import resolve_api_key
+    from simula.config import resolve_api_key
 
     monkeypatch.chdir(tmp_path)
-    (tmp_path / ".env").write_text("SYNDATA_TEST_ENV_KEY_XYZ=secret-123\n", encoding="utf-8")
-    assert resolve_api_key("SYNDATA_TEST_ENV_KEY_XYZ") == "secret-123"
+    (tmp_path / ".env").write_text("SIMULA_TEST_ENV_KEY_XYZ=secret-123\n", encoding="utf-8")
+    assert resolve_api_key("SIMULA_TEST_ENV_KEY_XYZ") == "secret-123"
     # A shell-exported variable is deliberately ignored: only the project-root .env file is read.
-    monkeypatch.setenv("SYNDATA_NOT_IN_ENV_FILE", "from-shell")
-    assert resolve_api_key("SYNDATA_NOT_IN_ENV_FILE") is None
+    monkeypatch.setenv("SIMULA_NOT_IN_ENV_FILE", "from-shell")
+    assert resolve_api_key("SIMULA_NOT_IN_ENV_FILE") is None
 
 
 def test_null_section_falls_back_to_defaults(tmp_path: Path) -> None:
@@ -60,7 +60,7 @@ def test_missing_api_key_warns_but_does_not_fail(tmp_path: Path, capsys, monkeyp
     cfg = load_config(
         _write_config(
             tmp_path,
-            {"provider": {"base_url": "https://example", "api_key_env": "SYNDATA_DEFINITELY_MISSING_KEY"}, "models": real_models},
+            {"provider": {"base_url": "https://example", "api_key_env": "SIMULA_DEFINITELY_MISSING_KEY"}, "models": real_models},
         )
     )  # must not raise
     assert cfg.data["models"]["bulk"]["model"] == "vendor/real-model"
