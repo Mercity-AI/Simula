@@ -92,101 +92,46 @@ Do not run real model calls unless the user explicitly asks. They cost money and
 
 ## Config Contract
 
-Config is defined and validated by the Pydantic models in `syndata/data_models.py`; defaults live
-there as field defaults (a documented `examples/template.yaml` shows every key, and `CONFIG.md` is
-the full per-field human reference — keep both in sync when changing the contract). Sections:
+**Source of truth:** the Pydantic models in `syndata/data_models.py` (defaults are field defaults).
+`examples/template.yaml` is the copy-me skeleton; `CONFIG.md` is the full per-field human reference;
+`README.md` carries the prose for prompt overrides, strategy guidance, sampling layering, and the
+schema subset. Do not re-list fields here — change them in `data_models.py` and update
+`template.yaml` + `CONFIG.md` to match.
 
-- `project`: `name`, `output_dir`, `seed`
-- `description`: dataset description (required, non-empty)
-- `schema`: JSON Schema subset, or `null`/omitted for free-text generation
-- `provider`: `base_url`, `api_key_env`, `timeout_seconds` — one OpenAI-compatible endpoint for all roles
-- `models`: `strategic`, `bulk`, `critic`, each a `model` id plus optional decoding params/`extra_body`
-- `prompts`: optional Python prompt module override
-- `taxonomy`: depth/factors/review behavior
-- `strategy`: optional free-text `guidance` woven into the strategy prompt
-- `sampling`: optional per-task decoding overrides under `sampling.tasks`
-- `generation`: target size, overgeneration, complexity ratio, refine attempts, concurrency
-- `evaluation`: dedupe, coverage, complexity
+The invariants an agent must preserve (these are not written down in the field tables):
 
-Read typed fields off the validated model (`cfg.generation.target_size`, `cfg.provider.base_url`,
-`cfg.schema`, …); `cfg.data` is a derived dict view (`model_dump`) for the few dict consumers
-(`ModelRouter`, `resolve_sampling`, the resume fingerprint). Pydantic enforces non-empty description,
-a `model` per role, valid `review_mode`/`coverage_mode`, and positive/in-range generation + taxonomy
-knobs (a bad `target_size`/`overgenerate_ratio`/`concurrency` fails at load with a `ValueError`, not as
-a silent zero-row run). `load_config` also prints a non-fatal stderr warning when a real run has no
-resolvable API key in `.env`. `validate` makes no model calls.
+- Read typed fields off the validated model (`cfg.generation.target_size`, `cfg.provider.base_url`,
+  `cfg.schema`, …). `cfg.data` is a derived dict view (`model_dump`) kept only for the few dict
+  consumers (`ModelRouter`, `resolve_sampling`, the resume fingerprint) — do not hand-merge config.
+- Pydantic enforces non-empty description, a `model` per role, valid `review_mode`/`coverage_mode`,
+  and positive/in-range generation + taxonomy knobs, so a bad
+  `target_size`/`overgenerate_ratio`/`concurrency` fails at load with a `ValueError`, not as a silent
+  zero-row run. Keep validation in the models, not scattered through call sites.
+- Connection lives on one `provider` block (`base_url`/`api_key_env`/`timeout_seconds`) shared by all
+  roles; `api_key_env` names a variable read only from the project-root `.env`. `timeout_seconds`
+  (default 180) is the per-request timeout. `load_config` prints a non-fatal stderr warning when a
+  real run has no resolvable key. `validate` makes no model calls.
+- Per-role `models.<role>` carries `model` (`"fake"` runs offline), decoding params, and `extra_body`
+  (provider pass-through — set `{reasoning: {effort: low, exclude: true}}` here for reasoning models;
+  there is no model-id auto-detection). `resolve_sampling` in `syndata/models.py` layers built-in
+  defaults <- `models.<role>` static <- `sampling.tasks[task]`, then splits OpenAI-compatible params
+  (top-level kwargs) from provider-specific ones (`extra_body`). It is a pure function — keep it that
+  way so it is safe under concurrent workers. Named policies / attempt schedules were intentionally
+  not built; run the CLI twice for a temperature spread.
 
-Connection lives on `provider` (one endpoint shared by all roles):
-
-- `provider.base_url`
-- `provider.api_key_env` (the variable name read from the project-root `.env`)
-- `provider.timeout_seconds` (default 180; per-request timeout for real calls)
-
-Per-role fields under `models.<role>`:
-
-- `model` (required model id; `"fake"` runs offline)
-- `temperature`, `max_tokens` (default 32768 when unset), and any other decoding params
-- `extra_body` (provider pass-through; set `{reasoning: {effort: low, exclude: true}}` here for reasoning models — there is no automatic model-id detection)
-
-Per-task decoding overrides live under `sampling.tasks` (task name -> param mapping). `resolve_sampling` in `syndata/models.py` layers built-in defaults <- `models.<role>` static <- `sampling.tasks[task]`, then splits OpenAI-compatible params (top-level call kwargs) from provider-specific ones (`extra_body` pass-through). Resolution is a pure function so it is safe under concurrent workers. Named policies and attempt schedules were intentionally not built; run the CLI twice for a temperature spread.
-
-Supported schema subset:
-
-- `object`
-- `string`
-- `number`
-- `integer`
-- `boolean`
-- `array`
-- `enum`
-- `required`
-- nested `properties`
-- array `items`
-
-If extending the schema subset, update:
-
-- `syndata/config.py`
-- tests
-- README
+The supported JSON Schema subset is documented in `README.md` (§Schema Support) and enforced in
+`syndata/config.py`. If you extend it, update `syndata/config.py`, the tests, and `README.md`.
 
 ## Artifact Contract
 
-Artifact filenames live in `syndata/utils.py`:
+Artifact filenames are defined in `syndata/utils.py` and explained for users in `README.md`
+(§Artifacts) — that is the canonical list; do not duplicate it here. The generated dataset row shape
+is also documented in `README.md` (§Artifacts) and written by the generator in `syndata/generate.py`.
 
-- `taxonomy.json`
-- `strategies.json`
-- `dataset.raw.jsonl`
-- `dataset.accepted.jsonl`
-- `dataset.final.jsonl`
-- `dataset.evaluated.jsonl`
-- `eval_report.json`
-- `run_state.json`
-- `llm_calls.jsonl`
-- `cost_summary.json`
-- `embeddings.cache.npz`
-
-Generated dataset rows must keep this shape:
-
-```json
-{
-  "id": "item-0-...",
-  "attempt_index": 0,
-  "record": {},
-  "output_format": "json",
-  "taxonomy_mix": [],
-  "strategy_id": "general",
-  "meta_prompt": "...",
-  "complexified": false,
-  "generator_model": "...",
-  "critic_verdicts": [],
-  "schema_valid": true,
-  "accepted": true,
-  "rejection_reason": null,
-  "created_at": "..."
-}
-```
-
-If changing this shape, update tests, README, and any downstream code that reads JSONL artifacts.
+The invariant: the row shape (`id`, `attempt_index`, `record`, `output_format`, `taxonomy_mix`,
+`strategy_id`, `meta_prompt`, `complexified`, `generator_model`, `critic_verdicts`, `schema_valid`,
+`accepted`, `rejection_reason`, `created_at`) and the artifact filenames are a contract. If you
+change either, update the tests, `README.md`, and any downstream code that reads the JSONL artifacts.
 
 ## Important Behaviors
 

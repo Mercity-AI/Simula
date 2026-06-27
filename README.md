@@ -109,75 +109,33 @@ Runs taxonomy, generation, and evaluation end to end.
 
 ## Config Overview
 
-Each run is controlled by a single YAML file. `examples/template.yaml` is a copy-me skeleton with
-every key at its default; **`CONFIG.md` is the full per-field reference**. The essentials:
+Each run is controlled by a single YAML file. **`examples/template.yaml`** is a copy-me skeleton with
+every key at its default, and **`CONFIG.md`** is the full per-field reference. Only two things are
+required — a non-empty `description` and a `model` id for each of the three roles; everything else has
+a default, so the minimum viable config is small:
 
 ```yaml
-project:
-  name: "pilot"
-  output_dir: "runs/pilot"
-  seed: 42
-
 description: "Describe the dataset to generate."
 
-schema:
+schema:                       # omit or set null for free-text mode
   type: object
   required: ["input", "output"]
   properties:
-    input:
-      type: string
-    output:
-      type: string
+    input: { type: string }
+    output: { type: string }
 
 provider:
   base_url: "https://openrouter.ai/api/v1"
   api_key_env: "OPENROUTER_API_KEY"   # variable name read from the project-root .env
 
 models:
-  strategic:
-    model: "google/gemini-3-flash-preview"
-  bulk:
-    model: "google/gemini-3-flash-preview"
-  critic:
-    model: "google/gemini-3-flash-preview"
-
-prompts:
-  module: "config/prompts.py"
-
-taxonomy:
-  depth: 2
-  factors: null
-  best_of_n: 1
-  review_mode: "auto_accept"
-  children_per_node: 3
-
-strategy:
-  guidance: null
-
-sampling:
-  tasks: {}
-
-generation:
-  target_size: 50
-  overgenerate_ratio: 1.2
-  scenarios_per_mix: 3
-  complexity_ratio: 0.3
-  max_refine_attempts: 1
-  concurrency: 4
-  checkpoint_every: 50
-
-evaluation:
-  dedupe: true
-  coverage: true
-  coverage_mode: "lineage"
-  complexity: false
-  diversity:
-    enabled: false
-    embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
-    k_local: 10
-    sample_cap: 1000
-    text_field: null
+  strategic: { model: "google/gemini-3-flash-preview" }
+  bulk:      { model: "google/gemini-3-flash-preview" }
+  critic:    { model: "google/gemini-3-flash-preview" }
 ```
+
+Copy `examples/template.yaml` for the full set of knobs (`project`, `taxonomy`, `strategy`,
+`sampling`, `generation`, `evaluation`); the sections below explain the ones worth steering by hand.
 
 ### Model Roles
 
