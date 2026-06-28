@@ -69,7 +69,7 @@ Design principle the user emphasized: **fields must be narrow/atomic**.
   _details fields" rule. Handled here via a post-hoc cleanup filter.
 
 ## DATA VIEWER (2026-06-14)
-- data_viewer.html: single-file, light theme, Tailwind+js-yaml CDN. Drag/drop dataset.final.jsonl
+- viz-tooling/data_viewer.html: single-file, light theme, Tailwind+js-yaml CDN. Drag/drop dataset.final.jsonl
   (+ optional cost_summary.json, strategies.json, *.yaml config; auto-detected). 10 records/page,
   search + strategy filter + accepted-only. Each card: schema|text|extraction + collapsible provenance
   (strategy, taxonomy lineage, meta-prompt, critic verdicts, LLM config/timing). Has a built-in demo.

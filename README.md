@@ -3,6 +3,7 @@
 </p>
 
 <p align="center">
+  <a href="https://arxiv.org/abs/2603.29791"><img alt="Paper" src="https://img.shields.io/badge/paper-arXiv%3A2603.29791-b31b1b"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-%E2%89%A53.11-blue">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
   <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-blue">
