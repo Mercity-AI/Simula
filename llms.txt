@@ -1,0 +1,24 @@
+# simula
+
+> CLI-first synthetic data generator: taxonomy build → strategy build → per-point sample →
+> meta-prompt → generate record → critic/refine → dedupe/trim → JSON/JSONL artifacts. One YAML
+> config drives everything. There are three model roles — `strategic`, `bulk`, `critic` — not four;
+> record generation is the `bulk` role (the `generator_model` row field is the bulk model id).
+
+The docs below are the source of truth — read them rather than this file.
+
+## Agents
+
+- [SKILL.md](SKILL.md): process + decision playbook for driving a generation run for a user — what to
+  ask, what to default, when to bring the user in. Start here to *use* the tool.
+- [AGENTS.md](AGENTS.md): architecture, hard constraints, behaviors, and debugging. Read before
+  *changing* the code.
+
+## Docs
+
+- [DOCS.md](DOCS.md): concepts, true pipeline flow, the three model roles, overriding defaults, an
+  annotated end-to-end example, the full config reference, and gotchas (incl. the lineage-vs-verified
+  coverage caveat). The concepts + configuration page.
+- [CONFIG.md](CONFIG.md): exhaustive per-field config reference.
+- [examples/template.yaml](examples/template.yaml): copy-me config skeleton, every key at its default.
+</content>

@@ -13,6 +13,8 @@
 
 # simula
 
+> 📖 **[Concepts & Configuration](DOCS.md)** — the pipeline, the model roles, and every config knob, with diagrams.
+
 `simula` is a small CLI-first framework for generating schema-shaped or free-text synthetic datasets with taxonomy-guided coverage. It is inspired by the Simula-style workflow: map the conceptual space first, sample from that space, generate records, critique them, preserve lineage, and then trim/evaluate the result.
 
 The current implementation is intentionally lean. It uses JSON/YAML files, OpenAI-compatible chat endpoints, JSON Schema validation, and human-inspectable artifacts.

@@ -207,6 +207,7 @@ point rather than writing from scratch.
 ## Pointers (don't duplicate these here)
 
 - Config mechanics + every field: `CONFIG.md`, `examples/template.yaml`.
+- Concepts, true pipeline flow, the three model roles, config reference (with diagrams): `DOCS.md`.
 - Architecture, hard constraints, behaviors, debugging: `AGENTS.md`.
 - **`examples/` — copy the closest one to start.** Pick by task and adapt rather than writing config
   from a blank file:
