@@ -106,7 +106,13 @@ Builds `taxonomy.json` and, depending on `taxonomy.review_mode`, either accepts 
 simula generate CONFIG.yaml
 ```
 
-Loads or builds the taxonomy, builds strategies if missing, generates data, validates records, runs critic/refine, and writes dataset artifacts. It does not run evaluation.
+Loads or builds the taxonomy, builds strategies and meta prompts if missing, generates data, validates records, runs critic/refine, and writes dataset artifacts. It does not run evaluation.
+
+Pass `--stop-after {taxonomy,strategies,meta_prompts}` (or set `generation.stop_after` in the
+config) to halt once that stage's artifact is written. Edit the artifact, then rerun: existing
+artifacts are reused, so the run picks up where it stopped. `--stop-after none` overrides a
+config-set stop for one invocation. To regenerate a stage instead, delete its file
+(`taxonomy.json`, `strategies.json`, `meta_prompts.jsonl`) and rerun.
 
 ```bash
 simula evaluate CONFIG.yaml
@@ -266,6 +272,7 @@ Each run writes human-inspectable files under `project.output_dir`:
 ```text
 taxonomy.json
 strategies.json
+meta_prompts.jsonl
 dataset.raw.jsonl
 dataset.accepted.jsonl
 dataset.final.jsonl
@@ -280,6 +287,11 @@ embeddings.cache.npz
 `dataset.final.jsonl` is the generator's output. `dataset.evaluated.jsonl` is written by
 `evaluate`/`run` and holds the deduped/decontaminated rows, leaving `dataset.final.jsonl`
 untouched.
+
+`meta_prompts.jsonl` holds one row per attempt (`attempt_index`, sampled `strategy_id` +
+`taxonomy_mix`, `meta_prompt`, `complexified`). Like `taxonomy.json` and `strategies.json` it is
+reused when present — stop with `--stop-after meta_prompts`, hand-edit the prompts, and rerun to
+generate from the edited versions.
 
 `llm_calls.jsonl` is especially useful while a run is still active. Every successful model response is appended immediately with:
 

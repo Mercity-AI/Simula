@@ -159,7 +159,9 @@ class StrategyCfg(BaseModel):
 
 class GenerationCfg(BaseModel):
     """Generation volume + behavior knobs (consumed by generate.generate_dataset). attempts =
-    ceil(target_size * overgenerate_ratio); accepted rows are then coverage-trimmed back to target."""
+    ceil(target_size * overgenerate_ratio); accepted rows are then coverage-trimmed back to target.
+    stop_after halts generate/run once that stage's artifact is written, so it can be inspected or
+    hand-edited before the next stage spends model calls (the CLI --stop-after flag overrides it)."""
 
     target_size: int = Field(50, gt=0)
     overgenerate_ratio: float = Field(1.3, ge=1.0)
@@ -168,6 +170,14 @@ class GenerationCfg(BaseModel):
     max_refine_attempts: int = Field(2, ge=0)
     concurrency: int = Field(4, gt=0)
     checkpoint_every: int = Field(50, gt=0)
+    stop_after: str | None = None
+
+    @field_validator("stop_after")
+    @classmethod
+    def _known_stop_stage(cls, value: str | None) -> str | None:
+        if value is not None and value not in {"taxonomy", "strategies", "meta_prompts"}:
+            raise ValueError("generation.stop_after must be taxonomy, strategies, or meta_prompts.")
+        return value
 
 
 class SamplingCfg(BaseModel):

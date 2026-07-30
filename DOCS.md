@@ -51,7 +51,9 @@ flowchart TD
 
 The `run` command executes taxonomy → generate → evaluate end to end. You can also run each phase on
 its own (`validate`, `taxonomy`, `generate`, `evaluate`) — for example, build and hand-edit
-`taxonomy.json` before spending any generation calls.
+`taxonomy.json` before spending any generation calls. For finer control, `--stop-after
+{taxonomy,strategies,meta_prompts}` (or `generation.stop_after` in the config) halts `generate`/`run`
+once that stage's artifact is written; edit it and rerun to continue (existing artifacts are reused).
 
 > **Note the arrows into the models.** Every step is one model role. The taxonomy and strategies are
 > built by `strategic`; the records are written by `bulk`; the accept/reject verdict is `critic`; and
@@ -307,6 +309,7 @@ evaluation:
 ```text
 taxonomy.json            # the factor tree
 strategies.json          # weighted sampling strategies
+meta_prompts.jsonl       # one meta-prompt row per attempt (strategy/mix lineage + prompt)
 dataset.raw.jsonl        # every attempt, accepted or not (inspect rejection_reason here)
 dataset.accepted.jsonl   # attempts that passed critique + schema
 dataset.final.jsonl      # accepted rows after dedupe + coverage-aware trim to target_size
@@ -411,6 +414,7 @@ change it (blank sections fall back to defaults). Required fields have no defaul
 | `max_refine_attempts`| Critic→refine retries per record (`0` = critique once, no refine).| `2`     | yes         | integer ≥ 0 |
 | `concurrency`        | In-flight model calls; lower if rate-limited.                     | `4`     | yes         | integer > 0 |
 | `checkpoint_every`   | Write `run_state.json` every N completed attempts.               | `50`    | yes         | integer > 0 |
+| `stop_after`         | Halt `generate`/`run` once this stage's artifact is written (edit it, rerun to continue). CLI `--stop-after` overrides; `--stop-after none` disables. | `null`  | yes         | `taxonomy`, `strategies`, `meta_prompts`, `null` |
 
 ### `evaluation`
 

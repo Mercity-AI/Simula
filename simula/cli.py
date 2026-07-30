@@ -45,6 +45,11 @@ async def _main(argv: list[str] | None = None) -> int:
             resume = cmd.add_mutually_exclusive_group()
             resume.add_argument("--resume", dest="resume", action="store_true", default=True)
             resume.add_argument("--no-resume", dest="resume", action="store_false")
+            cmd.add_argument(
+                "--stop-after",
+                choices=["taxonomy", "strategies", "meta_prompts", "none"],
+                help="Halt once this stage's artifact is written, so it can be edited before rerunning. Overrides generation.stop_after; 'none' disables a config-set stop.",
+            )
 
     args = parser.parse_args(argv)
     set_quiet(getattr(args, "quiet", False))
@@ -52,6 +57,8 @@ async def _main(argv: list[str] | None = None) -> int:
     router = None
     try:
         cfg = load_config(args.config)
+        if getattr(args, "stop_after", None):
+            cfg.generation.stop_after = None if args.stop_after == "none" else args.stop_after
         router = ModelRouter(cfg.data)
 
         # Validate prints static run information and does not invoke any model calls.

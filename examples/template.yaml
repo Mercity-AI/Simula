@@ -65,6 +65,8 @@ generation:
   max_refine_attempts: 2       # critic->refine retries per record (0 = critique once, never refine)
   concurrency: 4               # in-flight model calls; lower this if the provider rate-limits
   checkpoint_every: 50         # write run_state.json every N completed attempts
+  # Halt generate/run once this stage's artifact is written, to inspect/edit it before rerunning:
+  stop_after: null             # null | taxonomy | strategies | meta_prompts (CLI --stop-after overrides)
 
 evaluation:
   dedupe: true

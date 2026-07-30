@@ -23,7 +23,7 @@ Core package:
 - `simula/models.py`: single-provider OpenAI-compatible router (`ModelRouter`, one shared client), fake model, retry classification, per-task sampling resolution (`resolve_sampling`), live `llm_calls.jsonl` logging.
 - `simula/prompts.py`: built-in prompt templates, the global English/JSON system instruction, and the prompt-module override loader (`PromptSet`, `load_prompt_set`).
 - `simula/taxonomy.py`: factor discovery, breadth-first taxonomy expansion, review modes, strategy creation, strategy-aware sampling.
-- `simula/generate.py`: generation orchestration, meta-prompts, complexification, JSON generation/repair, critic/refine loop, concurrent workers, final trimming.
+- `simula/generate.py`: generation orchestration, the meta-prompt phase (batch-generates `meta_prompts.jsonl` with complexification), JSON generation/repair, critic/refine loop, concurrent workers, stage stops (`generation.stop_after`), final trimming.
 - `simula/evaluate.py`: schema validation, dedupe, coverage reports, coverage-aware trimming, optional complexity scoring.
 - `simula/diversity.py`: optional embedding-based diversity scoring used by evaluation (deps live in the `[diversity]` extra; imported lazily only when diversity is enabled).
 - `simula/utils.py`: artifact names, JSON/JSONL helpers, timestamps, JSON extraction, record-to-text, checkpoint helpers, and `summarize_cost` (written to `cost_summary.json`).
@@ -166,24 +166,34 @@ When modifying this code, test that `taxonomy_mix` contains one lineage entry pe
 
 1. Loads or builds taxonomy.
 2. Loads or builds strategies.
-3. Schedules generation attempts.
-4. Writes raw/accepted rows as each future completes.
-5. Updates `run_state.json`.
-6. Dedupes accepted rows if configured.
-7. Coverage-aware trims to `target_size`.
-8. Writes `dataset.final.jsonl`.
+3. Loads or builds meta prompts (`meta_prompts.jsonl`: one row per attempt index carrying the
+   sampled strategy/mix lineage, the chosen meta prompt, and the complexify flag; missing indexes
+   are generated, existing ones reused so hand edits survive).
+4. Schedules generation attempts, each consuming its meta-prompt row.
+5. Writes raw/accepted rows as each future completes.
+6. Updates `run_state.json`.
+7. Dedupes accepted rows if configured.
+8. Coverage-aware trims to `target_size`.
+9. Writes `dataset.final.jsonl`.
+
+`generation.stop_after` (or CLI `--stop-after`) halts after step 1, 2, or 3 via `SystemExit(0)` —
+the same mechanism as `write_then_edit` — so the stage's artifact can be edited before a rerun
+continues from it. Steps 1–3 are all reuse-if-present; delete an artifact to regenerate it.
 
 Resume (`--resume`, the default) skips attempt indexes already in `dataset.raw.jsonl` and reuses
 accepted rows. `run_state.json` stores a fingerprint of the resume-invalidating inputs (description,
 schema, seed, model ids, prompt module, sampling, taxonomy, strategies, and the per-attempt
 generation knobs — not `target_size`/`overgenerate_ratio`/`concurrency`, which can change across
 resumes). If the fingerprint changed, resume aborts and tells the user to pass `--no-resume`.
+`meta_prompts.jsonl` is deliberately outside the fingerprint (growing a run appends rows), which is
+safe because every dataset row records the exact `meta_prompt` it was built from.
 
 Generation is concurrent with `asyncio.TaskGroup`. Be careful with shared state:
 
 - `ModelRouter` schedules async log writes and flushes before CLI exit.
-- Raw/accepted/final dataset writes happen in the main thread.
-- Each worker gets its own seeded `random.Random`.
+- Raw/accepted/final and meta-prompt writes happen in the main task, in completion order.
+- All randomness lives in the meta-prompt phase: each attempt gets its own `random.Random(seed +
+  attempt_index)` there; the record/critic workers are rng-free.
 
 ### Model Calls
 

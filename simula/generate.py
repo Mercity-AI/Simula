@@ -28,14 +28,17 @@ from .utils import (
 
 
 async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = True, quiet: bool = False) -> list[dict[str, Any]]:
-    """Build/load taxonomy + strategies, run point generation concurrently, then dedupe + trim.
+    """Build/load taxonomy + strategies + meta prompts, run point generation, then dedupe + trim.
 
     Writes raw/accepted rows as each attempt completes, checkpoints run_state.json, and finally writes
     dataset.final.jsonl from accepted rows. Resume (the default) skips attempt indexes already present
-    and refuses to mix rows across a fingerprint change. Evaluation stays a separate command.
+    and refuses to mix rows across a fingerprint change. generation.stop_after halts the run at a
+    stage boundary so its artifact can be edited first. Evaluation stays a separate command.
     """
     taxonomy = await load_or_build_taxonomy(cfg, router)
+    _stop_if_requested(cfg, "taxonomy")
     strategies = await build_strategies(cfg, router, taxonomy)
+    _stop_if_requested(cfg, "strategies")
     raw_path = artifact_path(cfg.output_dir, "raw")
     accepted_path = artifact_path(cfg.output_dir, "accepted")
     final_path = artifact_path(cfg.output_dir, "final")
@@ -63,7 +66,8 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
     # Determine the deterministic attempt queue from target size, overgeneration, and checkpoint state.
     target = cfg.generation.target_size
     attempts = math.ceil(target * cfg.generation.overgenerate_ratio)
-    seed = cfg.seed
+    meta_rows = await _build_meta_prompts(cfg, router, taxonomy, strategies, attempts, quiet=quiet)
+    _stop_if_requested(cfg, "meta_prompts")
     completed_indexes = load_completed_attempt_indexes(raw_path) if resume else set()
     indexes = [index for index in range(attempts) if index not in completed_indexes]
 
@@ -80,7 +84,7 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
 
         async def _bounded(index: int) -> dict[str, Any]:
             async with limiter:
-                return await _generate_one_safe(cfg, router, taxonomy, strategies, random.Random(seed + index), index)
+                return await _generate_one_safe(cfg, router, meta_rows[index], index)
 
         async with asyncio.TaskGroup() as tg:
             tasks = [tg.create_task(_bounded(index)) for index in indexes]
@@ -113,10 +117,75 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
     return final
 
 
+def _stop_if_requested(cfg: Config, stage: str) -> None:
+    # Halt at a stage boundary (same SystemExit mechanism as write_then_edit) so the stage's artifact
+    # can be inspected/edited; a rerun reuses existing artifacts and continues from here.
+    if cfg.generation.stop_after != stage:
+        return
+    info("")
+    info(f"Stopped after {stage}. Edit the artifacts in {cfg.output_dir}, then rerun to continue.")
+    raise SystemExit(0)
+
+
+async def _build_meta_prompts(
+    cfg: Config,
+    router: ModelRouter,
+    taxonomy: dict[str, Any],
+    strategies: list[dict[str, Any]],
+    attempts: int,
+    *,
+    quiet: bool,
+) -> dict[int, dict[str, Any]]:
+    """Produce one meta-prompt row per attempt index and persist them to meta_prompts.jsonl.
+
+    Reuse-if-present like taxonomy/strategies: existing indexes are kept (so hand edits survive a
+    rerun), only missing ones are generated; delete lines or the file to regenerate. Each row carries
+    the sampled strategy/mix lineage; a failed model call is stored with an `error` field and becomes
+    a rejected dataset row downstream. Returns {attempt_index: row}.
+    """
+    path = artifact_path(cfg.output_dir, "meta_prompts")
+    rows = {row["attempt_index"]: row for row in read_jsonl(path, tolerant=True) if isinstance(row.get("attempt_index"), int)}
+    missing = [index for index in range(attempts) if index not in rows]
+    if not missing:
+        info(f"[dim]Reusing meta_prompts.jsonl ({len(rows)} prompts)[/dim]")
+        return rows
+
+    phase(f"Generating {len(missing)} meta prompts")
+    limiter = asyncio.Semaphore(cfg.generation.concurrency)
+
+    async def _one(index: int) -> dict[str, Any]:
+        # The per-attempt rng drives strategy choice, mix sampling, meta-prompt choice, and the
+        # complexify coin — the same sequence the generation loop used before this became a phase.
+        rng = random.Random(cfg.seed + index)
+        row: dict[str, Any] = {"attempt_index": index, "strategy_id": "error", "taxonomy_mix": [], "meta_prompt": "", "complexified": False}
+        try:
+            strategy = choose_strategy(strategies, rng)
+            row["strategy_id"] = strategy.get("id", "general")
+            row["taxonomy_mix"] = sample_mix(taxonomy, strategy, rng)
+            async with limiter:
+                row["meta_prompt"], row["complexified"] = await _make_meta_prompt(cfg, router, row["taxonomy_mix"], rng)
+        except Exception as exc:  # noqa: BLE001 - a failed meta prompt should not abort the batch.
+            row["error"] = str(exc)
+        return row
+
+    # Append rows in completion order from the main task, mirroring the generation loop's IO pattern.
+    async with asyncio.TaskGroup() as tg:
+        tasks = [tg.create_task(_one(index)) for index in missing]
+        with track(len(tasks), "Meta prompts", quiet=quiet) as advance:
+            for future in asyncio.as_completed(tasks):
+                row = await future
+                rows[row["attempt_index"]] = row
+                append_jsonl(path, row)
+                advance()
+    return rows
+
+
 def _run_fingerprint(cfg: Config, taxonomy: dict[str, Any], strategies: list[dict[str, Any]]) -> str:
     # Hash only the inputs that change a generated row's content or validity. target_size,
     # overgenerate_ratio, concurrency, and checkpoint_every are deliberately excluded so a run can
     # be grown or re-paced and still resume. A prompt-module edit is caught via its file contents.
+    # meta_prompts.jsonl is also excluded: growing a run appends new rows (which would spuriously
+    # change the hash), and each dataset row records the meta_prompt it was actually built from.
     module_path = cfg.prompts.module_path
     payload = {
         "description": cfg.description,
@@ -172,50 +241,49 @@ def _build_row(
 async def _generate_one_safe(
     cfg: Config,
     router: ModelRouter,
-    taxonomy: dict[str, Any],
-    strategies: list[dict[str, Any]],
-    rng: random.Random,
+    meta_row: dict[str, Any],
     index: int,
 ) -> dict[str, Any]:
-    """Run one point generation, converting any failure into a checkpointable rejected row.
+    """Run one point generation from its meta-prompt row, converting failure into a rejected row.
 
     asyncio.TaskGroup cancels sibling tasks on the first unhandled exception, so this boundary stops a
-    single bad point from aborting the whole batch. Strategy + mix are sampled once up front (with
-    fallback defaults), so the failure path reuses the same lineage instead of recomputing it.
+    single bad point from aborting the whole batch. Lineage (strategy/mix/meta prompt) comes from the
+    persisted meta row, so the failure path reports the same lineage as a success would.
     """
-    mix: list[dict[str, Any]] = []
-    strategy_id = "error"
-    try:
-        strategy = choose_strategy(strategies, rng)
-        strategy_id = strategy.get("id", "general")
-        mix = sample_mix(taxonomy, strategy, rng)
-        return await _generate_one(cfg, router, index, mix, strategy_id, rng)
-    except Exception as exc:  # noqa: BLE001 - point-level failures should checkpoint as rejected rows.
+
+    def _rejected(reason: str) -> dict[str, Any]:
         return _build_row(
             cfg,
             router,
             index,
             record="" if cfg.is_schema_free else {},
-            mix=mix,
-            strategy_id=strategy_id,
-            meta_prompt="",
-            complexified=False,
+            mix=meta_row.get("taxonomy_mix", []),
+            strategy_id=meta_row.get("strategy_id", "error"),
+            meta_prompt=meta_row.get("meta_prompt", ""),
+            complexified=bool(meta_row.get("complexified")),
             schema_valid=cfg.is_schema_free,
             accepted=False,
-            rejection_reason=f"Generation failed: {exc}",
+            rejection_reason=reason,
         )
+
+    # A meta row that failed (or was edited down to nothing) rejects without spending model calls.
+    if meta_row.get("error") or not meta_row.get("meta_prompt"):
+        return _rejected(f"Meta prompt failed: {meta_row.get('error') or 'empty meta prompt'}")
+    try:
+        return await _generate_one(cfg, router, index, meta_row)
+    except Exception as exc:  # noqa: BLE001 - point-level failures should checkpoint as rejected rows.
+        return _rejected(f"Generation failed: {exc}")
 
 
 async def _generate_one(
     cfg: Config,
     router: ModelRouter,
     index: int,
-    mix: list[dict[str, Any]],
-    strategy_id: str,
-    rng: random.Random,
+    meta_row: dict[str, Any],
 ) -> dict[str, Any]:
-    # Taxonomy/strategy were sampled by the caller; branch only at the output layer (JSON vs text).
-    meta_prompt, complexified = await _make_meta_prompt(cfg, router, mix, rng)
+    # Strategy/mix/meta prompt were produced by the meta-prompt phase; branch only at the output
+    # layer (JSON vs text).
+    meta_prompt = meta_row["meta_prompt"]
     if cfg.is_schema_free:
         record, schema_valid, rejection_reason = await _make_text(cfg, router, meta_prompt)
     else:
@@ -226,10 +294,10 @@ async def _generate_one(
         router,
         index,
         record=record,
-        mix=mix,
-        strategy_id=strategy_id,
+        mix=meta_row.get("taxonomy_mix", []),
+        strategy_id=meta_row.get("strategy_id", "general"),
         meta_prompt=meta_prompt,
-        complexified=complexified,
+        complexified=bool(meta_row.get("complexified")),
         schema_valid=schema_valid,
         accepted=False,
         rejection_reason=rejection_reason,

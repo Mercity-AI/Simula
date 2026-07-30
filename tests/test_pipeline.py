@@ -8,7 +8,7 @@ from simula.cli import main
 from simula.config import load_config
 from simula.generate import _generate_one_safe, generate_dataset
 from simula.models import ModelRouter
-from simula.utils import artifact_path, read_jsonl
+from simula.utils import artifact_path, read_jsonl, write_jsonl
 from simula.taxonomy import build_strategies, build_taxonomy, sample_mix
 
 
@@ -278,18 +278,92 @@ def test_point_failure_becomes_rejected_row(tmp_path: Path) -> None:
         def model_name(self, role: str) -> str:
             return "bad"
 
-        async def complete_json(self, role: str, prompt: str, system: str | None = None, task: str = "unknown"):
+        async def complete(self, *args, **kwargs):
+            raise ValueError("boom")
+
+        async def complete_json(self, *args, **kwargs):
             raise ValueError("boom")
 
     cfg = load_config(write_config(tmp_path))
-    taxonomy = {"factors": [{"name": "topic", "level": 0, "path": ["topic"], "children": []}]}
-    strategies = [{"id": "general", "taxonomy_roots": ["topic"], "weight": 1.0}]
-    import random
-
-    row = asyncio.run(_generate_one_safe(cfg, BadRouter(), taxonomy, strategies, random.Random(0), 0))
+    meta_row = {"attempt_index": 0, "strategy_id": "general", "taxonomy_mix": [], "meta_prompt": "make one", "complexified": False}
+    row = asyncio.run(_generate_one_safe(cfg, BadRouter(), meta_row, 0))
     assert row["accepted"] is False
     assert row["attempt_index"] == 0
     assert "Generation failed" in row["rejection_reason"]
+
+
+def test_failed_meta_row_rejects_without_model_calls(tmp_path: Path) -> None:
+    class NoCallRouter:
+        def model_name(self, role: str) -> str:
+            return "none"
+
+    cfg = load_config(write_config(tmp_path))
+    meta_row = {"attempt_index": 1, "strategy_id": "general", "taxonomy_mix": [], "meta_prompt": "", "complexified": False, "error": "boom"}
+    # A router with no complete/complete_json proves the failure path makes zero model calls.
+    row = asyncio.run(_generate_one_safe(cfg, NoCallRouter(), meta_row, 1))
+    assert row["accepted"] is False
+    assert "Meta prompt failed: boom" in row["rejection_reason"]
+
+
+def test_stop_after_halts_each_stage_then_run_completes(tmp_path: Path) -> None:
+    # Walk the staged workflow in one output dir: each rerun reuses earlier artifacts, builds the
+    # next stage, and halts — then a final run without stop_after finishes generation.
+    gen = {"target_size": 3, "overgenerate_ratio": 1.0, "complexity_ratio": 0}
+    for stage in ("taxonomy", "strategies", "meta_prompts"):
+        cfg = load_config(write_config(tmp_path, {"generation": {**gen, "stop_after": stage}}))
+        with pytest.raises(SystemExit) as exit_info:
+            asyncio.run(generate_dataset(cfg, ModelRouter(cfg.data), quiet=True))
+        assert exit_info.value.code == 0
+        assert artifact_path(cfg.output_dir, stage).exists()
+        assert read_jsonl(artifact_path(cfg.output_dir, "raw")) == []  # nothing generated yet
+
+    cfg = load_config(write_config(tmp_path, {"generation": gen}))
+    rows = asyncio.run(generate_dataset(cfg, ModelRouter(cfg.data), quiet=True))
+    assert rows
+
+
+def test_cli_stop_after_overrides_config(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["generate", str(write_config(tmp_path)), "--stop-after", "taxonomy", "--quiet"])
+    assert exit_info.value.code == 0
+    assert (tmp_path / "run" / "taxonomy.json").exists()
+    assert not (tmp_path / "run" / "strategies.json").exists()
+
+
+def test_cli_stop_after_none_disables_config_stop(tmp_path: Path) -> None:
+    gen = {"target_size": 3, "overgenerate_ratio": 1.0, "complexity_ratio": 0, "stop_after": "taxonomy"}
+    path = write_config(tmp_path, {"generation": gen})
+    # Without the override the config-set stop halts the run...
+    with pytest.raises(SystemExit):
+        main(["generate", str(path), "--quiet"])
+    # ...and --stop-after none pushes through to a completed generation.
+    assert main(["generate", str(path), "--stop-after", "none", "--quiet"]) == 0
+    assert read_jsonl(tmp_path / "run" / "dataset.final.jsonl")
+
+
+def test_unknown_stop_after_fails_validation(tmp_path: Path) -> None:
+    path = write_config(tmp_path, {"generation": {"target_size": 3, "stop_after": "generation"}})
+    with pytest.raises(ValueError, match="stop_after"):
+        load_config(path)
+
+
+def test_edited_meta_prompts_are_used_by_generation(tmp_path: Path) -> None:
+    gen = {"target_size": 2, "overgenerate_ratio": 1.0, "complexity_ratio": 0}
+    cfg = load_config(write_config(tmp_path, {"generation": {**gen, "stop_after": "meta_prompts"}}))
+    with pytest.raises(SystemExit):
+        asyncio.run(generate_dataset(cfg, ModelRouter(cfg.data), quiet=True))
+
+    meta_path = artifact_path(cfg.output_dir, "meta_prompts")
+    meta_rows = read_jsonl(meta_path)
+    assert len(meta_rows) == 2 and all(row["meta_prompt"] for row in meta_rows)
+    for row in meta_rows:
+        row["meta_prompt"] = f"EDITED {row['attempt_index']}"
+    write_jsonl(meta_path, meta_rows)
+
+    # Rerun without the stop: edited prompts are reused (not regenerated) and land in row lineage.
+    cfg2 = load_config(write_config(tmp_path, {"generation": gen}))
+    rows = asyncio.run(generate_dataset(cfg2, ModelRouter(cfg2.data), quiet=True))
+    assert rows and all(row["meta_prompt"].startswith("EDITED") for row in rows)
 
 
 def _strategy_taxonomy() -> dict:

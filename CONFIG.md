@@ -146,6 +146,7 @@ Volume and behavior of the generation pass (`simula generate`).
 | `max_refine_attempts` | `2` | Critic→refine retries per record before it is accepted or rejected. `0` = critique once, never refine. |
 | `concurrency` | `4` | In-flight model calls (a semaphore). Lower it if the provider rate-limits; raise it cautiously to go faster. |
 | `checkpoint_every` | `50` | Write `run_state.json` every N completed attempts. Pure resume/durability cadence. |
+| `stop_after` | `null` | Halt `generate`/`run` once this stage's artifact is written: `taxonomy`, `strategies`, or `meta_prompts`. Edit the artifact, then rerun — existing artifacts are reused, so the run continues from where it stopped. The CLI `--stop-after` flag overrides this per invocation (`--stop-after none` disables a config-set stop). |
 
 **Resume note:** `target_size`, `overgenerate_ratio`, `concurrency`, and `checkpoint_every` are
 excluded from the resume fingerprint, so you can grow or re-pace a run and still `--resume`. Changing
