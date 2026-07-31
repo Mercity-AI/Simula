@@ -231,10 +231,11 @@ Dataset description:
 
 {format_instruction}
 
-Sampled taxonomy requirements:
+Sampled ingredients for this record (not a strict checklist):
 {json.dumps(mix, ensure_ascii=False)}
 
 Generate {k} diverse meta-prompts. Each meta-prompt should tell a generator exactly what record to create.
+Think about what this combination of ingredients implies for the finished record. Full coverage of the ingredients, although important, is not the goal by itself — coherence, and being smart about what the combination should produce, is just as important, if not more. If ingredients conflict or their sum would be incoherent, build the meta-prompt around the load-bearing ones and soften or drop the rest.
 Return JSON:
 {{"meta_prompts": ["...", "..."]}}
 """.strip()
