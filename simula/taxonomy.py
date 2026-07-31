@@ -98,24 +98,30 @@ async def build_strategies(cfg: Config, router: ModelRouter, taxonomy: dict[str,
     return strategies
 
 
-def sample_mix(taxonomy: dict[str, Any], strategy: dict[str, Any], rng: random.Random) -> list[dict[str, Any]]:
-    """Sample one taxonomy node per factor under the strategy's roots; one lineage entry per factor.
+_MAX_MIX_REDRAWS = 100
 
-    If no factor matches the strategy's roots, fall back to sampling every factor so the returned mix
-    (and thus row lineage) is never empty.
+
+def sample_mix(taxonomy: dict[str, Any], strategy: dict[str, Any], rng: random.Random) -> list[dict[str, Any]]:
+    """Sample one taxonomy leaf per factor under the strategy's roots; one lineage entry per factor.
+
+    Every factor always appears in the mix: factors the strategy leaves out (or whose roots match
+    nothing) sample their full tree rather than being dropped. The strategy's never_combine path
+    pairs are enforced by redrawing the whole mix; a ruleset the roots cannot satisfy raises after a
+    bounded number of redraws instead of spinning.
     """
-    roots = strategy.get("taxonomy_roots") or [f["name"] for f in taxonomy["factors"]]
-    mix = []
-    for factor in taxonomy["factors"]:
-        node = _strategy_node_for_factor(factor, roots, rng)
-        if node is None:
-            continue
-        mix.append({"factor": factor["name"], "node": node["name"], "level": node.get("level", 0), "path": node.get("path", [node["name"]]), "description": node.get("description", "")})
-    if not mix:
+    roots = strategy.get("taxonomy_roots") or []
+    rules = _never_combine_rules(strategy)
+    for _ in range(_MAX_MIX_REDRAWS):
+        mix = []
         for factor in taxonomy["factors"]:
-            node = _sample_descendant(factor, rng)
+            node = _strategy_node_for_factor(factor, roots, rng) or _sample_descendant(factor, rng)
             mix.append({"factor": factor["name"], "node": node["name"], "level": node.get("level", 0), "path": node.get("path", [node["name"]]), "description": node.get("description", "")})
-    return mix
+        if not _mix_violates(mix, rules):
+            return mix
+    raise ValueError(
+        f"never_combine rules for strategy {strategy.get('id', '?')!r} still violated after "
+        f"{_MAX_MIX_REDRAWS} redraws; loosen the rules or widen the strategy's roots."
+    )
 
 
 def choose_strategy(strategies: list[dict[str, Any]], rng: random.Random) -> dict[str, Any]:
@@ -206,12 +212,53 @@ def _child(child: dict[str, Any], level: int, parent_path: list[str]) -> dict[st
 
 
 def _sample_descendant(root: dict[str, Any], rng: random.Random) -> dict[str, Any]:
-    nodes = walk_nodes(root)
-    return rng.choice(nodes)
+    """Weighted level-by-level descent to a leaf.
+
+    A node's optional `weight` (default 1.0, 0 disables the branch) sets how often it is picked
+    relative to its siblings, so a branch's probability never depends on how finely it happens to be
+    subdivided — a flat draw over all nodes would make the most-enumerated branch the most likely.
+    """
+    node = root
+    while node.get("children"):
+        node = _weighted_pick(node["children"], rng)
+    return node
+
+
+def _weighted_pick(nodes: list[dict[str, Any]], rng: random.Random) -> dict[str, Any]:
+    weights = [_node_weight(node) for node in nodes]
+    if sum(weights) <= 0:
+        weights = [1.0] * len(nodes)
+    return rng.choices(nodes, weights=weights, k=1)[0]
+
+
+def _node_weight(node: dict[str, Any]) -> float:
+    try:
+        return max(0.0, float(node.get("weight", 1.0)))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _never_combine_rules(strategy: dict[str, Any]) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
+    rules = []
+    for pair in strategy.get("never_combine") or []:
+        if isinstance(pair, (list, tuple)) and len(pair) == 2:
+            rules.append((_root_key(str(pair[0])), _root_key(str(pair[1]))))
+    return rules
+
+
+def _mix_violates(mix: list[dict[str, Any]], rules: list[tuple[tuple[str, ...], tuple[str, ...]]]) -> bool:
+    if not rules:
+        return False
+    keys = [_path_key(row["path"]) for row in mix]
+
+    def _hit(rule: tuple[str, ...]) -> bool:
+        return any(key[: len(rule)] == rule for key in keys)
+
+    return any(_hit(first) and _hit(second) for first, second in rules)
 
 
 def _strategy_node_for_factor(factor: dict[str, Any], roots: list[str], rng: random.Random) -> dict[str, Any] | None:
-    """Pick a node inside `factor` for a strategy whose roots are dot-separated taxonomy paths.
+    """Pick a leaf inside `factor` for a strategy whose roots are dot- or slash-separated taxonomy paths.
 
     Strict subtree matching: a root that exactly names the factor samples anywhere in its tree; a
     deeper root must exactly name an existing node path and samples that node's subtree. Roots that
@@ -220,7 +267,7 @@ def _strategy_node_for_factor(factor: dict[str, Any], roots: list[str], rng: ran
     factor_key = _path_key([factor["name"]])
     subtree_roots: list[tuple[str, ...]] = []
 
-    # Strategy roots are dot-separated taxonomy paths, not free-form string prefixes.
+    # Strategy roots are dot-/slash-separated taxonomy paths, not free-form string prefixes.
     for root in roots:
         root_key = _root_key(root)
         if not root_key or root_key[0] != factor_key[0]:
@@ -240,11 +287,13 @@ def _strategy_node_for_factor(factor: dict[str, Any], roots: list[str], rng: ran
     ]
     if not candidates:
         return None
-    return _sample_descendant(rng.choice(candidates), rng)
+    return _sample_descendant(_weighted_pick(candidates, rng), rng)
 
 
 def _root_key(root: str) -> tuple[str, ...]:
-    return tuple(segment for segment in (_norm_segment(part) for part in str(root).split(".")) if segment)
+    # Accept "/" as well as "." so model-authored paths match regardless of separator choice.
+    parts = str(root).replace("/", ".").split(".")
+    return tuple(segment for segment in (_norm_segment(part) for part in parts) if segment)
 
 
 def _path_key(path: list[str]) -> tuple[str, ...]:

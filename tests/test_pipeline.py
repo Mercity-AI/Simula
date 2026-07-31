@@ -103,10 +103,12 @@ def test_sampling_is_deterministic(tmp_path: Path) -> None:
 def test_strategy_factor_root_samples_within_factor() -> None:
     import random
 
+    # Unmentioned factors sample their full tree instead of being dropped, so every mix covers
+    # every factor.
     mix = sample_mix(_strategy_taxonomy(), {"taxonomy_roots": ["topic"]}, random.Random(1))
-    assert len(mix) == 1
-    assert mix[0]["factor"] == "topic"
-    assert mix[0]["path"][0] == "topic"
+    assert {row["factor"] for row in mix} == {"topic", "other", "query_domain"}
+    by_factor = {row["factor"]: row for row in mix}
+    assert by_factor["topic"]["path"][0] == "topic"
 
 
 def test_strategy_subtree_root_samples_only_that_subtree() -> None:
@@ -114,23 +116,22 @@ def test_strategy_subtree_root_samples_only_that_subtree() -> None:
 
     for seed in range(10):
         mix = sample_mix(_strategy_taxonomy(), {"taxonomy_roots": ["topic.alpha"]}, random.Random(seed))
-        assert len(mix) == 1
-        assert mix[0]["path"][:2] == ["topic", "alpha"]
+        by_factor = {row["factor"]: row for row in mix}
+        assert by_factor["topic"]["path"][:2] == ["topic", "alpha"]
 
 
 def test_strategy_leaf_root_returns_leaf() -> None:
     import random
 
     mix = sample_mix(_strategy_taxonomy(), {"taxonomy_roots": ["topic.alpha.leaf"]}, random.Random(2))
-    assert mix == [
-        {
-            "factor": "topic",
-            "node": "leaf",
-            "level": 2,
-            "path": ["topic", "alpha", "leaf"],
-            "description": "Leaf branch",
-        }
-    ]
+    by_factor = {row["factor"]: row for row in mix}
+    assert by_factor["topic"] == {
+        "factor": "topic",
+        "node": "leaf",
+        "level": 2,
+        "path": ["topic", "alpha", "leaf"],
+        "description": "Leaf branch",
+    }
 
 
 def test_invalid_strategy_root_falls_back_to_all_factors() -> None:
@@ -150,8 +151,10 @@ def test_strategy_matching_respects_path_segments_and_overlapping_names() -> Non
         assert by_factor["topic"]["path"][:2] == ["topic", "alpha"]
         assert by_factor["topic"]["path"][:2] != ["topic", "alpha_extra"]
 
+    # "query" must not prefix-match the "query_domain" factor; the unmatched root is ignored and
+    # all factors still appear.
     mix = sample_mix(taxonomy, {"taxonomy_roots": ["query", "other"]}, random.Random(4))
-    assert {row["factor"] for row in mix} == {"other"}
+    assert {row["factor"] for row in mix} == {"topic", "other", "query_domain"}
 
 
 def test_schema_free_fake_model_end_to_end(tmp_path: Path) -> None:
