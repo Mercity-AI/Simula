@@ -93,7 +93,7 @@ async def build_strategies(cfg: Config, router: ModelRouter, taxonomy: dict[str,
         return existing["strategies"]
     with spinner("Building strategies"):
         prompt = cfg.prompts.strategy_prompt(
-            cfg.description, taxonomy, cfg.strategy.guidance, cfg.strategy.count, taxonomy_path_strings(taxonomy)
+            cfg.description, taxonomy, taxonomy_path_strings(taxonomy), cfg.strategy.guidance, cfg.strategy.count
         )
         response = await router.complete_json("strategic", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.STRATEGY)
         strategies = _strategies_or_fallback(response, taxonomy)

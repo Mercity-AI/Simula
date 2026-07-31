@@ -188,9 +188,9 @@ Return JSON:
 def strategy_prompt(
     description: str,
     taxonomy: dict[str, Any],
+    valid_paths: list[str],
     guidance: str | None = None,
     count: int | None = None,
-    valid_paths: list[str] | None = None,
 ) -> str:
     # Optional user guidance steers which roots combine and how weights emphasize/de-emphasize branches.
     guidance_block = ""
@@ -199,12 +199,10 @@ def strategy_prompt(
             "\nUser guidance (honor these preferences when choosing taxonomy roots and weights):\n"
             f"{guidance.strip()}\n"
         )
-    paths_block = ""
-    if valid_paths:
-        paths_block = (
-            "\nValid taxonomy paths (use these strings verbatim in taxonomy_roots and never_combine; "
-            "any other string is invalid):\n" + "\n".join(valid_paths) + "\n"
-        )
+    paths_block = (
+        "\nValid taxonomy paths (use these strings verbatim in taxonomy_roots and never_combine; "
+        "any other string is invalid):\n" + "\n".join(valid_paths) + "\n"
+    )
     return f"""
 Dataset description:
 {description}
