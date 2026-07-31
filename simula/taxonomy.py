@@ -79,7 +79,12 @@ async def load_or_build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, 
 
 
 async def build_strategies(cfg: Config, router: ModelRouter, taxonomy: dict[str, Any]) -> list[dict[str, Any]]:
-    """Reuse strategies.json if present, else ask the model for weighted sampling strategies."""
+    """Reuse strategies.json if present, else ask the model for weighted sampling strategies.
+
+    The response is validated before use: every taxonomy_roots / never_combine path must name a real
+    taxonomy node (one retry with the offending strings quoted back, then a hard error), so a typo'd
+    or hallucinated path fails loudly here instead of silently sampling the full tree on every mix.
+    """
     info("")  # separate the strategies step from the taxonomy block above
     path = artifact_path(cfg.output_dir, "strategies")
     existing = read_json(path)
@@ -87,15 +92,60 @@ async def build_strategies(cfg: Config, router: ModelRouter, taxonomy: dict[str,
         info(f"[dim]Reusing strategies.json ({len(existing['strategies'])} strategies)[/dim]")
         return existing["strategies"]
     with spinner("Building strategies"):
-        response = await router.complete_json(
-            "strategic",
-            cfg.prompts.strategy_prompt(cfg.description, taxonomy, cfg.strategy.guidance),
-            system=cfg.prompts.SYSTEM_JSON,
-            task=TaskType.STRATEGY,
+        prompt = cfg.prompts.strategy_prompt(
+            cfg.description, taxonomy, cfg.strategy.guidance, cfg.strategy.count, taxonomy_path_strings(taxonomy)
         )
-        strategies = response.get("strategies") or [{"id": "general", "description": "Sample all taxonomies.", "taxonomy_roots": [f["name"] for f in taxonomy["factors"]], "weight": 1.0}]
+        response = await router.complete_json("strategic", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.STRATEGY)
+        strategies = _strategies_or_fallback(response, taxonomy)
+        invalid = _invalid_strategy_paths(strategies, taxonomy)
+        if invalid:
+            retry_prompt = (
+                prompt
+                + "\n\nYour previous attempt used paths that do not exist in the taxonomy: "
+                + ", ".join(sorted(set(invalid)))
+                + "\nRegenerate the strategies using only paths from the valid list, verbatim."
+            )
+            response = await router.complete_json("strategic", retry_prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.STRATEGY)
+            strategies = _strategies_or_fallback(response, taxonomy)
+            invalid = _invalid_strategy_paths(strategies, taxonomy)
+        # Written even when invalid so the paths can be fixed by hand before rerunning.
         write_json(path, {"strategies": strategies})
+    if invalid:
+        raise ValueError(f"strategies reference unknown taxonomy paths {sorted(set(invalid))}; fix {path} by hand, then rerun.")
+    _warn_uncovered_factors(strategies, taxonomy)
     return strategies
+
+
+def _strategies_or_fallback(response: dict[str, Any], taxonomy: dict[str, Any]) -> list[dict[str, Any]]:
+    return response.get("strategies") or [
+        {"id": "general", "description": "Sample all taxonomies.", "taxonomy_roots": [f["name"] for f in taxonomy["factors"]], "weight": 1.0}
+    ]
+
+
+def taxonomy_path_strings(taxonomy: dict[str, Any]) -> list[str]:
+    """Every node path as a slash-joined string; the vocabulary strategies may reference."""
+    return ["/".join(node.get("path", [node["name"]])) for factor in taxonomy["factors"] for node in walk_nodes(factor)]
+
+
+def _invalid_strategy_paths(strategies: list[dict[str, Any]], taxonomy: dict[str, Any]) -> list[str]:
+    valid = {_path_key(node.get("path", [node["name"]])) for factor in taxonomy["factors"] for node in walk_nodes(factor)}
+    invalid = []
+    for strategy in strategies:
+        referenced = list(strategy.get("taxonomy_roots") or [])
+        for pair in strategy.get("never_combine") or []:
+            if isinstance(pair, (list, tuple)):
+                referenced.extend(pair)
+        invalid.extend(str(ref) for ref in referenced if _root_key(str(ref)) not in valid)
+    return invalid
+
+
+def _warn_uncovered_factors(strategies: list[dict[str, Any]], taxonomy: dict[str, Any]) -> None:
+    factor_names = {_norm_segment(f["name"]): f["name"] for f in taxonomy["factors"]}
+    for strategy in strategies:
+        covered = {key[0] for root in strategy.get("taxonomy_roots") or [] if (key := _root_key(str(root)))}
+        missing = [name for key, name in factor_names.items() if key not in covered]
+        if missing:
+            warn(f"strategy {strategy.get('id', '?')!r} does not mention factors {missing}; they will sample their full tree.")
 
 
 _MAX_MIX_REDRAWS = 100

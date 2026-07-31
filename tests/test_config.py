@@ -250,7 +250,7 @@ def test_prompt_module_overrides_subset_and_falls_back(tmp_path: Path) -> None:
             [
                 'SYSTEM_JSON = "custom system"',
                 "",
-                "def strategy_prompt(description, taxonomy, guidance=None):",
+                "def strategy_prompt(description, taxonomy, guidance=None, count=None, valid_paths=None):",
                 '    return f"custom strategy for {description}: {len(taxonomy[\'factors\'])}"',
             ]
         )
@@ -330,3 +330,12 @@ def test_prompt_module_rejects_bad_signature(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="strategy_prompt must accept parameters"):
         load_config(path)
+
+
+def test_strategy_count_bounds(tmp_path: Path) -> None:
+    assert load_config(_write_config(tmp_path, {"strategy": {"count": 6}})).strategy.count == 6
+    assert load_config(_write_config(tmp_path)).strategy.count is None
+    with pytest.raises(ValueError):
+        load_config(_write_config(tmp_path, {"strategy": {"count": 0}}))
+    with pytest.raises(ValueError):
+        load_config(_write_config(tmp_path, {"strategy": {"count": 13}}))

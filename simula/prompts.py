@@ -183,7 +183,13 @@ Return JSON:
 """.strip()
 
 
-def strategy_prompt(description: str, taxonomy: dict[str, Any], guidance: str | None = None) -> str:
+def strategy_prompt(
+    description: str,
+    taxonomy: dict[str, Any],
+    guidance: str | None = None,
+    count: int | None = None,
+    valid_paths: list[str] | None = None,
+) -> str:
     # Optional user guidance steers which roots combine and how weights emphasize/de-emphasize branches.
     guidance_block = ""
     if guidance and guidance.strip():
@@ -191,17 +197,27 @@ def strategy_prompt(description: str, taxonomy: dict[str, Any], guidance: str | 
             "\nUser guidance (honor these preferences when choosing taxonomy roots and weights):\n"
             f"{guidance.strip()}\n"
         )
+    paths_block = ""
+    if valid_paths:
+        paths_block = (
+            "\nValid taxonomy paths (use these strings verbatim in taxonomy_roots and never_combine; "
+            "any other string is invalid):\n" + "\n".join(valid_paths) + "\n"
+        )
     return f"""
 Dataset description:
 {description}
 
 Taxonomy:
 {json.dumps(taxonomy, ensure_ascii=False)}
-{guidance_block}
-Create 2-5 sampling strategies. Each strategy lists compatible taxonomy roots and a weight.
-A higher weight makes a strategy sampled more often; use weights to emphasize common combinations and de-emphasize rare ones.
+{paths_block}{guidance_block}
+Create {count if count else "2-5"} sampling strategies. Each strategy is a thematic lane: mixes are sampled by drawing one node per factor from within its taxonomy_roots.
+- Every strategy must address every factor. A bare factor name means "sample that factor's full tree"; use it whenever the strategy has no opinion about that factor. Never omit a factor.
+- A higher weight makes a strategy sampled more often. Spread weights across a real range (common, broadly useful strategies near 1.0; rare or specialised ones near 0.1) instead of clustering everything near 1.0.
+- Before bundling roots together, think about what records their combination would actually produce. Avoid bundles whose combinations would force incoherent, contradictory, or over-constructed records — a combination that is individually sensible can still be strange in aggregate.
+- Spread rare or unusual branches thinly across strategies instead of concentrating them into one strategy; a strategy made only of unusual roots makes every record it produces unusual in several ways at once.
+- never_combine lists pairs of paths that must never appear in the same mix: combinations that would be contradictory, redundant (the same idea imposed by two factors), or impossible at the record's scale. Only add pairs you are confident about; an empty list is fine.
 Return JSON:
-{{"strategies": [{{"id": "general", "description": "...", "taxonomy_roots": ["..."], "weight": 1.0}}]}}
+{{"strategies": [{{"id": "general", "description": "...", "taxonomy_roots": ["..."], "weight": 1.0, "never_combine": [["...", "..."]]}}]}}
 """.strip()
 
 

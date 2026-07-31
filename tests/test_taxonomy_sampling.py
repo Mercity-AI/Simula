@@ -2,7 +2,7 @@ import random
 
 import pytest
 
-from simula.taxonomy import sample_mix
+from simula.taxonomy import _invalid_strategy_paths, sample_mix, taxonomy_path_strings
 
 
 def _node(name: str, path: list[str], children: list[dict] | None = None, weight: float | None = None) -> dict:
@@ -88,3 +88,16 @@ def test_unsatisfiable_never_combine_raises() -> None:
     strategy = {"id": "stuck", "taxonomy_roots": ["pov", "structure"], "never_combine": [["pov/weird", "structure/frame"]]}
     with pytest.raises(ValueError, match="never_combine"):
         sample_mix(taxonomy, strategy, random.Random(1))
+
+
+def test_taxonomy_path_strings_lists_every_node() -> None:
+    paths = taxonomy_path_strings(_two_factor_taxonomy())
+    assert paths == ["pov", "pov/plain", "pov/weird", "structure", "structure/arc", "structure/frame"]
+
+
+def test_invalid_strategy_paths_flags_unknown_refs_only() -> None:
+    taxonomy = _two_factor_taxonomy()
+    good = {"taxonomy_roots": ["pov", "structure.arc"], "never_combine": [["pov/weird", "structure/frame"]]}
+    assert _invalid_strategy_paths([good], taxonomy) == []
+    bad = {"taxonomy_roots": ["pov/scifi", "structure"], "never_combine": [["pov/weird", "structure/framed"]]}
+    assert _invalid_strategy_paths([bad], taxonomy) == ["pov/scifi", "structure/framed"]
