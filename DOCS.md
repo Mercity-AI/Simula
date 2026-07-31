@@ -90,6 +90,26 @@ flowchart TD
     a1 --> a1b["double_charge"]
 ```
 
+### Strategies & sampling
+
+**What they are:** `strategies.json` is a small set of model-drafted **thematic lanes**. Each
+strategy has `taxonomy_roots` (which regions of the tree it samples from — a bare factor name means
+"that factor's full tree"), a `weight` (how often the lane is used), and optionally `never_combine`
+(pairs of paths that must not appear in the same mix). Every root and rule path is validated against
+the real tree when strategies are built — an invalid path is a loud error, not a silent no-op — and
+`strategy.count` pins how many strategies are requested.
+
+**How a point is sampled:** pick a strategy by weight, then for **every** factor (unmentioned ones
+included — they sample their full tree) walk the tree level by level, choosing among siblings by
+their per-node `weight` (default `1.0`, `0` disables a branch), down to a leaf. A mix that violates a
+`never_combine` pair is redrawn. Because the walk is level-wise, a branch's probability comes from
+its *weight*, never from how finely the builder happened to subdivide it.
+
+**Why you should read these artifacts:** the taxonomy's node weights and the strategies' bundles
+*are* the dataset's distribution — they decide what "typical" looks like at scale, before any
+generation money is spent. Both files are plain JSON, reused verbatim on rerun, and meant to be
+hand-edited: review them the way you would review the schema.
+
 ### Schema
 
 **What it is:** an optional JSON Schema (a supported subset) that every generated record must
@@ -240,8 +260,8 @@ prompts:
 # my_prompts.py — override any subset; keep the same parameter names as the built-ins.
 SYSTEM_JSON = "Return valid JSON only."
 
-def strategy_prompt(description, taxonomy, guidance=None):
-    return f"Description:\n{description}\n\nTaxonomy:\n{taxonomy}\n\nReturn JSON with a strategies array."
+def strategy_prompt(description, taxonomy, valid_paths, guidance=None, count=None):
+    return f"Description:\n{description}\n\nTaxonomy:\n{taxonomy}\n\nUse only these paths verbatim:\n{valid_paths}\n\nReturn JSON with a strategies array."
 ```
 
 `simula validate` imports the module and rejects a missing file, an import error, a non-string system
@@ -396,6 +416,7 @@ change it (blank sections fall back to defaults). Required fields have no defaul
 | Field      | What it does                                                        | Default | Overridable | Allowed values |
 | ---------- | ------------------------------------------------------------------ | ------- | ----------- | -------------- |
 | `guidance` | Free-text steering woven into the strategy prompt (roots + weights).| `null`  | yes         | string or `null` |
+| `count`    | Exact number of strategies to request (`null` keeps the model's 2–5 choice). | `null` | yes | integer 1–12 or `null` |
 
 ### `sampling`
 
@@ -475,15 +496,17 @@ diversity — not volume. There is no batched/multi-record-per-prompt mode yet (
 ### Topic distribution is weighted, so over-represented labels dominate the *accepted* set
 
 Strategies are chosen by **weighted random** (`choose_strategy`), and each pick samples one node per
-factor under that strategy's roots. Higher-weight strategies — and the branches they name — are
-sampled proportionally more often, so a raw accepted set skews toward whatever the strategic model (or
-your `strategy.guidance`) emphasized. The final trim (`coverage_aware_trim`) greedily prefers rows that
+factor under that strategy's roots via a level-wise walk weighted by each node's `weight` in
+`taxonomy.json`. Higher-weight strategies — and higher-weight branches — are sampled proportionally
+more often, so a raw accepted set skews toward whatever the strategic model (or your
+`strategy.guidance`) emphasized. The final trim (`coverage_aware_trim`) greedily prefers rows that
 add *unseen* taxonomy paths, which flattens the distribution **in `dataset.final.jsonl`** — but only up
 to `target_size`, and it does not change the accepted-row distribution itself. **Workarounds for more
 even coverage:**
 
 - Set `strategy.guidance` to ask for broad, even coverage (the e-commerce example does exactly this).
-- Edit `strategies.json` directly to flatten `weight`s, then rerun `generate` (it reuses the file).
+- Edit `strategies.json` directly to flatten strategy `weight`s, or edit per-node `weight`s in
+  `taxonomy.json`, then rerun `generate` (both files are reused).
 - Over-generate more (`overgenerate_ratio`) so the coverage-aware trim has a larger pool to balance
   from.
 

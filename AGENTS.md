@@ -156,9 +156,11 @@ Review modes:
 
 ### Strategy Sampling
 
-Strategies may name full roots like `query_domain` or deeper paths like `query_domain.travel_and_hospitality`. Sampling must support both. If strategy matching fails, fall back to sampling all factors so lineage is not empty.
+Strategies may name full roots like `query_domain` or deeper paths like `query_domain.travel_and_hospitality` (dot- or slash-separated). Sampling must support both. Every factor always lands in the mix: a factor a strategy does not mention (or whose roots match nothing) samples its full tree, so lineage is never empty.
 
-When modifying this code, test that `taxonomy_mix` contains one lineage entry per intended factor.
+Sampling descends the tree level by level, choosing among siblings by their per-node `weight` (default `1.0`, `0` disables), and always returns a leaf — a branch's probability must come from weights, never from how many nodes it contains. A strategy's `never_combine` path pairs are enforced by redrawing the mix (bounded; unsatisfiable rules raise). Strategy paths are validated against the real tree in `build_strategies`; invalid paths are a hard error after one retry.
+
+When modifying this code, test that `taxonomy_mix` contains one lineage entry per factor, that only leaves are sampled, and that weights and `never_combine` are honored (`tests/test_taxonomy_sampling.py`).
 
 ### Generation
 
