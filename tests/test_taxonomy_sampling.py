@@ -101,3 +101,11 @@ def test_invalid_strategy_paths_flags_unknown_refs_only() -> None:
     assert _invalid_strategy_paths([good], taxonomy) == []
     bad = {"taxonomy_roots": ["pov/scifi", "structure"], "never_combine": [["pov/weird", "structure/framed"]]}
     assert _invalid_strategy_paths([bad], taxonomy) == ["pov/scifi", "structure/framed"]
+
+
+def test_child_nodes_carry_prevalence_weight() -> None:
+    from simula.taxonomy import _child
+
+    assert _child({"name": "x", "weight": 0.05}, 1, ["f"])["weight"] == 0.05
+    assert _child({"name": "x"}, 1, ["f"])["weight"] == 1.0
+    assert _child({"name": "x", "weight": "junk"}, 1, ["f"])["weight"] == 1.0

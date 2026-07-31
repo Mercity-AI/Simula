@@ -255,6 +255,9 @@ def _child(child: dict[str, Any], level: int, parent_path: list[str]) -> dict[st
     return {
         "name": child["name"],
         "description": child.get("description", ""),
+        # Prevalence weight, consumed by _sample_descendant; kept explicit so it is hand-tunable in
+        # the reviewed taxonomy.json.
+        "weight": _node_weight(child),
         "level": level,
         "path": [*parent_path, child["name"]],
         "children": [],

@@ -143,8 +143,9 @@ Expansion plan:
 {plan}
 
 Propose {count} useful, non-overlapping child nodes for the current node.
+Give each child a "weight": its expected prevalence in realistic data for this dataset (dominant ~1.0, common ~0.5, uncommon ~0.15, rare ~0.03). Weight is prevalence, not how interesting the category is to enumerate; rare forms sit an order of magnitude below common ones.
 Return JSON:
-{{"children": [{{"name": "...", "description": "..."}}]}}
+{{"children": [{{"name": "...", "description": "...", "weight": 1.0}}]}}
 """.strip()
 
 
@@ -160,8 +161,9 @@ Raw proposed children:
 {json.dumps(raw_children, ensure_ascii=False)}
 
 Refine this list for completeness, soundness, specificity, and low duplication.
+Keep each child's "weight" (its expected prevalence in realistic data, not its interestingness): preserve incoming weights unless a merge or split makes an adjustment necessary, and give any new child a weight on the same scale (dominant ~1.0, common ~0.5, uncommon ~0.15, rare ~0.03).
 Return JSON:
-{{"children": [{{"name": "...", "description": "..."}}]}}
+{{"children": [{{"name": "...", "description": "...", "weight": 1.0}}]}}
 """.strip()
 
 
