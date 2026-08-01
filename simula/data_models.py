@@ -144,9 +144,11 @@ class EvaluationCfg(BaseModel):
 
 
 class StrategyCfg(BaseModel):
-    """Optional free-text steering woven into the strategy prompt (consumed by taxonomy.build_strategies)."""
+    """Optional steering for the strategy build (consumed by taxonomy.build_strategies): free-text
+    guidance woven into the prompt, and an exact strategy count (None keeps the model's 2-5 choice)."""
 
     guidance: str | None = None
+    count: int | None = Field(None, ge=1, le=12)
 
     @field_validator("guidance", mode="before")
     @classmethod

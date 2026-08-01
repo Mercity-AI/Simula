@@ -152,7 +152,7 @@ def test_strategy_guidance_defaults_to_none_and_omits_block(tmp_path: Path) -> N
     )
     cfg = load_config(path)
     assert cfg.data["strategy"]["guidance"] is None
-    rendered = cfg.prompts.strategy_prompt(cfg.description, {"factors": []}, cfg.data["strategy"].get("guidance"))
+    rendered = cfg.prompts.strategy_prompt(cfg.description, {"factors": []}, [], cfg.data["strategy"].get("guidance"))
     assert "User guidance" not in rendered
 
 
@@ -173,7 +173,7 @@ def test_strategy_guidance_is_woven_into_prompt(tmp_path: Path) -> None:
         )
     )
     cfg = load_config(path)
-    rendered = cfg.prompts.strategy_prompt(cfg.description, {"factors": []}, cfg.data["strategy"].get("guidance"))
+    rendered = cfg.prompts.strategy_prompt(cfg.description, {"factors": []}, [], cfg.data["strategy"].get("guidance"))
     assert "User guidance" in rendered
     assert "Make billing the most common branch." in rendered
 
@@ -250,7 +250,7 @@ def test_prompt_module_overrides_subset_and_falls_back(tmp_path: Path) -> None:
             [
                 'SYSTEM_JSON = "custom system"',
                 "",
-                "def strategy_prompt(description, taxonomy, guidance=None):",
+                "def strategy_prompt(description, taxonomy, valid_paths, guidance=None, count=None):",
                 '    return f"custom strategy for {description}: {len(taxonomy[\'factors\'])}"',
             ]
         )
@@ -272,7 +272,7 @@ def test_prompt_module_overrides_subset_and_falls_back(tmp_path: Path) -> None:
     )
     cfg = load_config(path)
     assert cfg.prompts.SYSTEM_JSON == "custom system"
-    assert cfg.prompts.strategy_prompt("NER", {"factors": [{}, {}]}) == "custom strategy for NER: 2"
+    assert cfg.prompts.strategy_prompt("NER", {"factors": [{}, {}]}, []) == "custom strategy for NER: 2"
     assert "Dataset description:" in cfg.prompts.factor_prompt("NER")
 
 
@@ -330,3 +330,12 @@ def test_prompt_module_rejects_bad_signature(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="strategy_prompt must accept parameters"):
         load_config(path)
+
+
+def test_strategy_count_bounds(tmp_path: Path) -> None:
+    assert load_config(_write_config(tmp_path, {"strategy": {"count": 6}})).strategy.count == 6
+    assert load_config(_write_config(tmp_path)).strategy.count is None
+    with pytest.raises(ValueError):
+        load_config(_write_config(tmp_path, {"strategy": {"count": 0}}))
+    with pytest.raises(ValueError):
+        load_config(_write_config(tmp_path, {"strategy": {"count": 13}}))

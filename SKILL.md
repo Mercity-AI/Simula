@@ -59,7 +59,8 @@ re-derive defaults — copy the template and change only what the decisions belo
    the artifacts in `runs/<name>/` (especially row shape and `taxonomy_mix`).
 4. **Pilot, real (gate: spend + key).** Switch roles to real models, set `generation.target_size`
    to ~20–50, and run `taxonomy` then `generate` as two steps so you (and optionally the user) can
-   eyeball `taxonomy.json` before paying for bulk generation. Inspect `dataset.final.jsonl` and
+   eyeball `taxonomy.json` **and `strategies.json`** before paying for bulk generation — see "The
+   strategy phase" below for what to actually look for in them. Inspect `dataset.final.jsonl` and
    `llm_calls.jsonl` for quality: atomic fields? faithful? right axes covered? Read the accept rate.
 5. **Scale (gate: confirm).** Raise `target_size` to the real number and run. Resume is on by
    default. Then `evaluate` for dedupe/coverage/diversity. Report cost from `cost_summary.json`.
@@ -82,6 +83,55 @@ Example of the judgment expected: for **job-description extraction**, posting **
 axis (a one-line listing vs a 600-word posting extract very differently) — so it belongs in the
 factors, not left to chance. Reason about the domain like this every time; don't ship a generic
 taxonomy when the domain has an obvious dominant axis.
+
+## The strategy phase — read the plan before you pay
+
+Pay close attention to how the work is being *planned* during the design phase. `taxonomy.json`
+(with its per-node `weight`s) and `strategies.json` (roots, weights, `never_combine`) together
+decide the dataset's entire distribution — what "typical" looks like across thousands of rows —
+before a single record is generated. They are drafted by a model, they are plausible-looking by
+construction, and every judgment error in them gets executed faithfully at full scale. Ninety
+seconds reading two JSON files is the cheapest QA gate in the pipeline; treat it as mandatory
+before any paid generation, not optional.
+
+**Cautionary example — a 2k short-story corpus that came out wrong.** A free-text story dataset was
+generated with a taxonomy whose `pov` factor listed second-person, epistolary, documentary-archive,
+and frame/mixed-form narration as sibling branches of ordinary first/third person. Every individual
+piece was defensible: the branches were real narrative forms, the strategy bundles were thematically
+coherent, and no single prompt or config line was obviously wrong. The corpus still came out with
+**~57% of stories in a high-artifice form** (21.9% second person alone), because several small,
+individually-reasonable choices compounded: the builder subdivided the *interesting* branches most
+finely (second person got 10 subtypes, workhorse close-third got 5) and the sampler of the time
+turned that granularity directly into probability; one strategy bundled *all* the experimental forms
+together, so every record it produced was unusual in several ways at once; and two factors (`pov`
+and `structure`) both contained document/frame ideas, so mixes could demand the same gimmick twice
+or contradict themselves. The result read like a corpus of narrative tricks, not stories.
+
+Be nuanced about the lesson. It is **not** "rare forms are bad" — a story dataset *should* contain
+epistolary and second-person stories, and coverage of the space is a real goal. The failure was
+that nothing in the plan encoded *how often* and *in what combinations*: enumeration granularity
+silently became prevalence, thematic affinity ("the weird stuff goes together") silently became
+concentration, and per-factor independence silently became constraint-stacking. When you review the
+design artifacts, you are checking exactly those three translations:
+
+- **Weights vs. reality.** For each factor, do the branch `weight`s in `taxonomy.json` reflect how
+  common each branch should be *in realistic data*, not how interesting it was to enumerate? Rare
+  forms should sit an order of magnitude below common ones (~0.03 vs ~1.0). A factor whose weights
+  are all ~1.0 despite obviously unequal real-world prevalence is a red flag.
+- **Bundles vs. concentration.** Read each strategy and ask what a record sampled from it actually
+  looks like. A strategy whose roots for some factor are *only* unusual branches makes them
+  mandatory, not occasional — rare things should be diluted across strategies, never concentrated
+  into one. Check every strategy covers every factor (bare factor name = fine).
+- **Combinations vs. coherence.** Look for factor overlap (two factors owning the same idea) and
+  for pairs that are individually fine but jointly incoherent or impossible at the record's scale —
+  that's what `never_combine` is for. A missing rule ships silently; sanity-check the model's rules
+  and add your own.
+
+All of it is hand-editable: fix weights in `taxonomy.json`, rebalance or split bundles and add
+`never_combine` pairs in `strategies.json`, then rerun — both files are reused verbatim. Use
+`--stop-after strategies` (or `generation.stop_after`) to halt there deliberately. If the mix
+distribution matters a lot, sample it for free: `sample_mix` is pure RNG, so a few thousand draws
+in a scratch script show the marginals before any money moves.
 
 ## Representation decisions (the high-leverage, easy-to-miss part)
 
@@ -194,6 +244,9 @@ point rather than writing from scratch.
 
 - **Smoke with `"fake"` before any real call.** It's free and offline; it catches schema and
   prompt-module bugs you'd otherwise pay to discover.
+- **Review `taxonomy.json` and `strategies.json` before any paid generation** (see "The strategy
+  phase"). The design artifacts are the dataset's distribution; a plausible-looking bad plan
+  executes faithfully at full scale.
 - **No real model calls without explicit user go-ahead** (spend gate) and a key in root `.env`.
   Never put a real API key in a YAML — only `api_key_env`.
 - **Don't commit** `runs/`, `.env`, or `llm_calls.jsonl` (prompts/responses can be sensitive).

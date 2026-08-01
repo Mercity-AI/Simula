@@ -143,8 +143,9 @@ Expansion plan:
 {plan}
 
 Propose {count} useful, non-overlapping child nodes for the current node.
+Give each child a "weight": its expected prevalence in realistic data for this dataset (dominant ~1.0, common ~0.5, uncommon ~0.15, rare ~0.03). Weight is prevalence, not how interesting the category is to enumerate; rare forms sit an order of magnitude below common ones.
 Return JSON:
-{{"children": [{{"name": "...", "description": "..."}}]}}
+{{"children": [{{"name": "...", "description": "...", "weight": 1.0}}]}}
 """.strip()
 
 
@@ -160,8 +161,9 @@ Raw proposed children:
 {json.dumps(raw_children, ensure_ascii=False)}
 
 Refine this list for completeness, soundness, specificity, and low duplication.
+Keep each child's "weight" (its expected prevalence in realistic data, not its interestingness): preserve incoming weights unless a merge or split makes an adjustment necessary, and give any new child a weight on the same scale (dominant ~1.0, common ~0.5, uncommon ~0.15, rare ~0.03).
 Return JSON:
-{{"children": [{{"name": "...", "description": "..."}}]}}
+{{"children": [{{"name": "...", "description": "...", "weight": 1.0}}]}}
 """.strip()
 
 
@@ -183,7 +185,13 @@ Return JSON:
 """.strip()
 
 
-def strategy_prompt(description: str, taxonomy: dict[str, Any], guidance: str | None = None) -> str:
+def strategy_prompt(
+    description: str,
+    taxonomy: dict[str, Any],
+    valid_paths: list[str],
+    guidance: str | None = None,
+    count: int | None = None,
+) -> str:
     # Optional user guidance steers which roots combine and how weights emphasize/de-emphasize branches.
     guidance_block = ""
     if guidance and guidance.strip():
@@ -191,17 +199,25 @@ def strategy_prompt(description: str, taxonomy: dict[str, Any], guidance: str | 
             "\nUser guidance (honor these preferences when choosing taxonomy roots and weights):\n"
             f"{guidance.strip()}\n"
         )
+    paths_block = (
+        "\nValid taxonomy paths (use these strings verbatim in taxonomy_roots and never_combine; "
+        "any other string is invalid):\n" + "\n".join(valid_paths) + "\n"
+    )
     return f"""
 Dataset description:
 {description}
 
 Taxonomy:
 {json.dumps(taxonomy, ensure_ascii=False)}
-{guidance_block}
-Create 2-5 sampling strategies. Each strategy lists compatible taxonomy roots and a weight.
-A higher weight makes a strategy sampled more often; use weights to emphasize common combinations and de-emphasize rare ones.
+{paths_block}{guidance_block}
+Create {count if count else "2-5"} sampling strategies. Each strategy is a thematic lane: mixes are sampled by drawing one node per factor from within its taxonomy_roots.
+- Every strategy must address every factor. A bare factor name means "sample that factor's full tree"; use it whenever the strategy has no opinion about that factor. Never omit a factor.
+- A higher weight makes a strategy sampled more often. Spread weights across a real range (common, broadly useful strategies near 1.0; rare or specialised ones near 0.1) instead of clustering everything near 1.0.
+- Before bundling roots together, think about what records their combination would actually produce. Avoid bundles whose combinations would force incoherent, contradictory, or over-constructed records — a combination that is individually sensible can still be strange in aggregate.
+- Spread rare or unusual branches thinly across strategies instead of concentrating them into one strategy; a strategy made only of unusual roots makes every record it produces unusual in several ways at once.
+- never_combine lists pairs of paths that must never appear in the same mix: combinations that would be contradictory, redundant (the same idea imposed by two factors), or impossible at the record's scale. Only add pairs you are confident about; an empty list is fine.
 Return JSON:
-{{"strategies": [{{"id": "general", "description": "...", "taxonomy_roots": ["..."], "weight": 1.0}}]}}
+{{"strategies": [{{"id": "general", "description": "...", "taxonomy_roots": ["..."], "weight": 1.0, "never_combine": [["...", "..."]]}}]}}
 """.strip()
 
 
@@ -213,10 +229,11 @@ Dataset description:
 
 {format_instruction}
 
-Sampled taxonomy requirements:
+Sampled ingredients for this record (not a strict checklist):
 {json.dumps(mix, ensure_ascii=False)}
 
 Generate {k} diverse meta-prompts. Each meta-prompt should tell a generator exactly what record to create.
+Think about what this combination of ingredients implies for the finished record. Full coverage of the ingredients, although important, is not the goal by itself — coherence, and being smart about what the combination should produce, is just as important, if not more. If ingredients conflict or their sum would be incoherent, build the meta-prompt around the load-bearing ones and soften or drop the rest.
 Return JSON:
 {{"meta_prompts": ["...", "..."]}}
 """.strip()

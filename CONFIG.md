@@ -112,6 +112,12 @@ Knobs for the breadth-first taxonomy build (`simula taxonomy`).
 | Key | Default | What it does |
 |---|---|---|
 | `guidance` | `null` | Optional free text woven into the strategy prompt to steer which taxonomy roots combine and how often. A nudge, not a hard constraint — for guarantees, edit `strategies.json` directly. See README → *Strategy Guidance*. |
+| `count` | `null` | Exact number of strategies to request (integer 1–12). `null` keeps the model's own 2–5 choice. Only takes effect when strategies are actually built — an existing `strategies.json` is reused as-is. |
+
+Strategies may also carry `never_combine` (pairs of taxonomy paths that must not appear in the same
+sampled mix) and reference per-node `weight`s in `taxonomy.json` — both live in the artifacts, not
+this config, and are meant to be reviewed and hand-edited there. Every path in `taxonomy_roots` and
+`never_combine` is validated against the real tree at build time; invalid paths fail loudly.
 
 ## `sampling`
 
