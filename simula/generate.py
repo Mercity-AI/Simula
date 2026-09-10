@@ -111,9 +111,9 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
     accepted_total = len(accepted)
     if cfg.evaluation.dedupe:
         accepted, _ = dedupe_rows(accepted)
-    final = coverage_aware_trim(accepted, target)
+    final = coverage_aware_trim(accepted, target) if cfg.generation.trim else accepted
     write_jsonl(final_path, final)
-    info(f"[dim]Accepted {accepted_total} → {len(final)} final after dedupe/trim (target {target})[/dim]")
+    info(f"[dim]Accepted {accepted_total} → {len(final)} final (target {target}, trim {'enabled' if cfg.generation.trim else 'disabled'})[/dim]")
     return final
 
 
@@ -182,7 +182,7 @@ async def _build_meta_prompts(
 
 def _run_fingerprint(cfg: Config, taxonomy: dict[str, Any], strategies: list[dict[str, Any]]) -> str:
     # Hash only the inputs that change a generated row's content or validity. target_size,
-    # overgenerate_ratio, concurrency, and checkpoint_every are deliberately excluded so a run can
+    # overgenerate_ratio, trim, concurrency, and checkpoint_every are deliberately excluded so a run can
     # be grown or re-paced and still resume. A prompt-module edit is caught via its file contents.
     # meta_prompts.jsonl is also excluded: growing a run appends new rows (which would spuriously
     # change the hash), and each dataset row records the meta_prompt it was actually built from.

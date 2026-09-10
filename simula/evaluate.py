@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import math
 import random
+import sqlite3
+import tempfile
+from contextlib import closing
 from itertools import combinations
 from pathlib import Path
 from typing import Any
@@ -37,22 +42,67 @@ def validate_record(
 
 def dedupe_rows(rows: list[dict[str, Any]], n: int = 13, threshold: float = 0.8) -> tuple[list[dict[str, Any]], list[str]]:
     kept: list[dict[str, Any]] = []
-    kept_grams: list[set[tuple[str, ...]]] = []
     removed: list[str] = []
+    sizes: list[int] = []
 
-    # Compare each candidate against kept records using the paper-style n-gram overlap.
-    for row in rows:
-        grams = ngrams_for_text(record_to_text(row.get("record")), n)
-        # Empty n-grams (record_to_text has no word tokens) carry no signal: two such records are
-        # not duplicates of each other. Without this guard _jaccard(set(), set()) == 1.0 silently
-        # collapses every empty/symbol-only record into one.
-        duplicate = bool(grams) and any(_jaccard(grams, existing) >= threshold for existing in kept_grams)
-        if duplicate:
-            removed.append(row["id"])
-            continue
-        kept.append(row)
-        kept_grams.append(grams)
+    # Keep postings on temporary disk with a bounded SQLite page cache, not millions of Python
+    # tuples/sets in RAM. Only kept rows enter the index, preserving the greedy first-kept rule.
+    with tempfile.TemporaryDirectory(prefix="simula-dedupe-") as directory, closing(
+        sqlite3.connect(str(Path(directory) / "index.sqlite"))
+    ) as index:
+        index.execute("PRAGMA journal_mode=OFF")  # Scratch index; rebuild on failure.
+        index.execute("PRAGMA cache_size=-8192")
+        index.execute("PRAGMA temp_store=FILE")
+        index.execute("CREATE TABLE postings (gram BLOB, size INTEGER, row_index INTEGER, PRIMARY KEY (gram, size, row_index)) WITHOUT ROWID")
+        for row in rows:
+            grams = ngrams_for_text(record_to_text(row.get("record")), n)
+            size = len(grams)
+            keys = _dedupe_prefix_keys(grams, threshold) if size and 0 < threshold <= 1 else []
+            candidates: set[int] = set()
+            # Jaccard cannot exceed min(size_a, size_b)/max(size_a, size_b). Round these SQL
+            # bounds outward, then check the exact bound below to avoid floating-point exclusions.
+            for start in range(0, len(keys), 900):
+                chunk = keys[start : start + 900]
+                placeholders = ",".join("?" for _ in chunk)
+                candidates.update(item[0] for item in index.execute(
+                    f"SELECT row_index FROM postings WHERE gram IN ({placeholders}) AND size BETWEEN ? AND ?",
+                    (*chunk, math.floor(threshold * size), math.ceil(size / threshold)),
+                ))
+            # A zero/negative threshold can match disjoint sets, so it needs the exhaustive path.
+            possible = range(len(kept)) if threshold <= 0 else sorted(candidates)
+            duplicate = False
+            for position in possible:
+                if not size:
+                    break  # Empty token sets carry no duplicate signal.
+                if min(size, sizes[position]) / max(size, sizes[position]) < threshold:
+                    continue
+                # Hashes select candidates only. Rebuild exact grams on demand so collisions
+                # cannot remove distinct records, and full gram sets are not retained per row.
+                existing = ngrams_for_text(record_to_text(kept[position].get("record")), n)
+                if _jaccard(grams, existing) >= threshold:
+                    duplicate = True
+                    break
+            if duplicate:
+                removed.append(row["id"])
+                continue
+            index.executemany("INSERT OR IGNORE INTO postings VALUES (?, ?, ?)",
+                              ((key, size, len(kept)) for key in keys))
+            kept.append(row)
+            sizes.append(size)
     return kept, removed
+
+
+def _dedupe_prefix_keys(grams: set[tuple[str, ...]], threshold: float) -> list[bytes]:
+    # With one global lexicographic ordering, sets meeting the Jaccard threshold must share an
+    # element in these prefixes. At 0.8 we index about 20% of each set. floor (rather than ceil)
+    # conservatively retains an extra element at fractional boundaries. Hash AFTER selecting the
+    # exact prefix: hash collisions can add candidates but cannot hide a genuinely shared gram.
+    length = min(len(grams), len(grams) - math.floor(threshold * len(grams)) + 1)
+    return [_dedupe_gram_key(gram) for gram in sorted(grams)[:length]]
+
+
+def _dedupe_gram_key(gram: tuple[str, ...]) -> bytes:
+    return hashlib.blake2b("\0".join(gram).encode("utf-8"), digest_size=16).digest()
 
 
 def decontaminate_rows(rows: list[dict[str, Any]], paths: list[str], n: int = 13, threshold: float = 0.8) -> tuple[list[dict[str, Any]], list[str]]:

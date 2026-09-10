@@ -145,8 +145,9 @@ Volume and behavior of the generation pass (`simula generate`).
 
 | Key | Default | What it does |
 |---|---|---|
-| `target_size` | `50` | Number of rows you want in `dataset.final.jsonl`. Accepted rows are coverage-trimmed back to this. |
+| `target_size` | `50` | Desired row count. Sets the attempt budget; caps `dataset.final.jsonl` only when `trim` is true. Rejections/dedupe can leave fewer rows. |
 | `overgenerate_ratio` | `1.3` | `attempts = ceil(target_size × ratio)`. Buffer for rows the critic/schema rejects. `1.0` = no buffer. |
+| `trim` | `true` | Coverage-trim accepted rows to `target_size`. Set false to skip selection and retain all accepted rows after optional dedupe, in their existing order. |
 | `scenarios_per_mix` | `3` | How many candidate meta-prompts the model drafts per sampled taxonomy mix; each attempt picks one at random. Higher = more variety per mix. |
 | `complexity_ratio` | `0.3` | Fraction of attempts (sampled per point) routed through the extra "complexify" step so the set mixes easy and hard items. `0.0` disables it. |
 | `max_refine_attempts` | `2` | Critic→refine retries per record before it is accepted or rejected. `0` = critique once, never refine. |
@@ -154,7 +155,7 @@ Volume and behavior of the generation pass (`simula generate`).
 | `checkpoint_every` | `50` | Write `run_state.json` every N completed attempts. Pure resume/durability cadence. |
 | `stop_after` | `null` | Halt `generate`/`run` once this stage's artifact is written: `taxonomy`, `strategies`, or `meta_prompts`. Edit the artifact, then rerun — existing artifacts are reused, so the run continues from where it stopped. The CLI `--stop-after` flag overrides this per invocation (`--stop-after none` disables a config-set stop). |
 
-**Resume note:** `target_size`, `overgenerate_ratio`, `concurrency`, and `checkpoint_every` are
+**Resume note:** `target_size`, `overgenerate_ratio`, `trim`, `concurrency`, and `checkpoint_every` are
 excluded from the resume fingerprint, so you can grow or re-pace a run and still `--resume`. Changing
 `scenarios_per_mix`, `complexity_ratio`, `max_refine_attempts` (or the description/schema/seed/models/
 prompts/sampling/taxonomy) invalidates resume and requires `--no-resume`.
@@ -166,7 +167,7 @@ What `simula evaluate` / `run` compute. Reads `dataset.final.jsonl`, writes
 
 | Key | Default | What it does | Extra model calls? |
 |---|---|---|---|
-| `dedupe` | `true` | n-gram dedupe of accepted rows. | No |
+| `dedupe` | `true` | 13-word n-gram dedupe of accepted rows at 0.8 Jaccard similarity. Uses a temporary disk index and exact verification. JSON records are serialized with sorted keys; all keys and values contribute. | No |
 | `coverage` | `true` | Report taxonomy coverage. | Only in `reassign`/`both` |
 | `coverage_mode` | `"lineage"` | `lineage` uses each row's `taxonomy_mix` (free). `reassign` asks the model to re-assign each row to a node. `both` does both. | `reassign`/`both` |
 | `complexity` | `false` | Elo complexity scoring (see below). | **Yes** |

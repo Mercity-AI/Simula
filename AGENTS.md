@@ -175,7 +175,8 @@ When modifying this code, test that `taxonomy_mix` contains one lineage entry pe
 5. Writes raw/accepted rows as each future completes.
 6. Updates `run_state.json`.
 7. Dedupes accepted rows if configured.
-8. Coverage-aware trims to `target_size`.
+8. Coverage-aware trims to `target_size` when `generation.trim` is true (default); otherwise keeps
+   all remaining accepted rows in their existing order. `trim` can change on resume.
 9. Writes `dataset.final.jsonl`.
 
 `generation.stop_after` (or CLI `--stop-after`) halts after step 1, 2, or 3 via `SystemExit(0)` —
@@ -228,6 +229,15 @@ Rate control is `generation.concurrency` (bounds in-flight requests) plus the re
 `run_evaluation` reads `dataset.final.jsonl` and writes the deduped/decontaminated result to a separate `dataset.evaluated.jsonl`. It never rewrites `dataset.final.jsonl`. It should only run from `evaluate` or `run`, not from `generate`.
 
 Coverage uses lineage from `taxonomy_mix`; it does not do independent LLM assignment in the MVP.
+
+Deduplication preserves exact Jaccard-13 decisions at the default 0.8 threshold and keeps the first
+retained match in input order. A temporary SQLite prefix index stores compact hashes to select
+candidates; sequence-count bounds skip impossible matches, then full sequence sets verify candidates.
+Hash collisions must never cause false deletions. Prefixes use a shared lexicographic sequence order,
+not text position or arbitrary sampling. The index uses temporary disk space and an 8 MiB page cache;
+input rows still reside in memory. JSON comparison serializes the whole `record` with sorted object
+keys before tokenization, so keys and values both contribute. Preserve these semantics and compare
+against exhaustive deduplication when optimizing further (`tests/test_evaluate.py`).
 
 Complexity scoring is optional and makes extra model calls.
 

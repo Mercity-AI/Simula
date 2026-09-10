@@ -288,6 +288,23 @@ embeddings.cache.npz
 `evaluate`/`run` and holds the deduped/decontaminated rows, leaving `dataset.final.jsonl`
 untouched.
 
+By default, generation coverage-trims accepted rows to `generation.target_size` after optional
+deduplication. Set `generation.trim: false` to skip trimming and keep all remaining accepted rows
+in their existing order, even above the target. The attempt budget still uses
+`ceil(target_size * overgenerate_ratio)`. You can change `trim` on resume without regenerating
+completed attempts. Deduplication is controlled independently by `evaluation.dedupe`.
+
+Deduplication compares case-folded word sequences from `record` (for JSON, serialized with sorted
+object keys, retaining array order). Keys and values both contribute; punctuation does not. It is
+text-overlap detection, not semantic or field-aware JSON comparison. The default is 13-word
+sequences with Jaccard similarity at least 0.8, keeping the first retained match in input order.
+A temporary SQLite index stores 16-byte hashes of a lexicographically ordered prefix (about 20%
+of each record's distinct sequences at the default threshold). Sequence-count bounds reject
+impossible matches, and candidate pairs are verified against exact sequences; hash collisions
+cannot delete distinct records. The index is removed when deduplication exits. Its page cache is
+8 MiB, but temporary disk usage grows with indexed sequences and the input rows still reside in
+memory. Highly repetitive inputs can still produce many candidate comparisons.
+
 `meta_prompts.jsonl` holds one row per attempt (`attempt_index`, sampled `strategy_id` +
 `taxonomy_mix`, `meta_prompt`, `complexified`). Like `taxonomy.json` and `strategies.json` it is
 reused when present — stop with `--stop-after meta_prompts`, hand-edit the prompts, and rerun to

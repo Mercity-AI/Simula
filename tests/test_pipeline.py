@@ -52,6 +52,35 @@ def test_fake_model_end_to_end(tmp_path: Path) -> None:
     assert "attempt_index" in rows[0]
 
 
+def test_trim_can_be_disabled_and_changed_on_resume(tmp_path: Path, monkeypatch) -> None:
+    import simula.generate as generation
+
+    cfg = load_config(write_config(tmp_path, {
+        "generation": {"target_size": 2, "overgenerate_ratio": 2, "complexity_ratio": 0},
+        "evaluation": {"dedupe": False},
+    }))
+    assert cfg.generation.trim is True
+    router = ModelRouter(cfg.data)
+    trimmed = asyncio.run(generate_dataset(cfg, router, quiet=True))
+    asyncio.run(router.flush_logs())
+    accepted = read_jsonl(artifact_path(cfg.output_dir, "accepted"))
+    assert len(trimmed) == 2
+    assert len(accepted) == 4
+    calls_before = read_jsonl(artifact_path(cfg.output_dir, "llm_calls"))
+
+    def unexpected_trim(*args):
+        pytest.fail("Disabled trimming must bypass coverage selection entirely")
+
+    monkeypatch.setattr(generation, "coverage_aware_trim", unexpected_trim)
+    cfg.generation.trim = False
+    untrimmed = asyncio.run(generate_dataset(cfg, router, quiet=True))
+    asyncio.run(router.flush_logs())
+    assert untrimmed == accepted
+    assert read_jsonl(artifact_path(cfg.output_dir, "final")) == accepted
+    assert read_jsonl(artifact_path(cfg.output_dir, "llm_calls")) == calls_before
+    assert not artifact_path(cfg.output_dir, "eval").exists()
+
+
 def test_sampling_override_is_logged_in_llm_calls(tmp_path: Path) -> None:
     cfg = load_config(write_config(tmp_path, {"sampling": {"tasks": {"generate": {"temperature": 1.3, "min_p": 0.07}}}}))
     router = ModelRouter(cfg.data)
