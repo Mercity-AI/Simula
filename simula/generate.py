@@ -193,42 +193,50 @@ async def _build_meta_prompts(
     k = cfg.generation.meta_prompts_per_mix
     limiter = asyncio.Semaphore(cfg.generation.concurrency)
 
-    async def _mix_group(mix_ids: list[int]) -> list[dict[str, Any]]:
-        # One scenario call covers meta_batch_size mixes (1 = today's one call per mix). Each mix's
-        # attempts get their lineage first, so a failure still reports it; a mix whose sampling fails
-        # only loses its own attempts.
-        groups: list[tuple[list[int], dict[int, dict[str, Any]], dict[str, Any] | None]] = []
-        for mix_id in mix_ids:
-            indexes = list(range(mix_id * k, min(mix_id * k + k, attempts)))
-            group = {index: {"attempt_index": index, "strategy_id": "error", "taxonomy_mix": [], "meta_prompt": "", "complexified": False} for index in indexes}
-            try:
-                lineage = _sample_lineage(cfg, taxonomy, strategies, mix_id, len(indexes))
-                for position, index in enumerate(indexes):
-                    group[index].update(strategy_id=lineage["strategy_id"], taxonomy_mix=lineage["taxonomy_mix"], complexified=lineage["harder"][position])
-            except Exception as exc:  # noqa: BLE001 - e.g. unsatisfiable never_combine rules.
-                lineage = None
-                for row in group.values():
-                    row["error"] = str(exc)
-            groups.append((indexes, group, lineage))
-        live = [(indexes, group, lineage) for indexes, group, lineage in groups if lineage is not None]
+    def _mix_attempts(mix_id: int) -> list[dict[str, Any]]:
+        # The attempts sharing one mix, each carrying the mix's lineage and its own complexify coin. A mix
+        # whose sampling fails (e.g. unsatisfiable never_combine rules) marks only its own attempts.
+        attempt_rows = [
+            {"attempt_index": index, "strategy_id": "error", "taxonomy_mix": [], "meta_prompt": "", "complexified": False}
+            for index in range(mix_id * k, min(mix_id * k + k, attempts))
+        ]
         try:
-            async with limiter:
-                scenario_lists = await _make_scenarios(cfg, router, [(lineage["taxonomy_mix"], len(indexes)) for indexes, _, lineage in live]) if live else []
-                for (indexes, group, _), scenarios in zip(live, scenario_lists):
-                    for position, index in enumerate(indexes):
-                        row = group[index]
-                        if position >= len(scenarios):
-                            row["error"] = f"meta prompt call returned {len(scenarios)} of {len(indexes)} scenarios"
-                            continue
-                        try:
-                            row["meta_prompt"] = await _complexify(cfg, router, scenarios[position]) if row["complexified"] else scenarios[position]
-                        except Exception as exc:  # noqa: BLE001 - a failed complexify only loses its own attempt.
-                            row["error"] = str(exc)
-        except Exception as exc:  # noqa: BLE001 - a failed meta prompt call should not abort the phase.
-            for _, group, _ in live:
-                for row in group.values():
+            lineage = _sample_lineage(cfg, taxonomy, strategies, mix_id, len(attempt_rows))
+        except Exception as exc:  # noqa: BLE001
+            for row in attempt_rows:
+                row["error"] = str(exc)
+            return attempt_rows
+        for row, harder in zip(attempt_rows, lineage["harder"]):
+            row.update(strategy_id=lineage["strategy_id"], taxonomy_mix=lineage["taxonomy_mix"], complexified=harder)
+        return attempt_rows
+
+    async def _attach(row: dict[str, Any], scenario: str) -> None:
+        # One attempt gets its scenario, complexified when its coin says so; a failed complexify only
+        # loses this attempt.
+        try:
+            row["meta_prompt"] = await _complexify(cfg, router, scenario) if row["complexified"] else scenario
+        except Exception as exc:  # noqa: BLE001
+            row["error"] = str(exc)
+
+    async def _mix_group(mix_ids: list[int]) -> list[dict[str, Any]]:
+        # One scenario call covers meta_batch_size mixes (1 = one call per mix).
+        mixes = [_mix_attempts(mix_id) for mix_id in mix_ids]
+        live = [attempt_rows for attempt_rows in mixes if "error" not in attempt_rows[0]]
+        async with limiter:
+            try:
+                specs = [(attempt_rows[0]["taxonomy_mix"], len(attempt_rows)) for attempt_rows in live]
+                scenario_lists = await _make_scenarios(cfg, router, specs) if live else []
+            except Exception as exc:  # noqa: BLE001 - a failed meta prompt call should not abort the phase.
+                scenario_lists = [[] for _ in live]
+                for row in (row for attempt_rows in live for row in attempt_rows):
                     row["error"] = str(exc)
-        return [row for _, group, _ in groups for index, row in group.items() if index not in rows]
+            for attempt_rows, scenarios in zip(live, scenario_lists):
+                for position, row in enumerate(attempt_rows):
+                    if position < len(scenarios):
+                        await _attach(row, scenarios[position])
+                    elif "error" not in row:
+                        row["error"] = f"meta prompt call returned {len(scenarios)} of {len(attempt_rows)} scenarios"
+        return [row for attempt_rows in mixes for row in attempt_rows if row["attempt_index"] not in rows]
 
     # Append rows in completion order from the main task, mirroring the generation loop's IO pattern.
     mix_ids = sorted({index // k for index in missing})
@@ -342,8 +350,9 @@ async def _scenario_batch(cfg: Config, router: ModelRouter, metas: list[dict[str
     items = [{"id": f"r{position + 1}", "meta_prompt": meta_row["meta_prompt"]} for position, meta_row in enumerate(live)]
     if not items:
         return rows
-    prompt = cfg.prompts.generate_record_batch_prompt(cfg.description, cfg.schema, items)
-    return rows + await _write_batch(cfg, router, prompt, live, items, combined=False)
+    written, missing_reason = await _send_batch(cfg, router, cfg.prompts.generate_record_batch_prompt(cfg.description, cfg.schema, items))
+    finished = await asyncio.gather(*(_finish_item(cfg, router, meta_row, written.get(spec["id"]), missing_reason) for meta_row, spec in zip(live, items)))
+    return rows + list(finished)
 
 
 async def _combined_batch(
@@ -380,8 +389,22 @@ async def _combined_batch(
         items.append({"id": f"r{len(items) + 1}", "mix": meta_row["taxonomy_mix"], "harder": meta_row["complexified"]})
     if not items:
         return rows
-    prompt = cfg.prompts.combined_batch_prompt(cfg.description, cfg.schema, items, choices)
-    return rows + await _write_batch(cfg, router, prompt, metas, items, combined=True, choices=choices, taxonomy=taxonomy)
+    written, missing_reason = await _send_batch(cfg, router, cfg.prompts.combined_batch_prompt(cfg.description, cfg.schema, items, choices))
+    for meta_row, spec in zip(metas, items):
+        if spec["id"] in written:
+            _record_plan(meta_row, written[spec["id"]], choices, taxonomy)
+    finished = await asyncio.gather(*(_finish_item(cfg, router, meta_row, written.get(spec["id"]), missing_reason) for meta_row, spec in zip(metas, items)))
+    return rows + list(finished)
+
+
+def _record_plan(meta_row: dict[str, Any], item: dict[str, Any], choices: list[dict[str, Any]], taxonomy: dict[str, Any]) -> None:
+    # Combined-path lineage: add the model-picked factors back (one entry per factor, taxonomy order),
+    # then store the model's plan + the ingredients as the row's meta_prompt, which the critic judges against.
+    if choices:
+        entries = {entry["factor"]: entry for entry in [*meta_row["taxonomy_mix"], *_picked_entries(item, choices)]}
+        meta_row["taxonomy_mix"] = [entries[factor["name"]] for factor in taxonomy["factors"] if factor["name"] in entries]
+    plan = str(item.get("plan") or "").strip()
+    meta_row["meta_prompt"] = "\n".join(filter(None, [plan, "Sampled ingredients:", mix_text(meta_row["taxonomy_mix"])]))
 
 
 def _picked_entries(item: dict[str, Any], choices: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -398,52 +421,30 @@ def _picked_entries(item: dict[str, Any], choices: list[dict[str, Any]]) -> list
     return entries
 
 
-async def _write_batch(
-    cfg: Config,
-    router: ModelRouter,
-    prompt: str,
-    metas: list[dict[str, Any]],
-    items: list[dict[str, Any]],
-    *,
-    combined: bool,
-    choices: list[dict[str, Any]] | None = None,
-    taxonomy: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    """Send one batch prompt, then validate, repair and critique each returned record on its own.
-
-    One bad item never sinks the batch: a record missing from (or malformed in) the response rejects
-    only its own attempt. Returns one row per meta row, in order.
-    """
+async def _send_batch(cfg: Config, router: ModelRouter, prompt: str) -> tuple[dict[str, dict[str, Any]], str]:
+    """Send one batch prompt; return its items by id and the reason a missing item is rejected with."""
     try:
         response = await router.complete("bulk", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.GENERATE)
-        written = {str(item.get("id")): item for item in _batch_items(response, "record")}
-        missing_reason = "Record missing from the batch response (or malformed in it)."
     except Exception as exc:  # noqa: BLE001 - a failed batch call rejects its attempts, not the run.
-        written, missing_reason = {}, f"Batch generation failed: {exc}"
+        return {}, f"Batch generation failed: {exc}"
+    return {str(item.get("id")): item for item in _batch_items(response, "record")}, "Record missing from the batch response (or malformed in it)."
 
-    async def finish(meta_row: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
-        item = written.get(spec["id"])
-        if item is None:
-            return _rejected(cfg, router, meta_row, missing_reason)
-        if combined:
-            if choices:  # restore one lineage entry per factor, in taxonomy order
-                entries = {entry["factor"]: entry for entry in [*meta_row["taxonomy_mix"], *_picked_entries(item, choices)]}
-                meta_row["taxonomy_mix"] = [entries[factor["name"]] for factor in (taxonomy or {}).get("factors", []) if factor["name"] in entries]
-            plan = str(item.get("plan") or "").strip()
-            meta_row["meta_prompt"] = "\n".join(filter(None, [plan, "Sampled ingredients:", mix_text(meta_row["taxonomy_mix"])]))
-        record = item.get("record")
-        if cfg.is_schema_free and not (isinstance(record, str) and record.strip()):
-            return _rejected(cfg, router, meta_row, "Batch item has no text record.")
-        try:
-            if cfg.is_schema_free:
-                checked = (record.strip(), True, None)
-            else:
-                checked = await _check_record(cfg, router, record, json.dumps(item, ensure_ascii=False))
-            return await _finish_row(cfg, router, meta_row, *checked)
-        except Exception as exc:  # noqa: BLE001 - point-level failures should checkpoint as rejected rows.
-            return _rejected(cfg, router, meta_row, f"Generation failed: {exc}")
 
-    return list(await asyncio.gather(*(finish(meta_row, spec) for meta_row, spec in zip(metas, items))))
+async def _finish_item(cfg: Config, router: ModelRouter, meta_row: dict[str, Any], item: dict[str, Any] | None, missing_reason: str) -> dict[str, Any]:
+    """Validate, repair and critique one batched record on its own, so one bad item never sinks the batch."""
+    if item is None:
+        return _rejected(cfg, router, meta_row, missing_reason)
+    record = item.get("record")
+    if cfg.is_schema_free and not (isinstance(record, str) and record.strip()):
+        return _rejected(cfg, router, meta_row, "Batch item has no text record.")
+    try:
+        if cfg.is_schema_free:
+            checked = (record.strip(), True, None)
+        else:
+            checked = await _check_record(cfg, router, record, json.dumps(item, ensure_ascii=False))
+        return await _finish_row(cfg, router, meta_row, *checked)
+    except Exception as exc:  # noqa: BLE001 - point-level failures should checkpoint as rejected rows.
+        return _rejected(cfg, router, meta_row, f"Generation failed: {exc}")
 
 
 def _batch_items(text: str, field: str) -> list[dict[str, Any]]:

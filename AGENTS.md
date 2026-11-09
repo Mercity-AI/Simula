@@ -187,7 +187,8 @@ When modifying this code, test that `taxonomy_mix` contains one lineage entry pe
    from their sampled mixes with a plan per record (`_combined_batch`, mode C; `model_picked` factors are
    offered as options and the model's pick becomes lineage). `meta_batch_size` batches the scenario step
    itself (mode A, `_make_scenarios`). Batched records are validated/repaired and critiqued one by one
-   (`_write_batch`); a malformed item loses only itself (`_batch_items`). All paths end in `_finish_row`.
+   (`_send_batch` + `_finish_item`); a malformed item loses only itself (`_batch_items`). All paths end in
+   `_finish_row`.
 5. Writes raw/accepted rows as each future completes.
 6. Updates `run_state.json`.
 7. Dedupes accepted rows if configured.
