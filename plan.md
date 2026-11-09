@@ -213,12 +213,11 @@ of a 10K run; cheaper routing for the strategic role is the next untested lever.
 | 5 | Reject `stop_after: meta_prompts` with `meta_prompts: false` (config and CLI flag) | done |
 | 6 | Stale text sweep (docstrings, docs, this file) | done |
 | 7 | Pilot analysis scripts in the repo (`analysis/`) | done |
-| — | Update `SKILL.md` for batching, the combined path, the critic switches and routing | **not done** (wanted later) |
+| — | Update `SKILL.md` for batching, the combined path, the critic switches and routing | done 2026-11-10 (also `code_level`, complexify, lineage check; README/DOCS/llms.txt stale spots fixed) |
 
 ### Open
 
 - Item 7: build the model-assigned algorithm once the proposal in §3 item 7 is signed off.
-- Update `SKILL.md` (batching modes, the combined path, `generation.critic` / `taxonomy.critic`, routing).
 - Backlog §4: provider batch pricing, retryable infra failures on resume, response cache, sibling-only
   expansion prompts, sending the strategy call the path list instead of the whole taxonomy.
 - Critic leniency differs by provider; re-check judge numbers on a larger sample before a big run.

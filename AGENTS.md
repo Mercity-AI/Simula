@@ -43,6 +43,12 @@ Tests:
 - `tests/test_evaluate.py`
 - `tests/test_pipeline.py`
 - `tests/test_models.py`
+- `tests/test_taxonomy_sampling.py`
+- `tests/test_diversity.py`
+
+Pilot tooling (not part of the package): `analysis/` holds the scripts behind the cost/quality tables in
+`plan.md` (arm configs, stall watcher, cost/shape/diversity analysis, the blind judge) and the experimental
+factor-roles prompt (`factor_roles.py`). They make real model calls only when run by hand.
 
 Generated artifacts:
 

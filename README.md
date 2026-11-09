@@ -27,6 +27,7 @@ The current implementation is intentionally lean. It uses JSON/YAML files, OpenA
 - Generates JSON records matching a user-defined schema, or direct free-form text when `schema: null`.
 - Validates records with a JSON Schema subset.
 - Runs a simple critic/refine loop.
+- Optionally writes several records per call straight from their sampled mixes (the combined path), with every record still validated and critiqued on its own.
 - Writes every model response to `llm_calls.jsonl` as soon as it returns.
 - Writes raw, accepted, and final datasets as JSONL.
 - Supports n-gram dedupe, coverage reports, optional reassignment coverage, diversity metrics, and optional complexity scoring.
@@ -182,13 +183,16 @@ Paths are resolved relative to the YAML file. The module may override any subset
 SYSTEM_JSON = "Return valid JSON only."
 
 
-def strategy_prompt(description, taxonomy, guidance=None):
+def strategy_prompt(description, taxonomy, valid_paths, guidance=None, count=None):
     return f"""
 Dataset description:
 {description}
 
 Taxonomy:
 {taxonomy}
+
+Use only these taxonomy paths, verbatim:
+{valid_paths}
 
 Create only combinations that make semantic sense for this dataset.
 Return JSON with a strategies array.
@@ -313,7 +317,10 @@ generate from the edited versions. With `generation.meta_prompts: false` (the co
 no meta-prompt step and no `meta_prompts.jsonl`: records are written straight from their sampled
 mixes, `generation.record_batch_size` per call. On that path, factors listed in `generation.model_picked` are
 chosen by the model per record from the offered options; their lineage entries carry
-`"picked_by": "model"`.
+`"picked_by": "model"`. Factors listed in `generation.code_level` are sampled by code only down to
+that tree level (their lineage entry is the node at that level) and the writer chooses the specifics
+beneath it; this works on both paths. A record whose complexify coin came up is rewritten by a
+separate `complexify` call: on the scenario, or on the combined path on the written record.
 
 `llm_calls.jsonl` is especially useful while a run is still active. Every successful model response is appended immediately with:
 
@@ -386,7 +393,7 @@ The query extraction example generates records like:
 Run it in two phases if you want to inspect the taxonomy before spending generation calls:
 
 ```bash
-export OPENROUTER_API_KEY="..."
+echo 'OPENROUTER_API_KEY=sk-or-...' > .env   # the only source of API keys; a shell export is ignored
 python -m simula.cli taxonomy examples/query_extraction_gemini.yaml
 python -m simula.cli generate examples/query_extraction_gemini.yaml
 ```
@@ -419,11 +426,11 @@ Current test coverage includes:
 
 ## Current Limitations
 
-- Generation is thread-based and pilot-scale, not distributed.
+- Generation is `asyncio`-concurrent and pilot-scale, not distributed.
 - The model client only supports OpenAI-compatible chat completions.
 - The critic is simple: one critique per record, plus a re-critique after each refine.
 - Complexity scoring is optional and relatively basic.
-- Taxonomy coverage for generated data uses lineage, not independent LLM assignment.
+- Taxonomy coverage uses lineage by default (what was sampled, not what the record verifiably contains); `evaluation.coverage_mode: reassign` adds independent LLM assignment at the cost of extra calls.
 - There is no database, web UI, fine-tuning harness, multimodal support, or production queue.
 
 ## Development Notes

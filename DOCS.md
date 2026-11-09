@@ -107,7 +107,9 @@ the real tree when strategies are built — an invalid path is a loud error, not
 included — they sample their full tree) walk the tree level by level, choosing among siblings by
 their per-node `weight` (default `1.0`, `0` disables a branch), down to a leaf. A mix that violates a
 `never_combine` pair is redrawn. Because the walk is level-wise, a branch's probability comes from
-its *weight*, never from how finely the builder happened to subdivide it.
+its *weight*, never from how finely the builder happened to subdivide it. `generation.code_level:
+{factor: level}` stops code at a level for that factor: the node there is what the record is built from,
+with its exact share, and the writer chooses the specifics beneath it.
 
 **Why you should read these artifacts:** the taxonomy's node weights and the strategies' bundles
 *are* the dataset's distribution — they decide what "typical" looks like at scale, before any
@@ -459,7 +461,7 @@ change it (blank sections fall back to defaults). Required fields have no defaul
 | `complexity_batch_size`       | Records per critic batch when scoring.                   | `5`          | yes         | integer > 0 |
 | `complexity_samples_per_item` | Shuffled batches each record appears in.                 | `2`          | yes         | integer > 0 |
 | `decontaminate_against`       | Reference/test JSONL paths to drop overlapping rows.     | `[]`         | yes         | list of paths |
-| `diversity.enabled`           | Embedding diversity (needs `[diversity]` extra).         | `false`      | yes         | bool |
+| `diversity.enabled`           | Embedding diversity: Vendi score, local and global diversity (needs `[diversity]` extra). | `false` | yes | bool |
 | `diversity.embedding_model`   | Sentence-transformers model id.                          | `all-MiniLM-L6-v2` | yes   | string |
 | `diversity.k_local`           | Neighbours for the local-diversity metric.               | `10`         | yes         | integer > 0 |
 | `diversity.sample_cap`        | Max rows embedded (random subset beyond this).           | `1000`       | yes         | integer > 0 |
@@ -508,7 +510,22 @@ each with a one-line plan. Every record is then validated, repaired and critique
 its own mix as lineage, so a bad record never sinks its batch. It is cheaper (no scenario calls, the
 instruction prompt is sent once per batch) but gives up the reviewable/editable scenario step. Hidden
 reasoning does not shrink with batching — a 10-record batch reasons about as much per record as ten
-single calls — so give `bulk` a `max_tokens` large enough for the whole batch.
+single calls — so give `bulk` a `max_tokens` large enough for the whole batch. Complexify stays its own
+call on this path: a record whose coin came up (`complexity_ratio`) is handed to a `complexify` call
+that returns a harder version, which is then validated and critiqued like any other record.
+
+### Deep leaves of one factor may not fit the other factors
+
+Every factor is sampled independently, so a very specific leaf of one factor can land next to a value
+of another factor it cannot go with (an attribute like "screen width in pixels" on a product with no
+screen), or can fix something another factor is supposed to decide. The writer is told to soften an
+ingredient that fits badly, but a factor that clashes often makes records read as forced.
+**Workarounds:** for a few specific pairs, add `never_combine` rules to `strategies.json`. For a factor
+whose deep leaves clash often, set `generation.code_level: {factor: 2}` so code picks a broader node
+and the writer fits the specifics to the record. In two pilots this raised realism and coherence with
+no loss of diversity at level 2, while level 1 was too broad and records drifted toward the typical —
+cut as deep as is safe. Unusual-but-possible combinations are not a reason to cut; they are the variety
+independent sampling exists to produce.
 
 ### Topic distribution is weighted, so over-represented labels dominate the *accepted* set
 
@@ -557,5 +574,3 @@ cost of extra model calls. Treat lineage coverage as "what we asked for" and rea
   per-role endpoints/keys are not currently supported — see the cleanup note in `AGENTS.md`).
 - The critic is simple: one critique per record, plus a re-critique after each refine (`max_refine_attempts: 2`).
 - No database, web UI, fine-tuning harness, or multimodal support.
-</content>
-</invoke>

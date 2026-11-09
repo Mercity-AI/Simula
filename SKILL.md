@@ -36,9 +36,12 @@ Only these. If a choice isn't here, pick the default and move on.
 | **Fixed vs per-row schema** | Determines whether you write a strict `schema` or an open envelope + prompt module. | Only ask if the description is ambiguous; otherwise infer and state it. |
 | **Final scale-up** | A 10k run is real money. | Confirm once before scaling from pilot to full target. |
 
-Everything else — taxonomy depth, factors/axes, `best_of_n`, `children_per_node`,
-`overgenerate_ratio`, `complexity_ratio`, `max_refine_attempts`, `concurrency`, model-role
-assignment, whether to write a prompt module — **you decide.** Surface, don't ask.
+Everything else — taxonomy depth, factors/axes, `best_of_n`, `children_per_node`, the generation path
+and batch size, `code_level`, `overgenerate_ratio`, `complexity_ratio`, `max_refine_attempts`,
+`concurrency`, model-role assignment, whether to write a prompt module — **you decide.** Surface, don't
+ask. One exception: turning the record critic off (`generation.critic: false`) trades quality for cost,
+so only do it when the user asks for the cheapest possible run and accepts the trade (see "Pick the
+generation path").
 
 ## Workflow
 
@@ -52,7 +55,8 @@ re-derive defaults — copy the template and change only what the decisions belo
    `examples/<name>_prompts.py` (model after `examples/job_extraction_prompts.py` or
    `examples/ecommerce_search_extraction_prompts.py`).
 2. **Validate.** `python -m simula.cli validate examples/<name>.yaml` — catches config/schema/
-   prompt-module errors with zero model calls. Always do this before anything real.
+   prompt-module errors with zero model calls. Always do this before anything real. Unknown or
+   misspelled config keys are errors, not silently ignored, so a typo shows up here.
 3. **Smoke test, free.** Set every model role to `"fake"` and run
    `python -m simula.cli run examples/<name>.yaml`. This is offline and deterministic — it proves
    the pipeline, schema, lineage, and prompt module work end to end before spending a cent. Inspect
@@ -61,9 +65,38 @@ re-derive defaults — copy the template and change only what the decisions belo
    to ~20–50, and run `taxonomy` then `generate` as two steps so you (and optionally the user) can
    eyeball `taxonomy.json` **and `strategies.json`** before paying for bulk generation — see "The
    strategy phase" below for what to actually look for in them. Inspect `dataset.final.jsonl` and
-   `llm_calls.jsonl` for quality: atomic fields? faithful? right axes covered? Read the accept rate.
+   `llm_calls.jsonl` for quality: atomic fields? faithful? right axes covered? Read the accept rate,
+   and **check lineage**: read a dozen rows next to their `taxonomy_mix` and confirm each record is
+   really about what was sampled for it (see "Check lineage on the pilot").
 5. **Scale (gate: confirm).** Raise `target_size` to the real number and run. Resume is on by
-   default. Then `evaluate` for dedupe/coverage/diversity. Report cost from `cost_summary.json`.
+   default. Watch the run: if no model call lands for a few minutes, a request has hung — stop it and
+   rerun, resume only redoes the missing attempts. Then `evaluate` for dedupe/coverage/diversity.
+   Report cost from the `cost` logged per call in `llm_calls.jsonl` (the provider-billed amount, when
+   the provider reports one); `cost_summary.json` only covers the last command you ran.
+
+## Pick the generation path
+
+There are two ways records get written. Choose once, before the pilot; switching later means
+`--no-resume`.
+
+| Path | Config | Use it when |
+|---|---|---|
+| **Combined** (the default recommendation) | `meta_prompts: false`, `record_batch_size: 5` | You want the cheapest good data. One call writes 5 records straight from their sampled mixes, each with a one-line plan; every record is still validated and critiqued on its own. In our pilot it cost about half as much as the scenario path on the same model, and its records were more faithful. |
+| **Scenario** | `meta_prompts: true` (the built-in default) | The user wants to read or hand-edit the per-record scenarios (`meta_prompts.jsonl`, `--stop-after meta_prompts`) before records are written. Costs an extra call per record; `meta_batch_size` and `record_batch_size` can batch it. |
+
+- **Batch size follows record length.** `5` for short records (queries, QA pairs, tickets). `1`–`2` for
+  long free text, because records written together come out shorter. Past ~5 the records drift from
+  their requested shape (measured: fit to the sampled shape 80% → 73% → 69% at 1 / 5 / 10 per call).
+- **Give `bulk` room.** A batch reasons before it answers; set `models.bulk.max_tokens` high (the
+  e-commerce example uses 65536) or replies get cut off and the whole batch is lost.
+- **Keep the critic on.** It roughly halves invented content. Off (`generation.critic: false`) is the
+  cheapest setting, but in our pilot about one row in three then had an unsupported or missing fact.
+- **Routing matters more than any knob.** On OpenRouter, a `:nitro` model id billed about twice list
+  price and reasoned about twice as much per call as the same model on default routing. Use the plain
+  model id for big runs unless the user needs speed; default routing is slower and occasionally hangs.
+- **Complexify is always its own call** (`complexity_ratio` of records): it rewrites the scenario, or on
+  the combined path takes the written record and returns a harder one. Budget `complexity_ratio` extra
+  calls per record, or set it to `0` when "harder" has no meaning for the dataset.
 
 ## Archetype → natural variation axes
 
@@ -127,6 +160,25 @@ design artifacts, you are checking exactly those three translations:
   that's what `never_combine` is for. A missing rule ships silently; sanity-check the model's rules
   and add your own.
 
+- **Depth vs. fit.** Factors are sampled independently, so check whether the *deep* leaves of one
+  factor can go with anything. A leaf like "screen width in pixels" only suits some products; an
+  "intent" leaf that fixes the price and shipping constraints steps on another factor. When a factor's
+  leaves often cannot go with the other factors' values, stop code one or two levels up with
+  `generation.code_level: {factor: level}`: code still picks that level with exact shares, and the
+  writer chooses the specifics beneath it to suit the record. Judge by *impossible* pairs only —
+  unusual pairs are the variety you are paying for. Cut as deep as is safe: in two pilots, cutting two
+  such factors at level 2 gave more natural records with no loss of variety, while cutting at level 1
+  let the writer drift toward typical records. A handful of impossible pairs is a `never_combine` job,
+  not a reason to cut. (`analysis/factor_roles.py` asks a model for these levels; it makes real calls,
+  so it sits behind the spend gate, and its answer is a majority of several runs, not one.)
+
+Also read the `Mix space:` line `generate` prints before it starts: it says how many distinct mixes the
+plan can produce against how many this run draws, and warns when mixes will repeat.
+
+Leave `generation.model_picked` alone unless a factor is pure texture (formality, sign-off style) that
+nobody trains on. When the writer chooses a factor itself it over-picks the typical options, drops rare
+ones, and its own report of what it picked is unreliable — never use it for a label.
+
 All of it is hand-editable: fix weights in `taxonomy.json`, rebalance or split bundles and add
 `never_combine` pairs in `strategies.json`, then rerun — both files are reused verbatim. Use
 `--stop-after strategies` (or `generation.stop_after`) to halt there deliberately. If the mix
@@ -188,10 +240,17 @@ Copy from `template.yaml`; change only these per the task. Don't ask about any o
   strategic + a "flash" bulk/critic on the same OpenRouter-compatible `provider`). `"fake"` for
   smoke tests. For reasoning models, set `extra_body: {reasoning: {effort: low, exclude: true}}` per
   role — there's no auto-detection.
-- **`overgenerate_ratio` ~1.2**, raise toward 1.5–2 if pilot accept rate is low.
-- **`concurrency` ~4**; lower it if the provider rate-limits, raise cautiously for big runs.
+- **Taxonomy build.** Leave `best_of_n: 1` and `taxonomy.critic: true` (2 calls per expanded node).
+  Turning the taxonomy critic off halves the build cost but gave a much thinner tree when we tried it
+  (3 of 21 described branches survived); only do it for throwaway runs.
+- **`overgenerate_ratio` ~1.1**, raise toward 1.5 if the pilot accept rate is low. With a working
+  prompt module the accept rate is usually near 99%.
+- **`concurrency`.** It caps model calls in flight; the built-in `4` is slow. Use 40–80 for real runs
+  if the provider allows, and lower it when you see rate-limit retries. On the combined path a batch
+  counts as `record_batch_size` calls.
 - **`complexity_ratio` / `max_refine_attempts`** — leave at template defaults unless quality demands
-  more refinement.
+  more refinement. An accepted row whose last critic verdict says "reject" is normal: the critic
+  returned a corrected record and it was accepted directly.
 
 ## Custom prompts (a Python prompt module)
 
@@ -218,8 +277,13 @@ How it works:
 The high-leverage functions to override (see `simula/prompts.py` for the full list + exact
 signatures — don't guess them):
 
-- **`meta_prompt_prompt(...)`** — the main lever. It plans each example (context, the concrete target
-  schema for that row, which fields are present/absent). Most task-specific rules go here.
+- **`combined_batch_prompt(...)`** — the main lever on the combined path. It gets several records'
+  sampled mixes at once and must say how to plan and write each record. Most task-specific rules go
+  here; `complexify_record_prompt(...)` says what "harder" means for a finished record.
+- **`meta_prompt_prompt(...)`** — the main lever on the scenario path. It plans each example (context,
+  the concrete target schema for that row, which fields are present/absent). A scenario should
+  *describe* the record, not write it: a scenario that contains the finished record gets copied,
+  invented details included.
 - **`critique_prompt(...)`** (JSON) / **`critique_text_prompt(...)`** (free-text) — make the critic
   actively reject your anti-patterns (compound fields, hallucinated values, wrong absent-field policy).
 - **`generate_record_prompt(...)`**, **`strategy_prompt(...)`**, the taxonomy prompts
@@ -237,8 +301,28 @@ def critique_prompt(description, schema, meta_prompt, record):
 ```
 
 Copy `examples/job_extraction_prompts.py` (atomic fields + omit-when-absent + strict critic) or
-`examples/ecommerce_search_extraction_prompts.py` (per-row varying schema) as a working starting
-point rather than writing from scratch.
+`examples/ecommerce_search_extraction_prompts.py` (per-row varying schema; every prompt for the
+combined path, including a critic that returns the corrected record) as a working starting point
+rather than writing from scratch.
+
+Three rules for any prompt you write, each learned from a bad run:
+
+- **Never ask the model to vary something code already sampled.** A prompt that said "vary the product
+  across the candidates" produced a dataset where about 60% of rows were not about the product recorded
+  in their lineage. The mix decides *what*; the prompt decides *how*.
+- **Say what wins when ingredients clash.** The sampled nodes are drawn independently. Give the writer
+  a precedence (subject first) and permission to soften or drop an ingredient that does not fit.
+- **Tell the writer the nodes are instructions, not content.** Otherwise taxonomy names and
+  descriptions leak into records.
+
+## Check lineage on the pilot
+
+Lineage (`taxonomy_mix` on every row) is only worth something if the record matches it, and nothing in
+the pipeline verifies that by default. On the pilot, read rows against their mix: is the record about
+the sampled subject, does it have the sampled shape or length, does it carry the sampled label? If a
+factor is routinely ignored, fix the prompt (or the factor) before scaling — a big run copies the
+mismatch faithfully. For a measured number, `evaluation.coverage_mode: reassign` has the critic
+classify each record independently (extra calls).
 
 ## Guardrails (never violate)
 
@@ -254,8 +338,12 @@ point rather than writing from scratch.
   *below* target silently if the accept rate is low. If `len(final) < target`, say so and either
   raise `overgenerate_ratio` or investigate rejections in `dataset.raw.jsonl`. Confirm
   `taxonomy_mix` is non-empty on rows (lineage) and that fields are atomic.
-- **Report honestly.** Give real counts and real cost from `cost_summary.json`; if quality is off,
-  show the offending rows from `llm_calls.jsonl` rather than declaring success.
+- **Report honestly.** Give real counts and the real billed cost (sum of `cost` in `llm_calls.jsonl`;
+  `cost_summary.json` is per command); if quality is off, show the offending rows from
+  `llm_calls.jsonl` rather than declaring success.
+- **Don't change a fingerprinted knob mid-run.** The path, batch sizes, `code_level`, `model_picked`,
+  `complexity_ratio`, critic settings, models, prompts, taxonomy and strategies are part of the resume
+  fingerprint. `target_size`, `overgenerate_ratio` and `concurrency` are not, so growing a run is safe.
 
 ## Pointers (don't duplicate these here)
 
@@ -272,6 +360,6 @@ point rather than writing from scratch.
   | `cat_stories_freetext.yaml` | free-text generation (`schema: null`), no JSON |
   | `query_extraction_gemini.yaml` | NL query → structured JSON, fixed schema |
   | `job_extraction.yaml` + `job_extraction_prompts.py` | text → atomic JSON, **omit-when-absent**, strict critic (the prompt-module reference) |
-  | `ecommerce_search_extraction.yaml` + `ecommerce_search_extraction_prompts.py` | extraction with a **per-row varying schema** |
+  | `ecommerce_search_extraction.yaml` + `ecommerce_search_extraction_prompts.py` | extraction with a **per-row varying schema**; also the reference for the **combined path** (5 records per call, critic on, about $0.40 per 1K rows in our pilot) |
 
   The `*_prompts.py` files are the worked references for the custom-prompts section above.
