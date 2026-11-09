@@ -113,7 +113,11 @@ The invariants an agent must preserve (these are not written down in the field t
 - Pydantic enforces non-empty description, a `model` per role, valid `review_mode`/`coverage_mode`,
   and positive/in-range generation + taxonomy knobs, so a bad
   `target_size`/`overgenerate_ratio`/`concurrency` fails at load with a `ValueError`, not as a silent
-  zero-row run. Keep validation in the models, not scattered through call sites.
+  zero-row run. Keep validation in the models, not scattered through call sites. Cross-knob rules live
+  in model validators too: meta-prompt knobs (`meta_prompts_per_mix`, `meta_batch_size`,
+  `stop_after: meta_prompts`) need `meta_prompts: true`; `model_picked` needs it false;
+  `taxonomy.critic: false` needs `best_of_n: 1`. `model_picked` factor names are checked against the
+  taxonomy right after it loads (`_check_model_picked`), before strategies or records spend calls.
 - Connection lives on one `provider` block (`base_url`/`api_key_env`/`timeout_seconds`) shared by all
   roles; `api_key_env` names a variable read only from the project-root `.env`. `timeout_seconds`
   (default 180) is the per-request timeout. `load_config` prints a non-fatal stderr warning when a
@@ -199,6 +203,8 @@ When modifying this code, test that `taxonomy_mix` contains one lineage entry pe
 `generation.stop_after` (or CLI `--stop-after`) halts after step 1, 2, or 3 via `SystemExit(0)` —
 the same mechanism as `write_then_edit` — so the stage's artifact can be edited before a rerun
 continues from it. Steps 1–3 are all reuse-if-present; delete an artifact to regenerate it.
+`stop_after: meta_prompts` is rejected with `meta_prompts: false` (no artifact to stop at); the CLI flag
+is checked too, because the generation section validates on assignment.
 
 Resume (`--resume`, the default) skips attempt indexes already in `dataset.raw.jsonl` and reuses
 accepted rows. `run_state.json` stores a fingerprint of the resume-invalidating inputs (description,

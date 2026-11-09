@@ -411,6 +411,7 @@ change it (blank sections fall back to defaults). Required fields have no defaul
 | `depth`             | Levels below each factor root (`0` = factors only).       | `2`             | yes         | integer ≥ 0 |
 | `factors`           | Hand-supplied factors; `null` lets the model discover 3–6.| `null`          | yes         | list of `{name, description}` or `null` |
 | `best_of_n`         | Candidate child lists per node before the critic refines. | `1`             | yes         | integer > 0 |
+| `critic`            | Refine each node's proposals with a critic call (`false` = 1 call per node, coarser tree). | `true` | yes | bool (`false` needs `best_of_n: 1`) |
 | `review_mode`       | Whether the run halts for manual taxonomy edits.          | `"auto_accept"` | yes         | `auto_accept`, `write_then_edit`, `interactive_confirm` |
 | `children_per_node` | Target children requested per node.                       | `4`             | yes         | integer > 0 |
 | `log_style`         | How the build is shown.                                   | `"light"`       | yes         | `light`, `tree` |
@@ -444,7 +445,7 @@ change it (blank sections fall back to defaults). Required fields have no defaul
 | `max_refine_attempts`| Refines per record; each refined record is critiqued again (`0` = critique once, no refine).| `2` | yes | integer ≥ 0 |
 | `concurrency`        | In-flight model calls; lower if rate-limited.                     | `4`     | yes         | integer > 0 |
 | `checkpoint_every`   | Write `run_state.json` every N completed attempts.               | `50`    | yes         | integer > 0 |
-| `stop_after`         | Halt `generate`/`run` once this stage's artifact is written (edit it, rerun to continue). CLI `--stop-after` overrides; `--stop-after none` disables. | `null`  | yes         | `taxonomy`, `strategies`, `meta_prompts`, `null` |
+| `stop_after`         | Halt `generate`/`run` once this stage's artifact is written (edit it, rerun to continue). CLI `--stop-after` overrides; `--stop-after none` disables. | `null`  | yes         | `taxonomy`, `strategies`, `meta_prompts` (needs `meta_prompts: true`), `null` |
 
 ### `evaluation`
 

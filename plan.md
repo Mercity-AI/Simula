@@ -3,8 +3,8 @@
 Branch: `optimizations` (cut from `main` at `c27f83b9`). Goal: bring Simula's per-row cost toward
 Bespoke Curator levels without losing what the taxonomy, lineage and quality gates buy us.
 
-Status (2026-11-08, evening): **phases 0–3 implemented and piloted** (uncommitted on this branch);
-results in §0. Sections 1–4 below are the original design, kept as written; §0 records where the
+Status (2026-11-10): **phases 0–3 implemented, piloted and committed on this branch** (not pushed, not
+merged); results and follow-ups in §0. Sections 1–4 below are the original design, kept as written; §0 records where the
 implementation deviated and why. Follow `AGENTS.md` (compact code, `pytest -q`, fake-model tests,
 update `CONFIG.md`/`template.yaml`/README when config changes, no real model calls without asking).
 
@@ -382,12 +382,12 @@ and one cheap model. Real calls cost money — get the user's go-ahead first.
 
 #### 3. Never throw scenarios away
 
-- **Why:** one `meta_prompt` call writes `meta_prompts_per_mix` (default 3) scenarios for one mix in one
+- **Why:** one `meta_prompt` call writes `scenarios_per_mix` (default 3) scenarios for one mix in one
   response and keeps one at random — paying for and discarding two. The Simula paper (arXiv 2603.29791)
   does this to avoid mode collapse when *one mix is reused for several records* ("generate multiple
   simultaneously, then sub-sample the required fraction"); we sample a fresh mix per attempt, so that
   reason doesn't apply. The discarded drafts also invite drift away from the mix (see lineage problem).
-- **Change:** keep every scenario. `meta_prompts_per_mix: K` = one call writes K scenarios for one mix and
+- **Change:** keep every scenario. `scenarios_per_mix: K` = one call writes K scenarios for one mix and
   all K become attempts sharing that mix. Default `1`. Prompt asks for genuinely distinct scenarios.
 - **Work through:** mixes sampled = ceil(attempts / K); one meta row per attempt with shared lineage;
   per-mix RNG; resume/fingerprint; trim/coverage with shared mixes. Applies to today's path and batch

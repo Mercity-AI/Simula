@@ -112,7 +112,8 @@ Pass `--stop-after {taxonomy,strategies,meta_prompts}` (or set `generation.stop_
 config) to halt once that stage's artifact is written. Edit the artifact, then rerun: existing
 artifacts are reused, so the run picks up where it stopped. `--stop-after none` overrides a
 config-set stop for one invocation. To regenerate a stage instead, delete its file
-(`taxonomy.json`, `strategies.json`, `meta_prompts.jsonl`) and rerun.
+(`taxonomy.json`, `strategies.json`, `meta_prompts.jsonl`) and rerun. With `generation.meta_prompts: false` there is no
+meta-prompt stage, so `meta_prompts` is not a valid stop there.
 
 ```bash
 simula evaluate CONFIG.yaml
