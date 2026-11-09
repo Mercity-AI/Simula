@@ -184,6 +184,9 @@ class GenerationCfg(_Section):
     step). model_picked {factor: level} lets the model choose those factors per record on the combined
     path instead of code sampling them. critic=False accepts every schema-valid record."""
 
+    # validate_assignment: the CLI's --stop-after is set after load and must hit the same checks.
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
     target_size: int = Field(50, gt=0)
     overgenerate_ratio: float = Field(1.3, ge=1.0)
     trim: bool = True
@@ -212,6 +215,9 @@ class GenerationCfg(_Section):
         for knob in ("meta_prompts_per_mix", "meta_batch_size"):
             if not self.meta_prompts and getattr(self, knob) > 1:
                 raise ValueError(f"generation.{knob} > 1 requires generation.meta_prompts: true.")
+        # The combined path writes no meta-prompt artifact, so there is nothing to stop after and edit.
+        if not self.meta_prompts and self.stop_after == "meta_prompts":
+            raise ValueError("generation.stop_after: meta_prompts requires generation.meta_prompts: true (the combined path writes no meta_prompts.jsonl).")
         # Model-picked factors are offered as options inside the combined batch prompt.
         if self.model_picked and self.meta_prompts:
             raise ValueError("generation.model_picked requires generation.meta_prompts: false (the combined path).")

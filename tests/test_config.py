@@ -381,3 +381,13 @@ def test_taxonomy_critic_off_needs_a_single_proposal(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="taxonomy.critic: false requires"):
         load_config(_write_config(tmp_path, {"taxonomy": {"critic": False, "best_of_n": 2}}))
     assert load_config(_write_config(tmp_path, {"taxonomy": {"critic": False}})).taxonomy.critic is False
+
+
+def test_stop_after_meta_prompts_needs_the_meta_prompt_step(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="stop_after: meta_prompts requires"):
+        load_config(_write_config(tmp_path, {"generation": {"meta_prompts": False, "stop_after": "meta_prompts"}}))
+    # The CLI flag is applied after load and must be rejected the same way.
+    from simula.cli import main
+
+    path = _write_config(tmp_path, {"generation": {"meta_prompts": False, "record_batch_size": 2}})
+    assert main(["generate", str(path), "--stop-after", "meta_prompts", "--quiet"]) == 1
