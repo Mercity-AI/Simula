@@ -35,6 +35,8 @@ prefix) and returns fixes; batch prompt; "never copy taxonomy names into the rec
 
 ### Pilot design
 
+Scripts to rerun and rescore every arm: `analysis/` (see its README).
+
 500 attempts per arm, seed 31, the v0 taxonomy + strategies, so **every arm draws the same 500 mixes**
 (lineage is seeded per attempt on both paths). Bulk + critic = `deepseek-v4-flash`, reasoning effort low.
 Baseline arm `B0` = `main` run from a worktree. Cost from `llm_calls.jsonl` (list price from tokens;
@@ -153,9 +155,24 @@ Per-record cost is now $0.40 per 1K rows billed (Curator's benchmark run: $0.25/
 task and model) while keeping code-picked lineage and the critic. The taxonomy is now the biggest share
 of a 10K run; cheaper routing for the strategic role is the next untested lever.
 
+### Follow-ups from the 2026-11-10 review
+
+| # | Follow-up | State |
+|---|---|---|
+| 1 | `taxonomy.critic` switch (off = 1 call/node; only with `best_of_n: 1`) | done; default stays on |
+| 2 | Readability refactors in `generate.py` (`_mix_group`, batch writer) | done, behaviour unchanged |
+| 3 | Compact NODES/ID-table batch prompt + offline token measurement | written (`combined_table_batch_prompt`), measured, **not adopted** (0–7% larger here); no switch |
+| 4 | Model-picked: factor names checked before any call; lineage kept on rejected rows | done |
+| 4 | Model-picked: proper algorithm | **proposal in item 7 (§3), needs sign-off before building** |
+| 5 | Reject `stop_after: meta_prompts` with `meta_prompts: false` (config and CLI flag) | done |
+| 6 | Stale text sweep (docstrings, docs, this file) | done |
+| 7 | Pilot analysis scripts in the repo (`analysis/`) | done |
+| — | Update `SKILL.md` for batching, the combined path, the critic switches and routing | **not done** (wanted later) |
+
 ### Open
 
-- Item 7 beyond the minimal version: an automatic per-factor code/model decision and a validate warning.
+- Item 7: build the model-assigned algorithm once the proposal in §3 item 7 is signed off.
+- Update `SKILL.md` (batching modes, the combined path, `generation.critic` / `taxonomy.critic`, routing).
 - Backlog §4: provider batch pricing, retryable infra failures on resume, response cache, sibling-only
   expansion prompts, sending the strategy call the path list instead of the whole taxonomy.
 - Critic leniency differs by provider; re-check judge numbers on a larger sample before a big run.
