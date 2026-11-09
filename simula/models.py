@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -28,7 +30,8 @@ class ModelRouter:
         self._fake_counter = 0
         self._fake_lock = asyncio.Lock()
         self._log_tasks: set[asyncio.Task[None]] = set()
-        # Cost accounting keyed by (role, task, model) -> [calls, in_tokens, out_tokens, duration].
+        # Cost accounting keyed by (role, task, model) ->
+        # [calls, in_tokens, out_tokens, duration, reasoning_tokens, cached_tokens, billed_cost].
         self.cost: dict[tuple[str, str, str], list[float]] = {}
         self.started = time.time()
         self._output_dir = Path(config["project"]["output_dir"]) if config.get("project", {}).get("output_dir") else None
@@ -101,7 +104,9 @@ class ModelRouter:
         except ImportError as exc:
             raise RuntimeError("The openai package is required for real model calls.") from exc
         timeout = float(provider.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS))
-        self._client = AsyncOpenAI(api_key=api_key, base_url=provider["base_url"], timeout=timeout)
+        # max_retries=0: our classified retry loop in complete() is the only one. The SDK's own retries
+        # (2 by default) stacked under it, so one hung request could hold an attempt for ~24 timeouts.
+        self._client = AsyncOpenAI(api_key=api_key, base_url=provider["base_url"], timeout=timeout, max_retries=0)
         return self._client
 
     def _account(
@@ -121,11 +126,19 @@ class ModelRouter:
         # the llm_calls log always agree, then accumulate cost and schedule the log row.
         in_tokens = getattr(usage, "prompt_tokens", None) or max(1, len(prompt) // 4)
         out_tokens = getattr(usage, "completion_tokens", None) or max(1, len(response) // 4)
-        agg = self.cost.setdefault((role, str(task), model), [0, 0, 0, 0.0])
+        # Optional usage extras, recorded when the provider returns them: hidden reasoning (part of
+        # out_tokens), prompt-cache hits (part of in_tokens), and the billed cost (OpenRouter: USD).
+        reasoning = getattr(getattr(usage, "completion_tokens_details", None), "reasoning_tokens", None) or 0
+        cached = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", None) or 0
+        billed = getattr(usage, "cost", None)
+        agg = self.cost.setdefault((role, str(task), model), [0, 0, 0, 0.0, 0, 0, 0.0])
         agg[0] += 1
         agg[1] += in_tokens
         agg[2] += out_tokens
         agg[3] += duration
+        agg[4] += reasoning
+        agg[5] += cached
+        agg[6] += billed or 0.0
 
         if self._output_dir is None:
             return
@@ -140,6 +153,9 @@ class ModelRouter:
             "response": response,
             "in_tokens": in_tokens,
             "out_tokens": out_tokens,
+            "reasoning_tokens": reasoning,
+            "cached_tokens": cached,
+            "cost": billed,
             "sampling": sampling,
             "extra_body": extra_body,
         }
@@ -202,6 +218,20 @@ def fake_complete(prompt: str, counter: int = 0) -> str:
     """Deterministic fake model used by tests and smoke examples."""
     if "Generate exactly one synthetic data point matching the meta-prompt" in prompt:
         return f"Once upon a time there was a cat with id {counter}. The cat had adventures."
+    if '"mixes"' in prompt:
+        # Batched meta-prompt prompt: three distinct scenarios per spec id ("m1 (2 meta-prompts):", ...).
+        mixes = [{"id": m, "meta_prompts": [f"Create a {style} example {m}-{counter}." for style in ("concise", "varied", "detailed")]}
+                 for m in re.findall(r"^(m\d+)\b", prompt, flags=re.MULTILINE)]
+        return json.dumps({"mixes": mixes})
+    if '"records"' in prompt:
+        # Record batch prompts (B and C): one record per spec id ("r1:", "r2 (harder):", ...) at a line start.
+        text = "free-form text" in prompt
+        records = []
+        for item_id in re.findall(r"^(r\d+)\b", prompt, flags=re.MULTILINE):
+            digest = hashlib.sha1(f"{prompt}:{counter}:{item_id}".encode("utf-8")).hexdigest()[:8]
+            record = f"A short story {digest} about a curious cat." if text else {"input": f"Question {digest}?", "output": f"Answer {digest}."}
+            records.append({"id": item_id, "plan": f"A record about {item_id}.", "record": record})
+        return json.dumps({"records": records})
     if '"factors"' in prompt:
         return '{"factors":[{"name":"topic","description":"Subject area"},{"name":"difficulty","description":"Difficulty level"}]}'
     if '"children"' in prompt:

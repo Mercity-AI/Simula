@@ -221,8 +221,36 @@ Return JSON:
 """.strip()
 
 
+def mix_text(mix: list[dict[str, Any]]) -> str:
+    """One line per sampled node: `- factor: branch > ... > leaf — description` (path minus the factor root)."""
+    lines = []
+    for entry in mix:
+        path = entry.get("path") or [entry["node"]]
+        description = f" — {entry['description']}" if entry.get("description") else ""
+        lines.append(f"- {entry['factor']}: {' > '.join(path[1:] or path)}{description}")
+    return "\n".join(lines)
+
+
+def choices_text(choices: list[dict[str, Any]]) -> str:
+    """Model-picked factors for a batch prompt: per factor, its options with target shares."""
+    blocks = []
+    for choice in choices:
+        lines = [f"{choice['factor']}:"]
+        for option in choice["options"]:
+            description = f" — {option['description']}" if option.get("description") else ""
+            lines.append(f"- {option['name']} ({option['share']:.0%}){description}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
 def meta_prompt_prompt(description: str, schema: dict[str, Any] | None, mix: list[dict[str, Any]], k: int) -> str:
+    # k > 1: every scenario becomes its own record sharing this mix, so they must differ for real.
     format_instruction = "The final data point will be free-form text." if schema is None else f"Output JSON Schema:\n{schema_text(schema)}"
+    several = (
+        f"\nAll {k} meta-prompts become separate records built from these same ingredients, so make them genuinely distinct records — different situations, details and angles — not rewordings of one idea."
+        if k > 1
+        else ""
+    )
     return f"""
 Dataset description:
 {description}
@@ -232,10 +260,34 @@ Dataset description:
 Sampled ingredients for this record (not a strict checklist):
 {json.dumps(mix, ensure_ascii=False)}
 
-Generate {k} diverse meta-prompts. Each meta-prompt should tell a generator exactly what record to create.
+Write {k} meta-prompt{"s" if k > 1 else ""}. A meta-prompt tells a generator what record to create: the situation and the content the record must carry, in at most 80 words. Describe the record; do not write it.{several}
 Think about what this combination of ingredients implies for the finished record. Full coverage of the ingredients, although important, is not the goal by itself — coherence, and being smart about what the combination should produce, is just as important, if not more. If ingredients conflict or their sum would be incoherent, build the meta-prompt around the load-bearing ones and soften or drop the rest.
 Return JSON:
-{{"meta_prompts": ["...", "..."]}}
+{{"meta_prompts": ["..."]}}
+""".strip()
+
+
+def meta_prompt_batch_prompt(description: str, schema: dict[str, Any] | None, items: list[dict[str, Any]]) -> str:
+    # Batch mode A (generation.meta_batch_size > 1): scenarios for several sampled mixes in one call.
+    # items = [{"id": "m1", "mix": [...], "count": k}]. Static text first, specs last (cacheable prefix).
+    format_instruction = "The final data points will be free-form text." if schema is None else f"Output JSON Schema:\n{schema_text(schema)}"
+    specs = "\n\n".join(f"{item['id']} ({item['count']} meta-prompt{'s' if item['count'] > 1 else ''}):\n{mix_text(item['mix'])}" for item in items)
+    return f"""
+Dataset description:
+{description}
+
+{format_instruction}
+
+Below are sets of sampled ingredients (not strict checklists), one per id. For each id, write the number of
+meta-prompts it asks for. A meta-prompt tells a generator what record to create: the situation and the
+content the record must carry, in at most 80 words. Describe the record; do not write it.
+- Think about what each combination of ingredients implies for the finished record. Full coverage of the ingredients, although important, is not the goal by itself — coherence, and being smart about what the combination should produce, is just as important, if not more. If ingredients conflict or their sum would be incoherent, build around the load-bearing ones and soften or drop the rest.
+- The ids are unrelated records: give each its own situation, people, names and details; never reuse a template across ids. Several meta-prompts for one id must be genuinely different records, not rewordings.
+
+{specs}
+
+Return JSON:
+{{"mixes": [{{"id": "m1", "meta_prompts": ["..."]}}]}}
 """.strip()
 
 
@@ -265,6 +317,70 @@ Meta-prompt:
 {meta_prompt}
 
 Generate exactly one synthetic data record matching the schema. Return the record as JSON only.
+""".strip()
+
+
+def generate_record_batch_prompt(description: str, schema: dict[str, Any] | None, items: list[dict[str, Any]]) -> str:
+    # Batch mode B (generation.record_batch_size > 1 with meta-prompts on): records for several meta-prompts in
+    # one call. items = [{"id": "r1", "meta_prompt": "..."}]. Static text first, specs last.
+    record_format = (
+        "Each record is free-form text, given as a JSON string."
+        if schema is None
+        else f"Each record is a JSON object matching this JSON Schema:\n{schema_text(schema)}"
+    )
+    specs = "\n\n".join(f"{item['id']}:\n{item['meta_prompt']}" for item in items)
+    return f"""
+Dataset description:
+{description}
+
+{record_format}
+
+Write one record per meta-prompt below; each meta-prompt says what its record must be.
+- The records are independent examples of one dataset. Keep each true to its own meta-prompt, and do not let them converge on a shared template or shared details.
+- Give every record the length and depth it would have if it were written on its own.
+
+{specs}
+
+Return JSON:
+{{"records": [{{"id": "r1", "record": ...}}]}}
+""".strip()
+
+
+def combined_batch_prompt(description: str, schema: dict[str, Any] | None, items: list[dict[str, Any]], choices: list[dict[str, Any]]) -> str:
+    # Batch mode C, the combined path (generation.meta_prompts: false): several records per call, straight from their
+    # sampled mixes. items = [{"id": "r1", "mix": [...], "harder": bool}]. Static text first, specs
+    # last, so providers that cache prompt prefixes can reuse the instruction block across calls.
+    record_format = (
+        "Each record is free-form text, given as a JSON string."
+        if schema is None
+        else f"Each record is a JSON object matching this JSON Schema:\n{schema_text(schema)}"
+    )
+    specs = "\n\n".join(f"{item['id']}{' (harder)' if item['harder'] else ''}:\n{mix_text(item['mix'])}" for item in items)
+    picked = ""
+    if choices:  # generation.model_picked: these factors are chosen by the model per record
+        picked = (
+            "\n\nChoose these factors yourself for every record (they are not in the specs): pick the option that "
+            "fits that record best, spread your picks across records roughly in the shares shown, and report them "
+            'in "picked" by exact option name.\n' + choices_text(choices)
+        )
+    pick_field = ', "picked": {' + ", ".join(f'"{choice["factor"]}": "..."' for choice in choices) + "}" if choices else ""
+    return f"""
+Dataset description:
+{description}
+
+{record_format}{picked}
+
+Write one record per spec below. Each spec lists the sampled ingredients for its record (taxonomy nodes; not a strict checklist).
+- First write a one-sentence "plan": what the record will be, given what its ingredients imply together. Coverage of the ingredients matters, but coherence matters as much: if ingredients conflict or their sum would be incoherent, build around the load-bearing ones and soften or drop the rest.
+- A spec marked (harder) gets a record that is more complex or challenging than a typical one, while staying true to its ingredients.
+- The records are independent examples of one dataset. Make each one distinct: different names, people, places, numbers, details and phrasing; never reuse a template across the batch.
+- Give every record the length and depth it would have if it were written on its own.
+- The ingredients are instructions to you, not content: never copy their names, paths or descriptions into a record.
+
+{specs}
+
+Return JSON:
+{{"records": [{{"id": "r1", "plan": "..."{pick_field}, "record": ...}}]}}
 """.strip()
 
 
@@ -313,8 +429,9 @@ Generated record:
 {json.dumps(record, ensure_ascii=False)}
 
 Does the record satisfy the meta-prompt and schema intent? Explain briefly.
-Return JSON:
-{{"verdict": "accept" | "reject", "explanation": "..."}}
+If you reject it, also return "revised": the record corrected to fix every problem you found (change only what is needed).
+Return JSON (omit "revised" when accepting):
+{{"verdict": "accept" | "reject", "explanation": "...", "revised": {{...}}}}
 """.strip()
 
 

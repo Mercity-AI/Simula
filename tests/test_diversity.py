@@ -40,3 +40,14 @@ def test_embedding_cache_reuses_existing_vectors(tmp_path: Path, monkeypatch) ->
     report = embedding_diversity(["alpha", "beta", "gamma"], "fake-embed", cache_path, sample_cap=3)
     assert report["sample_size"] == 3
     assert calls["n"] == 1
+
+
+def test_vendi_counts_effective_distinct_items(tmp_path: Path, monkeypatch) -> None:
+    # Identical embeddings are one effective item; mutually orthogonal ones are n distinct items.
+    monkeypatch.setattr(diversity, "_embed", lambda model, texts: np.ones((len(texts), 4), dtype="float32"))
+    same = embedding_diversity(["a", "b", "c"], "fake", tmp_path / "same.npz")
+    assert abs(same["vendi"] - 1.0) < 1e-6
+
+    monkeypatch.setattr(diversity, "_embed", lambda model, texts: np.eye(len(texts), dtype="float32"))
+    orthogonal = embedding_diversity(["a", "b", "c", "d"], "fake", tmp_path / "orth.npz")
+    assert abs(orthogonal["vendi"] - 4.0) < 1e-6

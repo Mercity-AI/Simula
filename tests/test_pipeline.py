@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import asyncio
+import json
 import pytest
 import yaml
 
@@ -318,7 +319,7 @@ def test_point_failure_becomes_rejected_row(tmp_path: Path) -> None:
 
     cfg = load_config(write_config(tmp_path))
     meta_row = {"attempt_index": 0, "strategy_id": "general", "taxonomy_mix": [], "meta_prompt": "make one", "complexified": False}
-    row = asyncio.run(_generate_one_safe(cfg, BadRouter(), meta_row, 0))
+    row = asyncio.run(_generate_one_safe(cfg, BadRouter(), meta_row))
     assert row["accepted"] is False
     assert row["attempt_index"] == 0
     assert "Generation failed" in row["rejection_reason"]
@@ -332,7 +333,7 @@ def test_failed_meta_row_rejects_without_model_calls(tmp_path: Path) -> None:
     cfg = load_config(write_config(tmp_path))
     meta_row = {"attempt_index": 1, "strategy_id": "general", "taxonomy_mix": [], "meta_prompt": "", "complexified": False, "error": "boom"}
     # A router with no complete/complete_json proves the failure path makes zero model calls.
-    row = asyncio.run(_generate_one_safe(cfg, NoCallRouter(), meta_row, 1))
+    row = asyncio.run(_generate_one_safe(cfg, NoCallRouter(), meta_row))
     assert row["accepted"] is False
     assert "Meta prompt failed: boom" in row["rejection_reason"]
 
@@ -447,3 +448,263 @@ def _strategy_taxonomy() -> dict:
             },
         ]
     }
+
+
+# --- optimizations: taxonomy call counts, critic loop, scenarios, combined batches ---
+
+
+class _Recording(ModelRouter):
+    """Fake router that records every task and can script the critic's responses (last one repeats)."""
+
+    def __init__(self, config: dict, critic: list[str] | None = None) -> None:
+        super().__init__(config)
+        self.tasks: list[str] = []
+        self.critic = critic or []
+
+    async def complete(self, role, prompt, system, task="unknown"):  # type: ignore[override]
+        self.tasks.append(str(task))
+        if str(task) == "semantic_critic" and self.critic:
+            return self.critic[min(self.tasks.count("semantic_critic"), len(self.critic)) - 1]
+        return await super().complete(role, prompt, system, task=task)
+
+
+def _gen(extra: dict) -> dict:
+    return {"generation": {"target_size": 4, "overgenerate_ratio": 1.0, "complexity_ratio": 0, **extra}}
+
+
+@pytest.mark.parametrize("best_of_n, expansions, critics", [(1, 2, 2), (2, 4, 2)])
+def test_taxonomy_proposals_then_one_critic_refine_per_node(tmp_path: Path, best_of_n, expansions, critics) -> None:
+    taxonomy = {"depth": 1, "best_of_n": best_of_n, "review_mode": "auto_accept", "children_per_node": 2}
+    cfg = load_config(write_config(tmp_path, {"taxonomy": taxonomy}))
+    router = _Recording(cfg.data)
+    built = asyncio.run(build_taxonomy(cfg, router))
+    # The fake discovers 2 factors, each root expands once at depth 1.
+    assert router.tasks.count("node_expansion") == expansions
+    assert router.tasks.count("taxonomy_critic") == critics
+    assert all(factor["children"] for factor in built["factors"])
+
+
+def test_critic_loop_always_ends_on_a_verdict(tmp_path: Path) -> None:
+    from simula.generate import _critic_loop
+
+    cfg = load_config(write_config(tmp_path, _gen({"max_refine_attempts": 1})))
+    router = _Recording(cfg.data, critic=['{"verdict":"reject","explanation":"still wrong"}'])
+    record, accepted, reason, verdicts = asyncio.run(_critic_loop(cfg, router, "make one", {"input": "q", "output": "a"}))
+    # One refine, and the refined record is critiqued again (no trailing un-critiqued refine).
+    assert router.tasks == ["semantic_critic", "refine", "semantic_critic"]
+    assert accepted is False and reason == "still wrong" and len(verdicts) == 2
+
+
+def test_critic_fix_is_accepted_without_refine(tmp_path: Path) -> None:
+    from simula.generate import _critic_loop
+
+    cfg = load_config(write_config(tmp_path))
+    fix = '{"verdict":"reject","explanation":"wrong answer","revised":{"input":"q","output":"fixed"}}'
+    router = _Recording(cfg.data, critic=[fix])
+    record, accepted, reason, verdicts = asyncio.run(_critic_loop(cfg, router, "make one", {"input": "q", "output": "a"}))
+    assert router.tasks == ["semantic_critic"]
+    assert accepted is True and record == {"input": "q", "output": "fixed"}
+    assert verdicts == [{"verdict": "reject", "explanation": "wrong answer"}]  # the fix is not duplicated
+
+    # A schema-invalid fix is ignored and the normal refine path runs instead.
+    broken = '{"verdict":"reject","explanation":"wrong","revised":{"input":"only"}}'
+    router = _Recording(cfg.data, critic=[broken, '{"verdict":"accept","explanation":"ok"}'])
+    _, accepted, _, _ = asyncio.run(_critic_loop(cfg, router, "make one", {"input": "q", "output": "a"}))
+    assert router.tasks == ["semantic_critic", "refine", "semantic_critic"] and accepted is True
+
+
+def test_critic_off_accepts_valid_records_without_critic_calls(tmp_path: Path) -> None:
+    cfg = load_config(write_config(tmp_path, _gen({"critic": False})))
+    router = _Recording(cfg.data)
+    rows = asyncio.run(generate_dataset(cfg, router, quiet=True))
+    assert len(rows) == 4 and all(row["accepted"] and row["critic_verdicts"] == [] for row in rows)
+    assert "semantic_critic" not in router.tasks and "refine" not in router.tasks
+
+
+def test_every_scenario_of_a_mix_becomes_an_attempt(tmp_path: Path) -> None:
+    cfg = load_config(write_config(tmp_path, _gen({"scenarios_per_mix": 2})))
+    router = _Recording(cfg.data)
+    asyncio.run(generate_dataset(cfg, router, quiet=True))
+    meta = {row["attempt_index"]: row for row in read_jsonl(artifact_path(cfg.output_dir, "meta_prompts"))}
+    # 4 attempts from 2 mixes: one meta call per mix, both scenarios kept, the pair shares lineage.
+    assert router.tasks.count("meta_prompt") == 2
+    assert meta[0]["taxonomy_mix"] == meta[1]["taxonomy_mix"] and meta[2]["taxonomy_mix"] == meta[3]["taxonomy_mix"]
+    assert meta[0]["meta_prompt"] != meta[1]["meta_prompt"] and all(row["meta_prompt"] for row in meta.values())
+
+
+def test_blank_scenarios_are_dropped(tmp_path: Path) -> None:
+    from simula.generate import _make_scenarios
+
+    class Stub:
+        async def complete_json(self, *args, **kwargs):
+            return {"meta_prompts": ["  ", 7, " Keep me. "]}
+
+    cfg = load_config(write_config(tmp_path))
+    assert asyncio.run(_make_scenarios(cfg, Stub(), [([], 3)])) == [["Keep me."]]
+
+
+def test_combined_batches_write_records_straight_from_mixes(tmp_path: Path) -> None:
+    (tmp_path / "combined").mkdir()
+    (tmp_path / "scenario").mkdir()
+    combined = load_config(write_config(tmp_path / "combined", _gen({"meta_prompts": False, "record_batch_size": 3, "target_size": 7})))
+    router = _Recording(combined.data)
+    rows = asyncio.run(generate_dataset(combined, router, quiet=True))
+    asyncio.run(router.flush_logs())
+    # 7 attempts in batches of 3 -> 3 generate calls, no meta-prompt step or artifact.
+    assert router.tasks.count("generate") == 3 and "meta_prompt" not in router.tasks
+    assert not artifact_path(combined.output_dir, "meta_prompts").exists()
+    assert len(rows) == 7 and all(row["accepted"] and row["taxonomy_mix"] for row in rows)
+    assert all("Sampled ingredients:" in row["meta_prompt"] for row in rows)
+
+    # Lineage is seeded per attempt exactly like the meta-prompt path, so both draw the same mixes.
+    scenario = load_config(write_config(tmp_path / "scenario", _gen({"target_size": 7})))
+    scenario_rows = asyncio.run(generate_dataset(scenario, ModelRouter(scenario.data), quiet=True))
+    mixes = {row["attempt_index"]: row["taxonomy_mix"] for row in scenario_rows}
+    assert all(row["taxonomy_mix"] == mixes[row["attempt_index"]] for row in rows)
+
+
+def test_combined_batches_work_for_free_text(tmp_path: Path) -> None:
+    cfg = load_config(write_config(tmp_path, {"schema": None, **_gen({"meta_prompts": False, "record_batch_size": 2})}))
+    rows = asyncio.run(generate_dataset(cfg, ModelRouter(cfg.data), quiet=True))
+    assert len(rows) == 4 and all(isinstance(row["record"], str) and row["record"] for row in rows)
+
+
+def test_one_bad_batch_item_does_not_sink_the_batch(tmp_path: Path) -> None:
+    from simula.generate import _combined_batch
+
+    class Stub:
+        def model_name(self, role: str) -> str:
+            return "stub"
+
+        async def complete(self, role, prompt, system, task="unknown"):
+            return json.dumps({"records": [
+                {"id": "r1", "plan": "A plan.", "record": {"input": "q", "output": "a"}},
+                {"id": "r2", "plan": "Broken.", "record": {"input": "no output"}},
+            ]})
+
+        async def complete_json(self, role, prompt, system, task="unknown"):
+            assert task == "repair"
+            return {"input": "repaired", "output": "repaired"}
+
+    cfg = load_config(write_config(tmp_path, _gen({"meta_prompts": False, "record_batch_size": 3, "critic": False})))
+    strategies = [{"id": "general", "taxonomy_roots": []}]
+    rows = asyncio.run(_combined_batch(cfg, Stub(), _strategy_taxonomy(), strategies, [5, 6, 7]))
+    by_index = {row["attempt_index"]: row for row in rows}
+    assert by_index[5]["accepted"] and by_index[5]["meta_prompt"].startswith("A plan.\nSampled ingredients:")
+    assert by_index[6]["accepted"] and by_index[6]["record"] == {"input": "repaired", "output": "repaired"}
+    assert not by_index[7]["accepted"] and by_index[7]["rejection_reason"] == "Record missing from the batch response (or malformed in it)."
+    assert all(row["taxonomy_mix"] for row in rows)  # lineage survives failures
+
+
+def test_malformed_batch_json_is_salvaged_item_by_item() -> None:
+    from simula.generate import _batch_items
+
+    # r2's object never closes (a dropped brace), so the whole response is invalid JSON; r1 and r3 are
+    # still recovered, and r2 is lost on its own instead of sinking the batch.
+    broken = (
+        '{"records": [{"id": "r1", "plan": "a", "record": {"q": 1}},'
+        ' {"id": "r2", "plan": "b", "record": {"q": 2},'
+        ' {"id": "r3", "plan": "c", "record": {"q": 3}}]}'
+    )
+    assert [item["id"] for item in _batch_items(broken, "record")] == ["r1", "r3"]
+    assert [item["id"] for item in _batch_items('{"records": [{"id": "r1", "record": "x"}, {"id": "r2"}]}', "record")] == ["r1"]
+
+
+def test_combined_path_bounds_calls_and_critiques_each_batch_promptly(tmp_path: Path) -> None:
+    class Tracking(_Recording):
+        active = peak = 0
+
+        async def complete(self, *args, **kwargs):  # type: ignore[override]
+            Tracking.active += 1
+            Tracking.peak = max(Tracking.peak, Tracking.active)
+            try:
+                await asyncio.sleep(0.01)
+                return await super().complete(*args, **kwargs)
+            finally:
+                Tracking.active -= 1
+
+    cfg = load_config(write_config(tmp_path, _gen({"meta_prompts": False, "record_batch_size": 2, "concurrency": 4, "target_size": 12})))
+    router = Tracking(cfg.data)
+    asyncio.run(build_strategies(cfg, router, asyncio.run(build_taxonomy(cfg, router))))
+    router.tasks.clear()
+    Tracking.peak = 0
+    asyncio.run(generate_dataset(cfg, router, quiet=True))
+    # 2 batches in flight x 2 critiques each never exceeds concurrency, and critiques start before the
+    # last batch call instead of queueing behind every batch.
+    assert Tracking.peak <= 4
+    assert router.tasks.index("semantic_critic") < len(router.tasks) - router.tasks[::-1].index("generate") - 1
+
+
+def test_failed_node_expansion_is_retried_once(tmp_path: Path) -> None:
+    class Flaky(_Recording):
+        async def complete(self, role, prompt, system, task="unknown"):  # type: ignore[override]
+            if str(task) == "node_expansion" and self.tasks.count("node_expansion") == 0:
+                self.tasks.append(str(task))
+                return "not json"
+            return await super().complete(role, prompt, system, task=task)
+
+    taxonomy = {"depth": 1, "best_of_n": 1, "review_mode": "auto_accept", "children_per_node": 2}
+    cfg = load_config(write_config(tmp_path, {"taxonomy": taxonomy}))
+    built = asyncio.run(build_taxonomy(cfg, Flaky(cfg.data)))
+    assert all(factor["children"] for factor in built["factors"])  # the first factor survived its bad response
+
+
+def test_batch_mode_a_writes_scenarios_for_several_mixes_per_call(tmp_path: Path) -> None:
+    cfg = load_config(write_config(tmp_path, _gen({"meta_batch_size": 3, "target_size": 7})))
+    router = _Recording(cfg.data)
+    rows = asyncio.run(generate_dataset(cfg, router, quiet=True))
+    meta = {row["attempt_index"]: row for row in read_jsonl(artifact_path(cfg.output_dir, "meta_prompts"))}
+    # 7 mixes in groups of 3 -> 3 scenario calls; each attempt keeps its own mix and gets its own scenario.
+    assert router.tasks.count("meta_prompt") == 3
+    assert len(rows) == 7 and all(row["accepted"] and row["taxonomy_mix"] for row in rows)
+    assert len({row["meta_prompt"] for row in meta.values()}) == 7
+
+
+def test_batch_mode_b_writes_records_for_several_scenarios_per_call(tmp_path: Path) -> None:
+    cfg = load_config(write_config(tmp_path, _gen({"record_batch_size": 3, "target_size": 7})))
+    router = _Recording(cfg.data)
+    rows = asyncio.run(generate_dataset(cfg, router, quiet=True))
+    meta = {row["attempt_index"]: row for row in read_jsonl(artifact_path(cfg.output_dir, "meta_prompts"))}
+    # One scenario call per attempt, records in batches of 3; each row keeps its own scenario as lineage.
+    assert router.tasks.count("meta_prompt") == 7 and router.tasks.count("generate") == 3
+    assert len(rows) == 7 and all(row["accepted"] for row in rows)
+    assert all(row["meta_prompt"] == meta[row["attempt_index"]]["meta_prompt"] for row in rows)
+
+
+def test_batch_modes_a_and_b_together(tmp_path: Path) -> None:
+    cfg = load_config(write_config(tmp_path, _gen({"meta_batch_size": 4, "record_batch_size": 4, "target_size": 8})))
+    router = _Recording(cfg.data)
+    rows = asyncio.run(generate_dataset(cfg, router, quiet=True))
+    assert router.tasks.count("meta_prompt") == 2 and router.tasks.count("generate") == 2
+    assert len(rows) == 8 and all(row["accepted"] for row in rows)
+
+
+def test_model_picked_factor_lineage_comes_from_the_model(tmp_path: Path) -> None:
+    from simula.generate import _combined_batch, _sample_lineage
+
+    class Stub:
+        def model_name(self, role: str) -> str:
+            return "stub"
+
+        async def complete(self, role, prompt, system, task="unknown"):
+            specs = prompt.split("\nr1:")[1]
+            assert "Choose these factors yourself" in prompt and "- alpha_extra (" in prompt  # options offered
+            assert "- topic:" not in specs and "- other:" in specs  # the picked factor is left out of the specs
+            return json.dumps({"records": [
+                {"id": "r1", "plan": "A plan.", "picked": {"topic": "Alpha Extra"}, "record": {"input": "q", "output": "a"}},
+                {"id": "r2", "plan": "A plan.", "picked": {"topic": "nonsense"}, "record": {"input": "q2", "output": "a2"}},
+            ]})
+
+    cfg = load_config(write_config(tmp_path, _gen({"meta_prompts": False, "record_batch_size": 2, "critic": False, "model_picked": {"topic": 1}})))
+    taxonomy, strategies = _strategy_taxonomy(), [{"id": "general", "taxonomy_roots": []}]
+    rows = {row["attempt_index"]: row for row in asyncio.run(_combined_batch(cfg, Stub(), taxonomy, strategies, [0, 1]))}
+    mix = {entry["factor"]: entry for entry in rows[0]["taxonomy_mix"]}
+    assert [entry["factor"] for entry in rows[0]["taxonomy_mix"]] == ["topic", "other", "query_domain"]
+    assert mix["topic"]["path"] == ["topic", "alpha_extra"] and mix["topic"]["picked_by"] == "model"
+    # Code-picked factors draw exactly what they would without model picking.
+    sampled = {entry["factor"]: entry for entry in _sample_lineage(cfg, taxonomy, strategies, 0, 1)["taxonomy_mix"]}
+    assert mix["other"] == sampled["other"] and mix["query_domain"] == sampled["query_domain"]
+    # An unrecognised pick keeps a valid lineage entry at the factor root.
+    unpicked = {entry["factor"]: entry for entry in rows[1]["taxonomy_mix"]}["topic"]
+    assert unpicked["path"] == ["topic"] and unpicked["node"] == "nonsense"
+    assert "- topic: alpha_extra" in rows[0]["meta_prompt"]  # the critic sees the pick as an ingredient

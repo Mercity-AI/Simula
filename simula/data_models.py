@@ -91,7 +91,7 @@ class TaxonomyCfg(BaseModel):
 
     depth: int = Field(2, ge=0)
     factors: list[dict[str, Any]] | None = None
-    best_of_n: int = Field(2, gt=0)
+    best_of_n: int = Field(1, gt=0)  # proposals per node; a critic call always refines them (best_of_n + 1 calls)
     review_mode: str = "auto_accept"
     children_per_node: int = Field(4, gt=0)
     log_style: str = "light"  # how the build is surfaced: flat per-node breadcrumbs, or a live tree
@@ -163,13 +163,22 @@ class GenerationCfg(BaseModel):
     """Generation volume + behavior knobs (consumed by generate.generate_dataset). attempts =
     ceil(target_size * overgenerate_ratio); trim controls whether accepted rows are capped at target.
     stop_after halts generate/run once that stage's artifact is written, so it can be inspected or
-    hand-edited before the next stage spends model calls (the CLI --stop-after flag overrides it)."""
+    hand-edited before the next stage spends model calls (the CLI --stop-after flag overrides it).
+    Batching: meta_batch_size mixes per scenario call (mode A), record_batch_size records per record call
+    (mode B, or mode C when meta_prompts=False: records straight from their sampled mixes, no scenario
+    step). model_picked {factor: level} lets the model choose those factors per record on the combined
+    path instead of code sampling them. critic=False accepts every schema-valid record."""
 
     target_size: int = Field(50, gt=0)
     overgenerate_ratio: float = Field(1.3, ge=1.0)
     trim: bool = True
-    scenarios_per_mix: int = Field(3, gt=0)
+    meta_prompts: bool = True
+    scenarios_per_mix: int = Field(1, gt=0)
+    meta_batch_size: int = Field(1, gt=0)
+    record_batch_size: int = Field(1, gt=0)
+    model_picked: dict[str, int] = Field(default_factory=dict)
     complexity_ratio: float = Field(0.3, ge=0.0, le=1.0)
+    critic: bool = True
     max_refine_attempts: int = Field(2, ge=0)
     concurrency: int = Field(4, gt=0)
     checkpoint_every: int = Field(50, gt=0)
@@ -181,6 +190,19 @@ class GenerationCfg(BaseModel):
         if value is not None and value not in {"taxonomy", "strategies", "meta_prompts"}:
             raise ValueError("generation.stop_after must be taxonomy, strategies, or meta_prompts.")
         return value
+
+    @model_validator(mode="after")
+    def _mode_knobs_match(self) -> "GenerationCfg":
+        # scenarios_per_mix and meta_batch_size shape the meta-prompt step, which the combined path skips.
+        for knob in ("scenarios_per_mix", "meta_batch_size"):
+            if not self.meta_prompts and getattr(self, knob) > 1:
+                raise ValueError(f"generation.{knob} > 1 requires generation.meta_prompts: true.")
+        # Model-picked factors are offered as options inside the combined batch prompt.
+        if self.model_picked and self.meta_prompts:
+            raise ValueError("generation.model_picked requires generation.meta_prompts: false (the combined path).")
+        if any(level < 1 for level in self.model_picked.values()):
+            raise ValueError("generation.model_picked levels must be >= 1 (the tree level whose nodes are offered).")
+        return self
 
 
 class SamplingCfg(BaseModel):
