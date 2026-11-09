@@ -25,7 +25,7 @@ update `CONFIG.md`/`template.yaml`/README when config changes, no real model cal
 | 11 Small fixes | done | `/` replaced in node names; dotted names inside slash paths round-trip; blank and non-string scenarios dropped (the 10K run had 4 dict-valued `meta_prompt`s). |
 | 3 Keep every scenario | done | `meta_prompts_per_mix` default 1; K>1 = K attempts share one mix. Built-in and e-commerce meta prompts now describe the record instead of writing it. |
 | 4 Mix-space report | done | Printed before generation; warns when the space is smaller than the mixes drawn. |
-| 6 Batching | done (A, B, C) | Two knobs instead of a mode list: `meta_batch_size` (A: mixes per scenario call) and `record_batch_size` (records per record call: B with meta prompts on, C = the combined path with `meta_prompts: false`); A+B = both. Malformed batch JSON is salvaged item by item. Concurrency bounds whole units (`concurrency // record_batch_size`) so critiques never queue behind other batches. Results in round 3 below. |
+| 6 Batching | done (A, B, C) | Two knobs instead of a mode list: `meta_batch_size` (A: mixes per scenario call) and `record_batch_size` (records per record call: B with meta prompts on, C = the combined path with `meta_prompts: false`); A+B = both. Malformed batch JSON is salvaged item by item. Concurrency bounds whole units (`concurrency // record_batch_size`) so critiques never queue behind other batches. Results in round 3 below. **Not built from item 6:** length as a per-record category (the e-commerce `query_complexity` factor already sets size), and a *quality* test of subject-grouped vs random batches (only measured for tokens, offline). The compact ID-table prompt is written (`combined_table_batch_prompt`) but not wired in — see the token measurement below. |
 | 7 Code- vs model-picked factors | built (minimal), not recommended | `generation.model_picked: {factor: level}` on the combined path: those factors are offered as options (with the share code sampling would give each) and the model's pick becomes lineage (`"picked_by": "model"`). No automatic per-factor decision step. Round 3: the model skews the distribution and mislabels its own picks; most of the readability gain comes from coarser specs, which code-picking at the same level gets too. |
 
 E-commerce prompt module fixes: no more "vary the vertical across the K"; complexify keeps the size class
@@ -83,6 +83,27 @@ fit / 47% complexity / 59% faithful at $5.94/1K list; combined-5 93% / 73% / 78%
   The strong model's default route bills ~2.3× list.
 - **The judge is a relative measure.** Haiku's first prompt mis-scored obvious product matches; v2 (explicit
   normalization rules, medium reasoning) fixed the spot-checked errors, but absolute rates stay noisy.
+
+### Compact ID-table batch prompt (item 6 "prompt shape"), measured offline
+
+`combined_table_batch_prompt` writes a `NODES` glossary (each distinct node once, ids like `P1`, `S1`)
+and one table row of ids per record, instead of listing every node inline under each spec. Measured on
+the pilot's 500 mixes with `analysis/prompt_tokens.py` (no model calls; tiktoken o200k scaled ×1.05 to
+DeepSeek's logged counts):
+
+| batch | grouping | spec tokens/record: old JSON → inline text → ID table | whole prompt/record: inline → table | distinct nodes per batch |
+|---|---|---|---|---|
+| 5 | random (as generated) | 458 → 305 → 328 (table +7%) | 649 → 672 (+4%) | 19.7 of 20 |
+| 5 | by subject branch | 458 → 305 → 314 (+3%) | 649 → 658 (+1%) | 18.9 of 20 |
+| 10 | random | 458 → 305 → 321 (+5%) | 477 → 493 (+3%) | 38.9 of 40 |
+| 10 | by subject branch | 458 → 305 → 306 (0%) | 477 → 478 (0%) | 37.2 of 40 |
+
+The plan's ~46% saving was against the old JSON mix format; the inline text form (`mix_text`) already
+takes 33% of it. A glossary only pays when nodes repeat within a batch, and with four deep factors almost
+none do, so the table is never smaller here, even grouped by subject. Specs are also only ~300 of ~650
+input tokens per record, at the cheap input price. **Recommendation: do not switch formats** for this
+dataset; the table would only help taxonomies with small factors (many repeats per batch). No quality
+pilot run.
 
 ### Round 3: batch modes A/B and model-picked factors (default routing, 500 attempts each)
 

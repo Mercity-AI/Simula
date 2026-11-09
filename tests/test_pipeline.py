@@ -708,3 +708,22 @@ def test_model_picked_factor_lineage_comes_from_the_model(tmp_path: Path) -> Non
     unpicked = {entry["factor"]: entry for entry in rows[1]["taxonomy_mix"]}["topic"]
     assert unpicked["path"] == ["topic"] and unpicked["node"] == "nonsense"
     assert "- topic: alpha_extra" in rows[0]["meta_prompt"]  # the critic sees the pick as an ingredient
+
+
+def test_table_batch_prompt_describes_each_node_once() -> None:
+    from simula.models import fake_complete
+    from simula.prompts import combined_table_batch_prompt
+
+    def entry(factor: str, *path: str) -> dict:
+        return {"factor": factor, "node": path[-1], "path": [factor, *path], "description": f"{path[-1]} described"}
+
+    items = [
+        {"id": "r1", "mix": [entry("topic", "alpha"), entry("tone", "dry")], "harder": True},
+        {"id": "r2", "mix": [entry("topic", "beta"), entry("tone", "dry")], "harder": False},
+    ]
+    prompt = combined_table_batch_prompt("Tiny QA.", None, items, [])
+    assert prompt.count("dry described") == 1  # shared node: one glossary line, two references
+    # "topic" and "tone" share an initial, so the second factor's ids use two letters.
+    assert "r1 | T1 | TO1 | yes" in prompt and "r2 | T2 | TO1 | no" in prompt
+    records = json.loads(fake_complete(prompt, 1))["records"]
+    assert [record["id"] for record in records] == ["r1", "r2"]
