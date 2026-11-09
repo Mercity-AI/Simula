@@ -167,15 +167,28 @@ earlier rounds; it bills ~$2.5 per 1K rows on this route, 87% of output is reaso
 - **Cutting too high drifts toward the typical**, as predicted: with three broad intents and the size class
   left to the writer, records slid to "medium" (48% → 62%), short queries fell 37% → 23%, and openers
   repeat more. Fit scores are not comparable across arms (a broader node is easier to fit).
-- **The prompt, on this fast model** (v3 wording, 5 runs per taxonomy): stable on clear factors
-  (`product_vertical` leaves 5/5; stories `tone`, `person`, `structure`, `setting` leaves 5/5, `length`
-  level 1 4/5) and never chose model-pick, but a coin flip on borderline ones (`shopper_intent` level 2
-  3/5, `attribute_focus` level 2 2/5 and level 1 3/5). Earlier wordings jumped from the leaves straight to
-  level 1; "name the few clashing pairs as exclusions" and "do not skip levels" moved it toward level 2.
-  It also flags real taxonomy problems unprompted (`query_complexity` mixes three unrelated things;
-  stories `length` and `medium` leaves name other factors' values).
-- **Open:** try the prompt on the strategic model (one call per dataset) or take a majority of several
-  runs; a config setting for "code to a level"; turning the prompt's exclusions into `never_combine` rules.
+- **The prompt, on this fast model.** Early wordings were a coin flip on borderline factors and jumped from
+  the leaves straight to level 1. The current wording judges each level from the bottom up by its
+  "misfit share" (the fraction of options that are impossible next to about a third or more of another
+  factor's values: ≤ ~1 in 10 safe, up to ~1 in 3 safe with exclusions, more → go up a level). 5 runs per
+  taxonomy: `product_vertical` leaves 5/5, `shopper_intent` level 2 5/5, `attribute_focus` level 2 4/5;
+  stories `tone`, `person`, `medium`, `structure` leaves 5/5, `length` level 1 5/5, `genre` leaves 4/5.
+  `query_complexity` stays mixed (it packs three unrelated things into one tree). `deepseek-v4-pro`, 3
+  runs: 2 of 3 agree with these, so use a majority of several runs on either model. It never chose
+  model-pick. It also flags real taxonomy problems unprompted (stories `length` and `medium` leaves name
+  other factors' values).
+- **Done since:** `generation.code_level` is the pipeline setting for "code to a level".
+- **Open:** turning the prompt's exclusions into `never_combine` rules; wiring the prompt in as a step.
+
+### Complexify is its own call again on the combined path (user decision, 2026-11-10)
+
+The combined batch prompt used to mark ~30% of its specs "(harder)". Removed: asking for a harder record
+up front gives the model nothing to contrast against. Complexify is now always an input → output step.
+On the combined path a record whose coin came up gets one extra `complexify` call that takes the written
+record and returns a harder version (`complexify_record_prompt`; the e-commerce module rebuilds the
+extraction from the rewritten query), then validation and critique as usual. Cost: about
+`complexity_ratio` extra bulk calls per record (≈ +0.3 calls per row at the default), so the round 1–4
+cost figures, measured with the flag, are slightly low for the default setup. Not piloted yet.
 
 ### What a 10K e-commerce dataset costs now
 
