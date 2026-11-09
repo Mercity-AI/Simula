@@ -144,6 +144,39 @@ All on plain `deepseek-v4-flash` (default routing), same 500 mixes; compare with
   `max_retries=0`. Our loop still allows 8 tries x `timeout_seconds`, so watch long runs for stalls and
   resume.
 
+### Round 4: how deep code picks each factor (2026-11-10)
+
+Idea: every factor is code-picked down to some level and writer-chosen below it ("code to the leaves" and
+"model picks" are the two ends). `analysis/factor_roles.py` holds an experimental prompt that decides the
+level per factor: is the value *known or controlled* (then code must pick it), and at which level does it
+stop combining with the other factors without *impossible* pairs (unusual pairs do not count). Not wired
+into generation; "code to a level" was piloted by cutting a taxonomy copy (`CUTS` in `pilot_configs.py`).
+
+Pilot: 500 attempts per arm, `deepseek/deepseek-v4.1-flash-1017:nitro` for bulk and critic, combined path,
+batch 5, critic on, Haiku judge on 150 records. Compare within this table only (different model from the
+earlier rounds; it bills ~$2.5 per 1K rows on this route, 87% of output is reasoning).
+
+| Arm | Vendi | Vendi len-matched | top-3 openers | realism | coherence | faithful | small / medium / large |
+|---|---|---|---|---|---|---|---|
+| `V5_leaves`: everything to the leaves | 81.7 | 41.8 | 13% | 3.95 | 4.39 | 80% | 37 / 48 / 14% |
+| `V5_cut_model`: intent + attribute at level 1, complexity at level 2 | 72.0 | 41.6 | 19% | 4.56 | 4.79 | 76% | 23 / 62 / 15% |
+| `V5_cut_hand`: intent + attribute at level 2 | **83.9** | **46.1** | 12% | 4.23 | 4.47 | 81% | 34 / 56 / 10% |
+
+- **Cutting at the right level helps.** Level 2 for the two modifier factors raises realism and coherence
+  and does not cost diversity. This repeats round 3's CP5 result on a different model.
+- **Cutting too high drifts toward the typical**, as predicted: with three broad intents and the size class
+  left to the writer, records slid to "medium" (48% → 62%), short queries fell 37% → 23%, and openers
+  repeat more. Fit scores are not comparable across arms (a broader node is easier to fit).
+- **The prompt, on this fast model** (v3 wording, 5 runs per taxonomy): stable on clear factors
+  (`product_vertical` leaves 5/5; stories `tone`, `person`, `structure`, `setting` leaves 5/5, `length`
+  level 1 4/5) and never chose model-pick, but a coin flip on borderline ones (`shopper_intent` level 2
+  3/5, `attribute_focus` level 2 2/5 and level 1 3/5). Earlier wordings jumped from the leaves straight to
+  level 1; "name the few clashing pairs as exclusions" and "do not skip levels" moved it toward level 2.
+  It also flags real taxonomy problems unprompted (`query_complexity` mixes three unrelated things;
+  stories `length` and `medium` leaves name other factors' values).
+- **Open:** try the prompt on the strategic model (one call per dataset) or take a majority of several
+  runs; a config setting for "code to a level"; turning the prompt's exclusions into `never_combine` rules.
+
 ### What a 10K e-commerce dataset costs now
 
 | | rows | taxonomy (v4-pro, once) | total |

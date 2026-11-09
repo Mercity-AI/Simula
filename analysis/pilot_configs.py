@@ -22,6 +22,7 @@ RUNS = REPO / "runs" / "pilot"
 CONFIGS = RUNS / "configs"
 MODULE = REPO / "examples" / "ecommerce_search_extraction_prompts.py"
 NITRO, FLASH, PRO = "deepseek/deepseek-v4-flash:nitro", "deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"
+FAST = "deepseek/deepseek-v4.1-flash-1017:nitro"
 COMBINED = {"meta_prompts": False}
 MODEL_PICKED = {"shopper_intent": 2, "attribute_focus": 2}
 
@@ -45,6 +46,18 @@ ARMS = {
     "MP5_model_picked": ({**COMBINED, "record_batch_size": 5, "model_picked": MODEL_PICKED, "concurrency": 60}, FLASH, 500, False),
     # Control: code-picked, with shopper_intent/attribute_focus cut to level 2 in its taxonomy copy.
     "CP5_code_picked_level2": ({**COMBINED, "record_batch_size": 5, "concurrency": 60}, FLASH, 500, False),
+    # Round 4: where code stops picking each factor (analysis/factor_roles.py), all on FAST. Leaves = the
+    # recommended setup; "model" = the cut levels the decision prompt chose (majority of 3 runs); "hand" =
+    # the hand-checked cut levels (CP5's design).
+    "V5_leaves": ({**COMBINED, "record_batch_size": 5, "concurrency": 60}, FAST, 500, False),
+    "V5_cut_model": ({**COMBINED, "record_batch_size": 5, "concurrency": 60}, FAST, 500, False),
+    "V5_cut_hand": ({**COMBINED, "record_batch_size": 5, "concurrency": 60}, FAST, 500, False),
+}
+# Arms whose taxonomy copy is cut: {factor: deepest level code samples}. Nodes at that level become leaves.
+CUTS = {
+    "CP5_code_picked_level2": {"shopper_intent": 2, "attribute_focus": 2},
+    "V5_cut_model": {"shopper_intent": 1, "attribute_focus": 1, "query_complexity": 2},
+    "V5_cut_hand": {"shopper_intent": 2, "attribute_focus": 2},
 }
 
 
@@ -69,17 +82,22 @@ def write_arm(name: str, generation: dict, model: str, attempts: int, module: Pa
     return path
 
 
-def prune_to_level_two(name: str, factors: tuple[str, ...]) -> None:
-    # The CP5 control: cut these factors' trees at level 2 so code samples level-2 nodes as leaves.
+def cut_taxonomy(name: str, levels: dict[str, int]) -> None:
+    # "Code to a level": cut these factors' trees at the given level so code samples those nodes as leaves
+    # (the same shares as sampling a leaf and keeping its ancestor at that level).
     import json
+
+    def cut(node: dict, level: int) -> None:
+        if node.get("level", 0) >= level:
+            node["children"] = []
+        for child in node["children"]:
+            cut(child, level)
 
     path = RUNS / name / "taxonomy.json"
     taxonomy = json.loads(path.read_text())
     for factor in taxonomy["factors"]:
-        if factor["name"] in factors:
-            for child in factor["children"]:
-                for grandchild in child["children"]:
-                    grandchild["children"] = []
+        if factor["name"] in levels:
+            cut(factor, levels[factor["name"]])
     path.write_text(json.dumps(taxonomy, indent=2, ensure_ascii=False))
 
 
@@ -93,7 +111,8 @@ def main() -> None:
             continue
         module = args.main_worktree / "examples" / MODULE.name if baseline else MODULE
         print("wrote", write_arm(name, generation, model, attempts, module))
-    prune_to_level_two("CP5_code_picked_level2", tuple(MODEL_PICKED))
+    for name, levels in CUTS.items():
+        cut_taxonomy(name, levels)
 
 
 if __name__ == "__main__":

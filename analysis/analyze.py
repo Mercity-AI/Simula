@@ -22,6 +22,7 @@ PRICES = {  # USD per 1M tokens (OpenRouter list, 2026-11-08)
     "deepseek/deepseek-v4-flash:nitro": (0.091, 0.182),
     "deepseek/deepseek-v4-pro": (0.241338, 0.482676),
     "deepseek/deepseek-v4-pro:nitro": (0.241338, 0.482676),
+    "deepseek/deepseek-v4.1-flash-1017:nitro": (0.15, 0.6),  # list, 2026-11-08
 }
 SIZES = {"small": (3, 5), "medium": (6, 11), "large": (12, 20)}
 
