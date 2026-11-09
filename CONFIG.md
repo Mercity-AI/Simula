@@ -11,7 +11,9 @@ its default, and when it matters. It is the human-facing companion to two other 
 Only two things are required: a non-empty `description`, and a `model` id for each of the three roles
 (`strategic`, `bulk`, `critic`). Everything else has a default — omit a key to accept it. A blank
 section header (e.g. `evaluation:` with nothing under it) is treated as "use defaults", not "wipe the
-section".
+section". An unknown key (a typo, or a renamed knob such as `scenarios_per_mix` → `meta_prompts_per_mix`
+or `batch_size` → `record_batch_size`) is an error, not silently ignored; only `models.<role>` accepts
+extra keys, because those are decoding params passed through to the provider.
 
 Read the related prose in `README.md` for prompt overrides, strategy guidance, the sampling layering,
 and the schema subset; this file does not repeat those at length.

@@ -107,6 +107,9 @@ The invariants an agent must preserve (these are not written down in the field t
 - Read typed fields off the validated model (`cfg.generation.target_size`, `cfg.provider.base_url`,
   `cfg.schema`, …). `cfg.data` is a derived dict view (`model_dump`) kept only for the few dict
   consumers (`ModelRouter`, `resolve_sampling`, the resume fingerprint) — do not hand-merge config.
+- Unknown keys are errors (`extra="forbid"` via the `_Section` base and on `Config`); only
+  `models.<role>` stays open for provider decoding params. Renaming a knob therefore breaks old configs
+  loudly, which is intended.
 - Pydantic enforces non-empty description, a `model` per role, valid `review_mode`/`coverage_mode`,
   and positive/in-range generation + taxonomy knobs, so a bad
   `target_size`/`overgenerate_ratio`/`concurrency` fails at load with a `ValueError`, not as a silent

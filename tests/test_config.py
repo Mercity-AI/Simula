@@ -365,3 +365,13 @@ def test_model_picked_needs_the_combined_path(tmp_path: Path) -> None:
         load_config(_write_config(tmp_path, {"generation": {"meta_prompts": False, "model_picked": {"topic": 0}}}))
     cfg = load_config(_write_config(tmp_path, {"generation": {"meta_prompts": False, "model_picked": {"topic": 2}}}))
     assert cfg.generation.model_picked == {"topic": 2}
+
+
+def test_unknown_or_renamed_keys_are_errors(tmp_path: Path) -> None:
+    # A typo or an old knob name must not be silently ignored.
+    for extra in ({"generation": {"scenarios_per_mix": 3}}, {"generation": {"batch_size": 5}}, {"taxonomy": {"depht": 3}}, {"genration": {}}):
+        with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+            load_config(_write_config(tmp_path, extra))
+    # Role-level decoding params stay open (they pass through to the provider).
+    models = {**_fake_models(), "bulk": {"model": "fake", "min_p": 0.05}}
+    assert load_config(_write_config(tmp_path, {"models": models})).models.bulk.model == "fake"
