@@ -106,7 +106,7 @@ Builds `taxonomy.json` and, depending on `taxonomy.review_mode`, either accepts 
 simula generate CONFIG.yaml
 ```
 
-Loads or builds the taxonomy, builds strategies and meta prompts if missing, generates data, validates records, runs critic/refine, and writes dataset artifacts. It does not run evaluation.
+Loads or builds the taxonomy, builds strategies and meta prompts if missing (skipped with `generation.meta_prompts: false`), generates data, validates records, runs critic/refine, and writes dataset artifacts. It does not run evaluation.
 
 Pass `--stop-after {taxonomy,strategies,meta_prompts}` (or set `generation.stop_after` in the
 config) to halt once that stage's artifact is written. Edit the artifact, then rerun: existing
@@ -308,7 +308,11 @@ memory. Highly repetitive inputs can still produce many candidate comparisons.
 `meta_prompts.jsonl` holds one row per attempt (`attempt_index`, sampled `strategy_id` +
 `taxonomy_mix`, `meta_prompt`, `complexified`). Like `taxonomy.json` and `strategies.json` it is
 reused when present — stop with `--stop-after meta_prompts`, hand-edit the prompts, and rerun to
-generate from the edited versions.
+generate from the edited versions. With `generation.meta_prompts: false` (the combined path) there is
+no meta-prompt step and no `meta_prompts.jsonl`: records are written straight from their sampled
+mixes, `generation.record_batch_size` per call. On that path, factors listed in `generation.model_picked` are
+chosen by the model per record from the offered options; their lineage entries carry
+`"picked_by": "model"`.
 
 `llm_calls.jsonl` is especially useful while a run is still active. Every successful model response is appended immediately with:
 
@@ -319,6 +323,14 @@ generate from the edited versions.
 - system prompt
 - user prompt
 - raw response
+- `in_tokens` / `out_tokens`, plus `reasoning_tokens` (hidden reasoning, part of `out_tokens`),
+  `cached_tokens` (prompt-cache hits, part of `in_tokens`) and `cost` (the provider-billed cost; USD on
+  OpenRouter) when the provider reports them (0 / null otherwise)
+- the resolved sampling params and `extra_body`
+
+`cost_summary.json` rolls these up per role/task/model for the last command (`total_cost` is the sum
+of provider-reported costs). It is overwritten by each command, so aggregate `llm_calls.jsonl` for the
+cost of a whole multi-command run.
 
 `dataset.final.jsonl` contains rows with full lineage:
 
@@ -336,6 +348,11 @@ generate from the edited versions.
 - `accepted`
 - `rejection_reason`
 - `created_at`
+
+On the combined path `meta_prompt` holds the model's one-line plan for the record followed by its
+sampled ingredients: what the record was built from, and what the critic judged it against. A row that
+is accepted while its last critic verdict is `reject` was corrected by the critic itself (a critic
+response carrying `"revised"`), with no refine call.
 
 ## Query Extraction Example
 
@@ -403,7 +420,7 @@ Current test coverage includes:
 
 - Generation is thread-based and pilot-scale, not distributed.
 - The model client only supports OpenAI-compatible chat completions.
-- The critic is simple and single-pass by default.
+- The critic is simple: one critique per record, plus a re-critique after each refine.
 - Complexity scoring is optional and relatively basic.
 - Taxonomy coverage for generated data uses lineage, not independent LLM assignment.
 - There is no database, web UI, fine-tuning harness, multimodal support, or production queue.

@@ -86,7 +86,7 @@ Knobs for the breadth-first taxonomy build (`simula taxonomy`).
 |---|---|---|
 | `depth` | `2` | Levels expanded below each factor root. `0` = factors only, no children. More depth = more structure, more model calls. |
 | `factors` | `null` | `null` lets the model discover 3–6 factors. Or provide a list of `{name, description}` to fix them yourself. |
-| `best_of_n` | `2` | Candidate child-lists drafted per node before a critic refine picks/merges. Higher = more diverse children, more cost. |
+| `best_of_n` | `1` | Candidate child-lists drafted per node (in parallel). A critic call then refines them for completeness and low duplication, so each expanded node costs `best_of_n + 1` calls. `2` adds variety at 1.5× the cost of `1`. `children_per_node` is a request, not a cap: the critic may add children the node's description implies. |
 | `children_per_node` | `4` | Target number of children requested when expanding each node (passed to the expand prompt). |
 | `review_mode` | `"auto_accept"` | Gate after the taxonomy is built — see below. |
 | `log_style` | `"light"` | How the build is surfaced live — see below. |
@@ -148,17 +148,29 @@ Volume and behavior of the generation pass (`simula generate`).
 | `target_size` | `50` | Desired row count. Sets the attempt budget; caps `dataset.final.jsonl` only when `trim` is true. Rejections/dedupe can leave fewer rows. |
 | `overgenerate_ratio` | `1.3` | `attempts = ceil(target_size × ratio)`. Buffer for rows the critic/schema rejects. `1.0` = no buffer. |
 | `trim` | `true` | Coverage-trim accepted rows to `target_size`. Set false to skip selection and retain all accepted rows after optional dedupe, in their existing order. |
-| `scenarios_per_mix` | `3` | How many candidate meta-prompts the model drafts per sampled taxonomy mix; each attempt picks one at random. Higher = more variety per mix. |
-| `complexity_ratio` | `0.3` | Fraction of attempts (sampled per point) routed through the extra "complexify" step so the set mixes easy and hard items. `0.0` disables it. |
-| `max_refine_attempts` | `2` | Critic→refine retries per record before it is accepted or rejected. `0` = critique once, never refine. |
-| `concurrency` | `4` | In-flight model calls (a semaphore). Lower it if the provider rate-limits; raise it cautiously to go faster. |
+| `meta_prompts` | `true` | Write a reviewable scenario per attempt first (`meta_prompts.jsonl`, editable via `stop_after: meta_prompts`), then generate the record from it. `false` = the **combined path**: records are written straight from their sampled mixes, `record_batch_size` per call, with no meta-prompt step or artifact. |
+| `scenarios_per_mix` | `1` | Scenarios one meta-prompt call writes for one sampled mix. Every scenario becomes its own attempt sharing that mix (attempts `k·K … k·K+K−1`), so `K>1` means fewer distinct mixes and fewer meta-prompt calls. Requires `meta_prompts: true`. |
+| `meta_batch_size` | `1` | **Batch mode A:** mixes per meta-prompt call (each still gets its own scenario(s) and keeps its own lineage). Requires `meta_prompts: true`. |
+| `record_batch_size` | `1` | Records written per record call. With `meta_prompts: true` this is **batch mode B** (records from several scenarios per call; set both batch sizes for A+B); with `meta_prompts: false` it is **mode C**, the combined path. Each record is still validated, repaired and critiqued on its own and keeps its own lineage. Batching amortizes the instruction prompt, not hidden reasoning — see the note below. |
+| `model_picked` | `{}` | Combined path only. `{factor: level}`: instead of code sampling these factors, the batch prompt offers the factor's nodes at that tree level (with the share code sampling would give each) and the model picks one per record, reporting it in `"picked"`. The pick becomes the row's lineage entry for that factor, marked `"picked_by": "model"`; code-picked factors are sampled exactly as before. Strategy roots and `never_combine` do not apply to model-picked factors. |
+| `complexity_ratio` | `0.3` | Fraction of attempts (sampled per point) made harder so the set mixes easy and hard items: an extra "complexify" call on the scenario, or a `(harder)` flag on the record's spec on the combined path. `0.0` disables it. |
+| `critic` | `true` | Critique every structurally valid record. `false` accepts every schema-valid record with no critic or refine calls (repair still runs). |
+| `max_refine_attempts` | `2` | Refines per record after critic rejections; every refined record is critiqued again, so the last word is always a verdict. `0` = critique once, never refine. A critic that returns a corrected record (`"revised"`, as the built-in JSON critic does) has a schema-valid fix accepted directly, with no refine. |
+| `concurrency` | `4` | In-flight model calls (a semaphore). On the combined path a batch counts as `record_batch_size` calls (its records are critiqued in parallel), so `concurrency // record_batch_size` batches run at once. Lower it if the provider rate-limits; raise it cautiously to go faster. |
 | `checkpoint_every` | `50` | Write `run_state.json` every N completed attempts. Pure resume/durability cadence. |
 | `stop_after` | `null` | Halt `generate`/`run` once this stage's artifact is written: `taxonomy`, `strategies`, or `meta_prompts`. Edit the artifact, then rerun — existing artifacts are reused, so the run continues from where it stopped. The CLI `--stop-after` flag overrides this per invocation (`--stop-after none` disables a config-set stop). |
 
 **Resume note:** `target_size`, `overgenerate_ratio`, `trim`, `concurrency`, and `checkpoint_every` are
 excluded from the resume fingerprint, so you can grow or re-pace a run and still `--resume`. Changing
-`scenarios_per_mix`, `complexity_ratio`, `max_refine_attempts` (or the description/schema/seed/models/
-prompts/sampling/taxonomy) invalidates resume and requires `--no-resume`.
+`meta_prompts`, `scenarios_per_mix`, `meta_batch_size`, `record_batch_size`, `model_picked`, `complexity_ratio`, `critic`, `max_refine_attempts` (or the
+description/schema/seed/models/prompts/sampling/taxonomy) invalidates resume and requires `--no-resume`.
+
+**Cost note (measured on DeepSeek v4 flash, reasoning effort low):** hidden reasoning is most of the
+billed output of every call, and it scales with the number of records written, not the number of calls:
+a 10-record batch reasons about as much per record as ten single calls. So `record_batch_size` mainly saves the
+repeated instruction prompt (input tokens) and, with `meta_prompts: false`, the scenario calls. Check
+`reasoning_tokens` and `cost` in `llm_calls.jsonl` when tuning. A batch's reasoning plus output must fit
+`max_tokens`: give the `bulk` role room (e.g. `65536` for 10 records).
 
 ## `evaluation`
 
@@ -190,5 +202,12 @@ Embedding-based diversity. Off by default; needs the extra: `pip install 'simula
 | `enabled` | `false` | Turn diversity scoring on. |
 | `embedding_model` | `"sentence-transformers/all-MiniLM-L6-v2"` | Sentence-embedding model. |
 | `k_local` | `10` | Nearest neighbours used for the local-diversity metric. |
+
+The report gives `global_diversity` (mean pairwise cosine distance), `local_diversity` (mean distance to
+the `k_local` nearest neighbours) and `vendi` (the Vendi score: the effective number of distinct records,
+1 = all identical, n = all unrelated). Vendi and local diversity depend on sample size and embedding
+model: compare only runs scored with the same `sample_cap` and `embedding_model`; mean pairwise distance
+is the least stable of the three across embedding models.
+
 | `sample_cap` | `1000` | Max rows embedded; beyond this a random subset is scored (logged when it happens). |
 | `text_field` | `null` | Dotted path into the record to embed (e.g. `query`, `extraction.intent`). `null` embeds the whole record JSON. Plain nested-key access, not full JSONPath. |

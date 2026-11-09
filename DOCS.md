@@ -27,7 +27,9 @@ the older docs disagree, the note says so.
 One YAML config drives everything. From a plain-English **description** (and an optional
 **schema**), `simula` first maps the space of things to generate (a **taxonomy**), decides how to
 sample that space (**strategies**), then repeatedly samples a point, turns it into a **meta-prompt**,
-generates a record, and runs a **critic → refine** loop before accepting it. Everything is written
+generates a record, and runs a **critic → refine** loop before accepting it. (With
+`generation.meta_prompts: false` the meta-prompt step is skipped and several records are written per
+call straight from their sampled points; see [the combined path](#one-record-per-attempt-and-the-combined-path).) Everything is written
 to human-readable JSON/JSONL artifacts as it happens.
 
 ```mermaid
@@ -43,7 +45,7 @@ flowchart TD
     gen -->|"candidate record"| crit["Critic<br/>(critic model)"]
     crit -->|"reject + explanation"| refine["Refine<br/>(bulk model)"]
     refine -->|"revised record"| crit
-    crit -->|"accept"| rows["accepted rows"]
+    crit -->|"accept, or reject + a valid fix"| rows["accepted rows"]
 
     rows -->|"dedupe + coverage-aware trim"| final["dataset.final.jsonl"]
     final -.->|"separate `evaluate` command"| evalrep["dataset.evaluated.jsonl<br/>+ eval_report.json"]
@@ -57,7 +59,9 @@ once that stage's artifact is written; edit it and rerun to continue (existing a
 
 > **Note the arrows into the models.** Every step is one model role. The taxonomy and strategies are
 > built by `strategic`; the records are written by `bulk`; the accept/reject verdict is `critic`; and
-> the *refine* that follows a rejection is done by `bulk` again (not the critic). See
+> the *refine* that follows a rejection is done by `bulk` again (not the critic) — unless the critic's
+> rejection already carries a corrected record (`"revised"`, as the built-in JSON critic returns), which
+> is accepted directly when it is schema-valid. See
 > [the model roles](#the-model-roles-there-are-three-not-four).
 
 ---
@@ -313,9 +317,9 @@ taxonomy:
 generation:
   target_size: 5                   # rows wanted in dataset.final.jsonl
   overgenerate_ratio: 1.4          # attempts = ceil(5 * 1.4) = 7 (buffer for rejections)
-  scenarios_per_mix: 2             # 2 candidate meta-prompts drafted per point; ONE is used
+  scenarios_per_mix: 2             # one meta-prompt call writes 2 scenarios per mix; BOTH become attempts
   complexity_ratio: 0.2            # ~20% of points routed through the complexify step
-  max_refine_attempts: 1           # critic → refine at most once before rejecting
+  max_refine_attempts: 1           # at most one refine, which is then critiqued again
   concurrency: 1                   # in-flight model calls
 
 evaluation:
@@ -406,7 +410,7 @@ change it (blank sections fall back to defaults). Required fields have no defaul
 | ------------------- | --------------------------------------------------------- | --------------- | ----------- | -------------- |
 | `depth`             | Levels below each factor root (`0` = factors only).       | `2`             | yes         | integer ≥ 0 |
 | `factors`           | Hand-supplied factors; `null` lets the model discover 3–6.| `null`          | yes         | list of `{name, description}` or `null` |
-| `best_of_n`         | Candidate child lists per node before the critic refines. | `2`             | yes         | integer > 0 |
+| `best_of_n`         | Candidate child lists per node before the critic refines. | `1`             | yes         | integer > 0 |
 | `review_mode`       | Whether the run halts for manual taxonomy edits.          | `"auto_accept"` | yes         | `auto_accept`, `write_then_edit`, `interactive_confirm` |
 | `children_per_node` | Target children requested per node.                       | `4`             | yes         | integer > 0 |
 | `log_style`         | How the build is shown.                                   | `"light"`       | yes         | `light`, `tree` |
@@ -430,9 +434,14 @@ change it (blank sections fall back to defaults). Required fields have no defaul
 | -------------------- | ----------------------------------------------------------------- | ------- | ----------- | -------------- |
 | `target_size`        | Rows wanted in `dataset.final.jsonl`.                             | `50`    | yes         | integer > 0 |
 | `overgenerate_ratio` | `attempts = ceil(target_size * ratio)`; buffer for rejections.    | `1.3`   | yes         | float ≥ 1.0 |
-| `scenarios_per_mix`  | Candidate meta-prompts drafted per point; **one is used**.        | `3`     | yes         | integer > 0 |
-| `complexity_ratio`   | Fraction of points routed through the complexify step.            | `0.3`   | yes         | float 0.0–1.0 |
-| `max_refine_attempts`| Critic→refine retries per record (`0` = critique once, no refine).| `2`     | yes         | integer ≥ 0 |
+| `meta_prompts`       | Write a reviewable scenario per attempt first; `false` = combined path. | `true` | yes      | bool |
+| `scenarios_per_mix`  | Scenarios per meta-prompt call; **each becomes an attempt** sharing the mix. | `1` | yes      | integer > 0 (needs `meta_prompts: true` when > 1) |
+| `meta_batch_size`    | Batch mode A: mixes per meta-prompt call.                         | `1`     | yes         | integer > 0 (needs `meta_prompts: true` when > 1) |
+| `record_batch_size`         | Records per record call: mode B with meta prompts, mode C without. | `1`    | yes         | integer > 0 |
+| `model_picked`       | Combined path: `{factor: level}` the model picks per record.      | `{}`    | yes         | mapping of factor name → level ≥ 1 |
+| `complexity_ratio`   | Fraction of points made harder (complexify call / `(harder)` flag). | `0.3` | yes         | float 0.0–1.0 |
+| `critic`             | Critique records; `false` accepts every schema-valid record.      | `true`  | yes         | bool |
+| `max_refine_attempts`| Refines per record; each refined record is critiqued again (`0` = critique once, no refine).| `2` | yes | integer ≥ 0 |
 | `concurrency`        | In-flight model calls; lower if rate-limited.                     | `4`     | yes         | integer > 0 |
 | `checkpoint_every`   | Write `run_state.json` every N completed attempts.               | `50`    | yes         | integer > 0 |
 | `stop_after`         | Halt `generate`/`run` once this stage's artifact is written (edit it, rerun to continue). CLI `--stop-after` overrides; `--stop-after none` disables. | `null`  | yes         | `taxonomy`, `strategies`, `meta_prompts`, `null` |
@@ -477,21 +486,27 @@ calls plus concurrency bursts during the build. **Workaround:** for deep trees, 
 the taxonomy once — it is written to `taxonomy.json` and reused on later runs in the same
 `output_dir`.
 
-### One record per attempt, and `scenarios_per_mix` does *not* multiply output
+### One record per attempt, and the combined path
 
-`scenarios_per_mix` (default `3`) asks the `bulk` model for several candidate meta-prompts per sampled
-point — but the code then picks **exactly one** at random (`rng.choice`) and generates **one** record
-from it (`simula/generate.py::_make_meta_prompt`). So the number of rows is driven by the **attempt
-count**, not by `scenarios_per_mix`:
+The number of rows is driven by the **attempt count**:
 
 ```text
 attempts = ceil(target_size * overgenerate_ratio)   # one record per attempt
 ```
 
-**Workaround:** to get more records, raise `target_size` (and keep `overgenerate_ratio` high enough to
-survive rejections). Raising `scenarios_per_mix` only widens the meta-prompt lottery per point, adding
-diversity — not volume. There is no batched/multi-record-per-prompt mode yet (it is on the roadmap in
-`TODO.md`).
+`scenarios_per_mix` (default `1`) does not change that count; it changes how many distinct mixes are
+drawn. One meta-prompt call writes K scenarios for one sampled point and **every one becomes its own
+attempt**, so K=3 means a third as many mixes and meta-prompt calls, three records per mix.
+
+Three batch modes cut calls: **A** `meta_batch_size` writes the scenarios for several mixes in one
+call, **B** `record_batch_size` (with meta prompts on) writes the records for several scenarios in one call,
+and they combine. `generation.meta_prompts: false` is mode **C**, the **combined path**: no meta-prompt step and no
+`meta_prompts.jsonl`; one `bulk` call writes `record_batch_size` records straight from their sampled points,
+each with a one-line plan. Every record is then validated, repaired and critiqued on its own and keeps
+its own mix as lineage, so a bad record never sinks its batch. It is cheaper (no scenario calls, the
+instruction prompt is sent once per batch) but gives up the reviewable/editable scenario step. Hidden
+reasoning does not shrink with batching — a 10-record batch reasons about as much per record as ten
+single calls — so give `bulk` a `max_tokens` large enough for the whole batch.
 
 ### Topic distribution is weighted, so over-represented labels dominate the *accepted* set
 
@@ -538,7 +553,7 @@ cost of extra model calls. Treat lineage coverage as "what we asked for" and rea
 - Generation is `asyncio`-concurrent and pilot-scale, not distributed.
 - The client only speaks OpenAI-compatible chat completions (one shared `provider` for all roles;
   per-role endpoints/keys are not currently supported — see the cleanup note in `AGENTS.md`).
-- The critic is single-pass by default (`max_refine_attempts: 2`).
+- The critic is simple: one critique per record, plus a re-critique after each refine (`max_refine_attempts: 2`).
 - No database, web UI, fine-tuning harness, or multimodal support.
 </content>
 </invoke>

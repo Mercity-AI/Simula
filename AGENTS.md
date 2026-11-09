@@ -34,7 +34,7 @@ Examples:
 - `examples/query_extraction_gemini.yaml`: real query-extraction pilot config using Gemini via OpenRouter.
 - `examples/cat_stories_freetext.yaml`: fake-model smoke test for schema-free text generation.
 - `examples/job_extraction.yaml` (+ `job_extraction_prompts.py`): schema-guided `{schema, text, extraction}` envelope with a prompt-module override enforcing narrow atomic fields; DeepSeek v4 via OpenRouter.
-- `examples/ecommerce_search_extraction.yaml` (+ `ecommerce_search_extraction_prompts.py`): `{query, extraction}` envelope turning NL shopper searches into atomic DB-queryable JSON (varying schema, one-level nesting, 3..20-field spread). Depth-4 taxonomy; strategic=deepseek-v4-pro, bulk/critic=deepseek-v4-flash:nitro. Used to generate a 10K dataset that validated the post-refactor pipeline end-to-end.
+- `examples/ecommerce_search_extraction.yaml` (+ `ecommerce_search_extraction_prompts.py`): `{query, extraction}` envelope turning NL shopper searches into atomic DB-queryable JSON (varying schema, one-level nesting, 3..20-field spread). Depth-4 taxonomy; strategic=deepseek-v4-pro, bulk/critic=deepseek-v4-flash on default routing; combined path, record_batch_size 5. Its earlier 10K run (meta-prompt path, `:nitro`) is the cost baseline in `plan.md`.
 
 Tests:
 
@@ -143,10 +143,14 @@ change either, update the tests, `README.md`, and any downstream code that reads
 
 Taxonomy generation is breadth-first. For each factor:
 
-1. Expand current-level nodes.
-2. Use `best_of_n` raw proposals.
-3. Refine children with a critic-style model call.
+1. Expand current-level nodes concurrently (bounded by `generation.concurrency`).
+2. Use `best_of_n` raw proposals (default 1, requested in parallel).
+3. Refine children with a critic-style model call (always, even for one proposal: it adds children the
+   node's description implies and removes duplicates).
 4. Generate a next-level plan when more depth remains.
+
+Node names never contain `/` (the strategy path separator; `_child` replaces it). Strategy paths split
+on `/`, and on `.` only when the path has no `/`, so names like `5.1-Channel Systems` round-trip.
 
 Review modes:
 
@@ -169,9 +173,16 @@ When modifying this code, test that `taxonomy_mix` contains one lineage entry pe
 1. Loads or builds taxonomy.
 2. Loads or builds strategies.
 3. Loads or builds meta prompts (`meta_prompts.jsonl`: one row per attempt index carrying the
-   sampled strategy/mix lineage, the chosen meta prompt, and the complexify flag; missing indexes
-   are generated, existing ones reused so hand edits survive).
-4. Schedules generation attempts, each consuming its meta-prompt row.
+   sampled strategy/mix lineage, the meta prompt, and the complexify flag; missing indexes are
+   generated, existing ones reused so hand edits survive). One call writes `scenarios_per_mix` (K)
+   scenarios for one mix and every one becomes an attempt (attempts `k·K…k·K+K−1` share the mix).
+   Skipped entirely with `generation.meta_prompts: false` (the combined path).
+4. Schedules generation attempts, `record_batch_size` records per call: from their scenarios
+   (`_generate_one_safe` at size 1, else `_scenario_batch`, batch mode B), or on the combined path straight
+   from their sampled mixes with a plan per record (`_combined_batch`, mode C; `model_picked` factors are
+   offered as options and the model's pick becomes lineage). `meta_batch_size` batches the scenario step
+   itself (mode A, `_make_scenarios`). Batched records are validated/repaired and critiqued one by one
+   (`_write_batch`); a malformed item loses only itself (`_batch_items`). All paths end in `_finish_row`.
 5. Writes raw/accepted rows as each future completes.
 6. Updates `run_state.json`.
 7. Dedupes accepted rows if configured.
@@ -195,8 +206,9 @@ Generation is concurrent with `asyncio.TaskGroup`. Be careful with shared state:
 
 - `ModelRouter` schedules async log writes and flushes before CLI exit.
 - Raw/accepted/final and meta-prompt writes happen in the main task, in completion order.
-- All randomness lives in the meta-prompt phase: each attempt gets its own `random.Random(seed +
-  attempt_index)` there; the record/critic workers are rng-free.
+- All randomness lives in `_sample_lineage`, seeded per mix (`random.Random(seed + mix_id)`, where
+  `mix_id` is the attempt index when K=1 and on the combined path, so both paths draw identical mixes
+  per attempt); the record/critic workers are rng-free.
 
 ### Model Calls
 
@@ -219,6 +231,7 @@ Retry behavior (classified, not retry-everything):
 - Honors `Retry-After` on 429s; otherwise backs off exponentially (capped).
 - Fails fast on other 4xx (auth/bad-request) instead of burning the retry budget.
 - Re-raises the provider exception when retries are exhausted.
+- The OpenAI SDK's own retries are off (`max_retries=0`), so this loop is the only one (they used to stack).
 
 Each real call has a per-request timeout (default 180s, `provider.timeout_seconds`) so a hung connection fails fast and the point checkpoints as a rejected row instead of stalling the worker.
 
@@ -274,7 +287,8 @@ Use `"model": "fake"` for tests. Do not require network access in tests.
   (`test_point_failure_becomes_rejected_row` injects a router exposing only that method, with no
   `.config`) — do not inline it.
 - Add a command to tail/summarize `llm_calls.jsonl`.
-- Add batched and multi-turn generation modes (see `TODO.md`).
+- Add multi-turn generation modes (see `TODO.md`). Batched generation exists: modes A (`meta_batch_size`),
+  B (`record_batch_size` with meta prompts) and C (the combined path).
 
 ## Safety and Privacy
 

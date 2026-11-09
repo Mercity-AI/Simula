@@ -3,9 +3,141 @@
 Branch: `optimizations` (cut from `main` at `c27f83b9`). Goal: bring Simula's per-row cost toward
 Bespoke Curator levels without losing what the taxonomy, lineage and quality gates buy us.
 
-Status (2026-11-08): **design only — nothing implemented.** This file is the handoff: everything a new
-session needs is here. Follow `AGENTS.md` (compact code, `pytest -q`, fake-model tests, update
-`CONFIG.md`/`template.yaml`/README when config changes, no real model calls without asking the user).
+Status (2026-11-08, evening): **phases 0–3 implemented and piloted** (uncommitted on this branch);
+results in §0. Sections 1–4 below are the original design, kept as written; §0 records where the
+implementation deviated and why. Follow `AGENTS.md` (compact code, `pytest -q`, fake-model tests,
+update `CONFIG.md`/`template.yaml`/README when config changes, no real model calls without asking).
+
+---
+
+## 0. Implementation status and pilot results (2026-11-08)
+
+### What landed
+
+| Item | State | Notes |
+|---|---|---|
+| 5 Vendi score | done | `vendi` next to global/local diversity (`simula/diversity.py`). |
+| 8 Reasoning / cached tokens | done | Plus provider-billed `cost` (OpenRouter returns `usage.cost`) on every `llm_calls.jsonl` row and in `cost_summary.json`. |
+| 1 Taxonomy critic | **changed** | Default `best_of_n` 1, but the critic refine **always runs** (2 calls/node instead of 3). Skipping it was measured to wreck the tree: with one proposal and no critic, `product_vertical` kept 3 of its 21 described verticals and repeated node names rose from 4% to 21%. The critic is a completeness/dedupe pass, not just a merge. One proposal + critic recovered all 21 verticals and v0's fan-out (4.1 vs 3.8 children/node). |
+| 2 Parallel proposals, bounded fan-out | done | Plus one retry per failed node expansion: v4-pro returned bad JSON on ~6% of expansions, silently pruning branches (once a whole factor). |
+| 9 Per-task reasoning effort | **dropped** | User decision: reasoning stays on at the run's normal effort. Also measured: DeepSeek treats `minimal` as `low` and ignores `reasoning.max_tokens`. |
+| 10 Critic fixes | done (3 of 4) | Off-by-one fixed (every refine is re-critiqued); `generation.critic: false`; a rejecting critic may return `"revised"` and a schema-valid fix is accepted directly (built-in JSON critic + e-commerce critic do this). **Mechanical-check hook not built:** 70% of baseline critic rejections are semantic hallucinations, ~15% mechanical. |
+| 11 Small fixes | done | `/` replaced in node names; dotted names inside slash paths round-trip; blank and non-string scenarios dropped (the 10K run had 4 dict-valued `meta_prompt`s). |
+| 3 Keep every scenario | done | `scenarios_per_mix` default 1; K>1 = K attempts share one mix. Built-in and e-commerce meta prompts now describe the record instead of writing it. |
+| 4 Mix-space report | done | Printed before generation; warns when the space is smaller than the mixes drawn. |
+| 6 Batching | done (A, B, C) | Two knobs instead of a mode list: `meta_batch_size` (A: mixes per scenario call) and `record_batch_size` (records per record call: B with meta prompts on, C = the combined path with `meta_prompts: false`); A+B = both. Malformed batch JSON is salvaged item by item. Concurrency bounds whole units (`concurrency // record_batch_size`) so critiques never queue behind other batches. Results in round 3 below. |
+| 7 Code- vs model-picked factors | built (minimal), not recommended | `generation.model_picked: {factor: level}` on the combined path: those factors are offered as options (with the share code sampling would give each) and the model's pick becomes lineage (`"picked_by": "model"`). No automatic per-factor decision step. Round 3: the model skews the distribution and mislabels its own picks; most of the readability gain comes from coarser specs, which code-picking at the same level gets too. |
+
+E-commerce prompt module fixes: no more "vary the vertical across the K"; complexify keeps the size class
+(was "12–20 fields"); explicit conflict precedence for the four independently sampled nodes
+(product_vertical > query_complexity > shopper_intent > attribute_focus); critic rules first (cacheable
+prefix) and returns fixes; batch prompt; "never copy taxonomy names into the record".
+
+### Pilot design
+
+500 attempts per arm, seed 31, the v0 taxonomy + strategies, so **every arm draws the same 500 mixes**
+(lineage is seeded per attempt on both paths). Bulk + critic = `deepseek-v4-flash`, reasoning effort low.
+Baseline arm `B0` = `main` run from a worktree. Cost from `llm_calls.jsonl` (list price from tokens;
+billed = provider-reported). Quality: a blind judge (`claude-haiku-5.5`, reasoning medium) on a fixed
+150-attempt sample, scoring the final record and the pre-critic record (rebuilt from the log) for
+lineage fit, unsupported/missing/non-atomic fields, realism and coherence. Diversity: Vendi + local
+(all-MiniLM, k=10) on 400 queries, and on 90 length-matched (8–25-word) queries.
+
+### Results (deepseek-v4-flash, 500 attempts each)
+
+| Arm | $/1K rows list | billed | calls/row | product fit | complexity fit | faithful | unsupported | size in class | Vendi (n=400) | Vendi len-matched |
+|---|---|---|---|---|---|---|---|---|---|---|
+| B0 today's `main` | 3.18 | ≈6.7* | 4.30 | 38% | 21% | 60% | 14% | 39% | 53.6 | 35.4 |
+| M1 meta path, fixed | 2.08 | 4.42 | 3.34 | 94% | 64% | 64% | 10% | 83% | 79.0 | 44.8 |
+| C1 combined, 1/call | 1.43 | 2.95 | 2.00 | 95% | 80% | 71% | 8% | 91% | 78.4 | 40.7 |
+| C5 combined, 5/call | 0.91 | 1.98 | 1.20 | 95% | 73% | 77% | 7% | 82% | 78.8 | 41.8 |
+| C10 combined, 10/call | 0.76 | 1.64 | 1.10 | 91% | 69% | 75% | 4% | 79% | 79.1 | 42.5 |
+| **R5** = C5 on default routing | 0.55 | **0.40** | 1.22 | 90% | 74% | 70% | 7% | 81% | 79.0 | 42.3 |
+| C10, critic off | 0.30 | — | 0.10 | 91% | 75% | 63% | 14% | 76% | — | — |
+
+\* `main` does not log billed cost; ≈ list × 2.1, the `:nitro` ratio measured on every other arm.
+"Faithful" = no unsupported field and no missing constraint. Acceptance was 93% (B0) and 99% elsewhere.
+Strong model (`deepseek-v4-pro`, 200 attempts, paired 100-row judge sample): today's `main` 79% product
+fit / 47% complexity / 59% faithful at $5.94/1K list; combined-5 93% / 73% / 78% at $1.94/1K list.
+
+### Findings
+
+- **Today's lineage is mostly wrong, and that also kills diversity.** B0 drifts off its sampled product
+  in ~60% of rows (pacifiers → a tent, QLED TVs → green tea, office chairs → headphones) toward a few
+  favourite products ("Sony" in 4% of rows), and its queries share one long template (42% open with the
+  top-3 phrases in the 10K run). Fixing the prompts fixes both.
+- **Hidden reasoning does not shrink with batching.** A 10-record batch reasons about as much per record
+  as ten single calls (~1–2K tokens each at effort low). Batching saves calls, repeated prompt input and
+  (on the combined path) the scenario step — not reasoning.
+- **Batching drifts on shape, not product.** Product fit holds (95% → 91%), complexity fit slides
+  (80% → 73% → 69% at 1/5/10 per call), and a "large multi-need" spec can come back as a 5-word query.
+  Batch size 5 is the sweet spot.
+- **The critic earns its cost.** It halves unsupported fields in every arm (e.g. 17% → 7%) and lifts
+  faithfulness by ~10–15 points; its fixes are mostly surgical (drop an invented `category`, a guessed
+  delivery date; add an omitted constraint). Critic-off is the cheapest arm ($0.30/1K) but 1 in 3 rows
+  is unfaithful.
+- **Routing is the largest single lever.** `:nitro` bills ~2.1× list and its provider reasons ~2× more
+  per call. Default routing billed **below** list (45% of input hit the prompt cache, thanks to the
+  static-prefix prompt order) — 5× cheaper for the same configuration, but slower and with a slightly
+  more lenient critic (70% vs 62% first-pass accepts; faithfulness 70% vs 77%, within judge noise).
+  The strong model's default route bills ~2.3× list.
+- **The judge is a relative measure.** Haiku's first prompt mis-scored obvious product matches; v2 (explicit
+  normalization rules, medium reasoning) fixed the spot-checked errors, but absolute rates stay noisy.
+
+### Round 3: batch modes A/B and model-picked factors (default routing, 500 attempts each)
+
+All on plain `deepseek-v4-flash` (default routing), same 500 mixes; compare within this table only
+(default routing reasons less per call than `:nitro`, so it is not comparable to the round-1 table).
+
+| Arm | $/1K billed | calls/row | product fit | complexity fit | faithful | realism | coherence | Vendi | Vendi len-matched |
+|---|---|---|---|---|---|---|---|---|---|
+| Scenario path, unbatched | 0.84 | 3.33 | 92% | 64% | 52% | 4.05 | 4.24 | 80.4 | 44.0 |
+| A: 5 mixes per scenario call | 0.74 | 2.56 | 95% | 58% | 55% | 3.97 | 4.21 | 80.9 | 44.3 |
+| B: 5 records per record call | 0.70 | 2.54 | 95% | 64% | 49% | 3.89 | 4.11 | 80.0 | 41.4 |
+| A+B | 0.55 | 1.72 | 96% | 64% | 58% | 3.91 | 4.25 | 83.6 | 45.3 |
+| **C: combined, 5 per call (R5)** | **0.40** | 1.22 | 90% | 74% | **71%** | 3.90 | 4.22 | 79.0 | 42.3 |
+| C, intent/attribute cut to level 2 (code-picked) | 0.44 | 1.22 | 92% | 79% | 66% | 4.11 | 4.31 | 81.3 | 43.5 |
+| C, intent/attribute **model-picked** at level 2 | 0.40 | 1.21 | 91% | 80% | 64% | 4.25 | 4.53 | 84.4 | 44.5 |
+
+- **A and B work and hold quality.** A saves 12%, B 17%, A+B 35% against the unbatched scenario path,
+  with product fit unchanged or better. B's first drafts drop more stated constraints (32% faithful
+  before the critic vs 43%); the critic repairs most of it. Scenario-path arms miss more constraints
+  than C overall (their queries are longer). C stays the cheapest and most faithful: half A+B's cost.
+- **Model-picked skews and mislabels.** Picks concentrate on typical options (`category_browsing` 26%,
+  `exact_product_search` 22% against 8–11% targets; evenness 0.85 vs 0.99 for code), rare options vanish
+  (`bulk_quantity_purchaser` 0%), 2–3% of picks match no offered option, and the judge finds the record
+  matches the model's own intent label only 21% of the time (43% for code-picked). Unsupported fields
+  rise to 15% (7% code-picked). Records do read better (realism 4.25 vs 3.90).
+- **Most of that readability is specificity, not who picks.** Code-picking the same two factors at the
+  same level 2 recovers all of the complexity-fit gain and about half the realism/coherence gain, with
+  exact distributions and reliable labels. Leaf-level intent/attribute nodes ("rating_max",
+  "color_code") force odd records; that is a taxonomy-shape issue, fixable by a shallower tree for those
+  factors.
+- **Recommendation:** combined path, batch 5, code-picked (as in the example config). Use A+B when
+  reviewable scenarios matter. Keep `model_picked` for factors that do not need an exact label or
+  distribution (tone, style); do not use it for labelled factors.
+- **Hangs:** default routing occasionally hangs a request. The OpenAI SDK's own retries stacked under
+  ours (one stuck request could hold an attempt for over an hour); the client now runs with
+  `max_retries=0`. Our loop still allows 8 tries x `timeout_seconds`, so watch long runs for stalls and
+  resume.
+
+### What a 10K e-commerce dataset costs now
+
+| | rows | taxonomy (v4-pro, once) | total |
+|---|---|---|---|
+| Today's `main` (13K attempts, `:nitro`) | ≈$38 list / ≈$80 billed | $2.72 list | **≈$41 list / ≈$85 billed** |
+| Recommended (combined, batch 5, critic on, default routing, 10.5K attempts) | ≈$5.8 list / **≈$4.2 billed** | ≈$1.85 list / ≈$4.3 billed | **≈$7.6 list / ≈$8.5 billed** |
+
+Per-record cost is now $0.40 per 1K rows billed (Curator's benchmark run: $0.25/1K on Haiku, different
+task and model) while keeping code-picked lineage and the critic. The taxonomy is now the biggest share
+of a 10K run; cheaper routing for the strategic role is the next untested lever.
+
+### Open
+
+- Item 7 beyond the minimal version: an automatic per-factor code/model decision and a validate warning.
+- Backlog §4: provider batch pricing, retryable infra failures on resume, response cache, sibling-only
+  expansion prompts, sending the strategy call the path list instead of the whole taxonomy.
+- Critic leniency differs by provider; re-check judge numbers on a larger sample before a big run.
 
 ---
 
@@ -349,6 +481,6 @@ batching (B or C).
 
 Other defects the benchmark's code review found (not cost items; verify before fixing): `--no-resume`
 keeps stale `meta_prompts.jsonl`; hand-edited `strategies.json` is never validated; nullable schema types
-(`["string","null"]`) crash config load; `cost_summary.json` is overwritten by every command; OpenAI SDK
-retries stack with ours (up to ~24 HTTP attempts per call); evaluation LLM stages have no per-item
+(`["string","null"]`) crash config load; `cost_summary.json` is overwritten by every command; ~~OpenAI SDK
+retries stack with ours~~ (fixed: `max_retries=0`); evaluation LLM stages have no per-item
 isolation; below-target runs finish silently.
