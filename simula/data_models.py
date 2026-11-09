@@ -182,7 +182,9 @@ class GenerationCfg(_Section):
     Batching: meta_batch_size mixes per scenario call (mode A), record_batch_size records per record call
     (mode B, or mode C when meta_prompts=False: records straight from their sampled mixes, no scenario
     step). model_picked {factor: level} lets the model choose those factors per record on the combined
-    path instead of code sampling them. critic=False accepts every schema-valid record."""
+    path instead of code sampling them. code_level {factor: level} stops code at that level of the
+    factor's tree (exact shares there); the writer chooses the specifics beneath. critic=False accepts every
+    schema-valid record."""
 
     # validate_assignment: the CLI's --stop-after is set after load and must hit the same checks.
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
@@ -195,6 +197,7 @@ class GenerationCfg(_Section):
     meta_batch_size: int = Field(1, gt=0)
     record_batch_size: int = Field(1, gt=0)
     model_picked: dict[str, int] = Field(default_factory=dict)
+    code_level: dict[str, int] = Field(default_factory=dict)
     complexity_ratio: float = Field(0.3, ge=0.0, le=1.0)
     critic: bool = True
     max_refine_attempts: int = Field(2, ge=0)
@@ -223,6 +226,11 @@ class GenerationCfg(_Section):
             raise ValueError("generation.model_picked requires generation.meta_prompts: false (the combined path).")
         if any(level < 1 for level in self.model_picked.values()):
             raise ValueError("generation.model_picked levels must be >= 1 (the tree level whose nodes are offered).")
+        # code_level stops code sampling at a level; a factor cannot be both cut and handed to the model.
+        if any(level < 1 for level in self.code_level.values()):
+            raise ValueError("generation.code_level levels must be >= 1 (the deepest tree level code samples).")
+        if both := sorted(set(self.code_level) & set(self.model_picked)):
+            raise ValueError(f"generation.code_level and generation.model_picked both name {both}; a factor is picked by one or the other.")
         return self
 
 

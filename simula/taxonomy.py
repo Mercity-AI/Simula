@@ -154,43 +154,66 @@ def _warn_uncovered_factors(strategies: list[dict[str, Any]], taxonomy: dict[str
 _MAX_MIX_REDRAWS = 100
 
 
-def sample_mix(taxonomy: dict[str, Any], strategy: dict[str, Any], rng: random.Random) -> list[dict[str, Any]]:
+def sample_mix(
+    taxonomy: dict[str, Any],
+    strategy: dict[str, Any],
+    rng: random.Random,
+    code_level: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
     """Sample one taxonomy leaf per factor under the strategy's roots; one lineage entry per factor.
 
     Every factor always appears in the mix: factors the strategy leaves out (or whose roots match
     nothing) sample their full tree rather than being dropped. The strategy's never_combine path
     pairs are enforced by redrawing the whole mix; a ruleset the roots cannot satisfy raises after a
     bounded number of redraws instead of spinning.
+
+    code_level {factor: level} stops code at that level for those factors: the leaf is still drawn
+    (same rng sequence, and never_combine is checked on it), then replaced by its ancestor at the
+    level, so every node there keeps its exact share and the writer chooses the specifics beneath it.
     """
     roots = strategy.get("taxonomy_roots") or []
     rules = _never_combine_rules(strategy)
+    levels = code_level or {}
     for _ in range(_MAX_MIX_REDRAWS):
-        mix = []
-        for factor in taxonomy["factors"]:
-            node = _strategy_node_for_factor(factor, roots, rng) or _sample_descendant(factor, rng)
-            mix.append({"factor": factor["name"], "node": node["name"], "level": node.get("level", 0), "path": node.get("path", [node["name"]]), "description": node.get("description", "")})
-        if not _mix_violates(mix, rules):
-            return mix
+        nodes = [_strategy_node_for_factor(factor, roots, rng) or _sample_descendant(factor, rng) for factor in taxonomy["factors"]]
+        if not _mix_violates([_mix_entry(factor, node) for factor, node in zip(taxonomy["factors"], nodes)], rules):
+            return [_mix_entry(factor, _at_level(factor, node, levels.get(factor["name"]))) for factor, node in zip(taxonomy["factors"], nodes)]
     raise ValueError(
         f"never_combine rules for strategy {strategy.get('id', '?')!r} still violated after "
         f"{_MAX_MIX_REDRAWS} redraws; loosen the rules or widen the strategy's roots."
     )
 
 
-def mix_space(taxonomy: dict[str, Any], strategy: dict[str, Any]) -> int:
+def _mix_entry(factor: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
+    return {"factor": factor["name"], "node": node["name"], "level": node.get("level", 0), "path": node.get("path", [node["name"]]), "description": node.get("description", "")}
+
+
+def _at_level(factor: dict[str, Any], node: dict[str, Any], level: int | None) -> dict[str, Any]:
+    # The node's ancestor at `level` (the node itself when it is already at or above that level).
+    if level is None or node.get("level", 0) <= level:
+        return node
+    current = factor
+    for name in node["path"][1 : level + 1]:
+        current = next(child for child in current["children"] if child["name"] == name)
+    return current
+
+
+def mix_space(taxonomy: dict[str, Any], strategy: dict[str, Any], code_level: dict[str, int] | None = None) -> int:
     """Upper bound on the distinct mixes a strategy can draw: reachable leaves per factor (under its
-    roots, else the full tree; zero-weight branches excluded), multiplied. never_combine is ignored."""
+    roots, else the full tree; zero-weight branches excluded), multiplied. A factor in code_level counts
+    its nodes at that level instead of its leaves. never_combine is ignored."""
     roots = {_root_key(str(root)) for root in strategy.get("taxonomy_roots") or []}
     total = 1
     for factor in taxonomy["factors"]:
+        stop = (code_level or {}).get(factor["name"])
         matched = [node for node in walk_nodes(factor) if _path_key(node.get("path", [node["name"]])) in roots]
-        total *= sum(_leaf_count(node) for node in matched) or _leaf_count(factor)
+        total *= sum(_leaf_count(node, stop) for node in matched) or _leaf_count(factor, stop)
     return total
 
 
-def _leaf_count(node: dict[str, Any]) -> int:
-    if node.get("children"):
-        return sum(_leaf_count(child) for child in node["children"] if _node_weight(child) > 0)
+def _leaf_count(node: dict[str, Any], stop: int | None = None) -> int:
+    if node.get("children") and (stop is None or node.get("level", 0) < stop):
+        return sum(_leaf_count(child, stop) for child in node["children"] if _node_weight(child) > 0)
     return 1
 
 

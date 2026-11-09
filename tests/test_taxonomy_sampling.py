@@ -150,3 +150,33 @@ def test_level_options_carry_the_weighted_walk_share() -> None:
     assert abs(leaves[0]["share"] - 0.075) < 1e-9 and abs(leaves[-1]["share"] - 0.125) < 1e-9
     with pytest.raises(ValueError, match="unknown factor"):
         level_options(taxonomy, "missing", 1)
+
+
+def test_code_level_stops_at_the_ancestor_with_exact_shares() -> None:
+    from simula.taxonomy import mix_space
+
+    taxonomy = _lopsided_taxonomy()
+    taxonomy["factors"].append(_node("tone", ["tone"], [_node("warm", ["tone", "warm"]), _node("dry", ["tone", "dry"])]))
+    strategy = {"taxonomy_roots": []}
+    full = [sample_mix(taxonomy, strategy, random.Random(seed)) for seed in range(2000)]
+    cut = [sample_mix(taxonomy, strategy, random.Random(seed), {"pov": 1}) for seed in range(2000)]
+    for leaf_mix, cut_mix in zip(full, cut):
+        # The cut entry is the drawn leaf's own level-1 ancestor, and the other factor's draw is unchanged.
+        assert cut_mix[0]["path"] == leaf_mix[0]["path"][:2] and cut_mix[0]["level"] == 1
+        assert cut_mix[0]["node"] in {"big", "small"} and cut_mix[0]["description"] == f"{cut_mix[0]['node']} node"
+        assert cut_mix[1] == leaf_mix[1]
+    big = sum(1 for mix in cut if mix[0]["node"] == "big")
+    assert 0.45 < big / len(cut) < 0.55
+    # A level at or below the leaves changes nothing; the mix space counts nodes at the cut level.
+    assert sample_mix(taxonomy, strategy, random.Random(3), {"pov": 5}) == sample_mix(taxonomy, strategy, random.Random(3))
+    assert mix_space(taxonomy, strategy) == 24 and mix_space(taxonomy, strategy, {"pov": 1}) == 4
+
+
+def test_never_combine_is_checked_on_the_leaf_before_the_cut() -> None:
+    taxonomy = _lopsided_taxonomy()
+    taxonomy["factors"].append(_node("tone", ["tone"], [_node("warm", ["tone", "warm"]), _node("dry", ["tone", "dry"])]))
+    strategy = {"taxonomy_roots": [], "never_combine": [["pov/small/small_leaf_0", "tone/dry"]]}
+    full = [sample_mix(taxonomy, strategy, random.Random(seed)) for seed in range(500)]
+    cut = [sample_mix(taxonomy, strategy, random.Random(seed), {"pov": 1}) for seed in range(500)]
+    assert not any(mix[0]["node"] == "small_leaf_0" and mix[1]["node"] == "dry" for mix in full)
+    assert [mix[1] for mix in cut] == [mix[1] for mix in full]  # same redraws, so the rule held on the leaf

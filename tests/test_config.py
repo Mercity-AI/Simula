@@ -391,3 +391,11 @@ def test_stop_after_meta_prompts_needs_the_meta_prompt_step(tmp_path: Path) -> N
 
     path = _write_config(tmp_path, {"generation": {"meta_prompts": False, "record_batch_size": 2}})
     assert main(["generate", str(path), "--stop-after", "meta_prompts", "--quiet"]) == 1
+
+
+def test_code_level_is_validated(tmp_path: Path) -> None:
+    assert load_config(_write_config(tmp_path, {"generation": {"code_level": {"topic": 1}}})).generation.code_level == {"topic": 1}
+    with pytest.raises(ValueError, match="code_level levels must be"):
+        load_config(_write_config(tmp_path, {"generation": {"code_level": {"topic": 0}}}))
+    with pytest.raises(ValueError, match="picked by one or the other"):
+        load_config(_write_config(tmp_path, {"generation": {"meta_prompts": False, "code_level": {"topic": 1}, "model_picked": {"topic": 1}}}))

@@ -41,7 +41,7 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
     artifact can be edited first. Evaluation stays a separate command.
     """
     taxonomy = await load_or_build_taxonomy(cfg, router)
-    _check_model_picked(cfg, taxonomy)
+    _check_picked_factors(cfg, taxonomy)
     _stop_if_requested(cfg, "taxonomy")
     strategies = await build_strategies(cfg, router, taxonomy)
     _stop_if_requested(cfg, "strategies")
@@ -145,10 +145,13 @@ def _stop_if_requested(cfg: Config, stage: str) -> None:
     raise SystemExit(0)
 
 
-def _check_model_picked(cfg: Config, taxonomy: dict[str, Any]) -> None:
-    # Fail before strategies and generation spend calls: every model-picked factor must exist and offer
-    # options at its level.
+def _check_picked_factors(cfg: Config, taxonomy: dict[str, Any]) -> None:
+    # Fail before strategies and generation spend calls: code_level factors must exist, and every
+    # model-picked factor must exist and offer options at its level.
     names = [factor["name"] for factor in taxonomy.get("factors", [])]
+    for factor in cfg.generation.code_level:
+        if factor not in names:
+            raise ValueError(f"generation.code_level names factor {factor!r}, which is not in the taxonomy (factors: {names}).")
     for factor, level in cfg.generation.model_picked.items():
         if factor not in names:
             raise ValueError(f"generation.model_picked names factor {factor!r}, which is not in the taxonomy (factors: {names}).")
@@ -159,7 +162,7 @@ def _check_model_picked(cfg: Config, taxonomy: dict[str, Any]) -> None:
 def _report_mix_space(cfg: Config, taxonomy: dict[str, Any], strategies: list[dict[str, Any]], attempts: int) -> None:
     # Sampling is independent per mix (with replacement), so a mix space near the number of mixes
     # drawn means repeated combinations; say how big the space is before paying for generation.
-    space = sum(mix_space(taxonomy, strategy) for strategy in strategies)
+    space = sum(mix_space(taxonomy, strategy, cfg.generation.code_level) for strategy in strategies)
     mixes = math.ceil(attempts / cfg.generation.meta_prompts_per_mix)
     info(f"[dim]Mix space: up to {space:,} distinct mixes; this run samples {mixes:,}[/dim]")
     if space < mixes:
@@ -172,7 +175,7 @@ def _sample_lineage(cfg: Config, taxonomy: dict[str, Any], strategies: list[dict
     # lineage; record/critic calls stay rng-free.
     rng = random.Random(cfg.seed + mix_id)
     strategy = choose_strategy(strategies, rng)
-    mix = sample_mix(taxonomy, strategy, rng)
+    mix = sample_mix(taxonomy, strategy, rng, cfg.generation.code_level)
     harder = [rng.random() < cfg.generation.complexity_ratio for _ in range(count)]
     return {"strategy_id": strategy.get("id", "general"), "taxonomy_mix": mix, "harder": harder}
 
@@ -282,6 +285,7 @@ def _run_fingerprint(cfg: Config, taxonomy: dict[str, Any], strategies: list[dic
         "meta_batch_size": generation.meta_batch_size,
         "record_batch_size": generation.record_batch_size,
         "model_picked": generation.model_picked,
+        "code_level": generation.code_level,
         "complexity_ratio": generation.complexity_ratio,
         "critic": generation.critic,
         "max_refine_attempts": generation.max_refine_attempts,

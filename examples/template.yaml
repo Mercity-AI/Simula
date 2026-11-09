@@ -67,6 +67,8 @@ generation:
   meta_batch_size: 1           # mode A: mixes per meta-prompt call
   record_batch_size: 1                # records per record call: mode B (meta prompts on) or C (meta_prompts: false)
   model_picked: {}             # combined path: {factor: level} the model picks per record instead of code
+  code_level: {}               # {factor: level}: code samples that factor only down to this level (exact shares
+                               # there); the writer chooses the specifics beneath. Use where deep leaves clash.
   complexity_ratio: 0.3        # fraction of points made harder (complexify call, or a (harder) flag in a batch)
   critic: true                 # false = accept every schema-valid record without critique
   max_refine_attempts: 2       # refines after critic rejections; each refined record is re-critiqued

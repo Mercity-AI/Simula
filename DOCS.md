@@ -440,6 +440,7 @@ change it (blank sections fall back to defaults). Required fields have no defaul
 | `meta_batch_size`    | Batch mode A: mixes per meta-prompt call.                         | `1`     | yes         | integer > 0 (needs `meta_prompts: true` when > 1) |
 | `record_batch_size`         | Records per record call: mode B with meta prompts, mode C without. | `1`    | yes         | integer > 0 |
 | `model_picked`       | Combined path: `{factor: level}` the model picks per record.      | `{}`    | yes         | mapping of factor name → level ≥ 1 |
+| `code_level`         | `{factor: level}`: code samples the factor down to this level; the writer picks specifics beneath. | `{}`    | yes         | mapping of factor name → level ≥ 1 |
 | `complexity_ratio`   | Fraction of points made harder (complexify call / `(harder)` flag). | `0.3` | yes         | float 0.0–1.0 |
 | `critic`             | Critique records; `false` accepts every schema-valid record.      | `true`  | yes         | bool |
 | `max_refine_attempts`| Refines per record; each refined record is critiqued again (`0` = critique once, no refine).| `2` | yes | integer ≥ 0 |
