@@ -41,6 +41,7 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
     artifact can be edited first. Evaluation stays a separate command.
     """
     taxonomy = await load_or_build_taxonomy(cfg, router)
+    _check_model_picked(cfg, taxonomy)
     _stop_if_requested(cfg, "taxonomy")
     strategies = await build_strategies(cfg, router, taxonomy)
     _stop_if_requested(cfg, "strategies")
@@ -142,6 +143,17 @@ def _stop_if_requested(cfg: Config, stage: str) -> None:
     info("")
     info(f"Stopped after {stage}. Edit the artifacts in {cfg.output_dir}, then rerun to continue.")
     raise SystemExit(0)
+
+
+def _check_model_picked(cfg: Config, taxonomy: dict[str, Any]) -> None:
+    # Fail before strategies and generation spend calls: every model-picked factor must exist and offer
+    # options at its level.
+    names = [factor["name"] for factor in taxonomy.get("factors", [])]
+    for factor, level in cfg.generation.model_picked.items():
+        if factor not in names:
+            raise ValueError(f"generation.model_picked names factor {factor!r}, which is not in the taxonomy (factors: {names}).")
+        if not level_options(taxonomy, factor, level):
+            raise ValueError(f"generation.model_picked: factor {factor!r} has no nodes to offer at level {level}.")
 
 
 def _report_mix_space(cfg: Config, taxonomy: dict[str, Any], strategies: list[dict[str, Any]], attempts: int) -> None:
@@ -391,18 +403,20 @@ async def _combined_batch(
         return rows
     written, missing_reason = await _send_batch(cfg, router, cfg.prompts.combined_batch_prompt(cfg.description, cfg.schema, items, choices))
     for meta_row, spec in zip(metas, items):
-        if spec["id"] in written:
-            _record_plan(meta_row, written[spec["id"]], choices, taxonomy)
+        _record_plan(meta_row, written.get(spec["id"]), choices, taxonomy)
     finished = await asyncio.gather(*(_finish_item(cfg, router, meta_row, written.get(spec["id"]), missing_reason) for meta_row, spec in zip(metas, items)))
     return rows + list(finished)
 
 
-def _record_plan(meta_row: dict[str, Any], item: dict[str, Any], choices: list[dict[str, Any]], taxonomy: dict[str, Any]) -> None:
-    # Combined-path lineage: add the model-picked factors back (one entry per factor, taxonomy order),
-    # then store the model's plan + the ingredients as the row's meta_prompt, which the critic judges against.
+def _record_plan(meta_row: dict[str, Any], item: dict[str, Any] | None, choices: list[dict[str, Any]], taxonomy: dict[str, Any]) -> None:
+    # Combined-path lineage: add the model-picked factors back (one entry per factor, taxonomy order, also
+    # for a record missing from the response), then store the model's plan + the ingredients as the row's
+    # meta_prompt, which the critic judges against.
     if choices:
-        entries = {entry["factor"]: entry for entry in [*meta_row["taxonomy_mix"], *_picked_entries(item, choices)]}
+        entries = {entry["factor"]: entry for entry in [*meta_row["taxonomy_mix"], *_picked_entries(item or {}, choices)]}
         meta_row["taxonomy_mix"] = [entries[factor["name"]] for factor in taxonomy["factors"] if factor["name"] in entries]
+    if item is None:
+        return
     plan = str(item.get("plan") or "").strip()
     meta_row["meta_prompt"] = "\n".join(filter(None, [plan, "Sampled ingredients:", mix_text(meta_row["taxonomy_mix"])]))
 
@@ -415,7 +429,8 @@ def _picked_entries(item: dict[str, Any], choices: list[dict[str, Any]]) -> list
         factor, name = choice["factor"], str(picks.get(choice["factor"], "")).strip()
         option = find_option(choice["options"], name)
         if option is None:
-            option = {"name": name or "unpicked", "level": 0, "path": [factor], "description": "model pick not among the offered options"}
+            description = "model pick not among the offered options" if name else "no model pick (record missing or pick omitted)"
+            option = {"name": name or "unpicked", "level": 0, "path": [factor], "description": description}
         entries.append({"factor": factor, "node": option["name"], "level": option["level"], "path": option["path"],
                         "description": option["description"], "picked_by": "model"})
     return entries

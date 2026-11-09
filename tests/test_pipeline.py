@@ -707,6 +707,16 @@ def test_model_picked_factor_lineage_comes_from_the_model(tmp_path: Path) -> Non
     # An unrecognised pick keeps a valid lineage entry at the factor root.
     unpicked = {entry["factor"]: entry for entry in rows[1]["taxonomy_mix"]}["topic"]
     assert unpicked["path"] == ["topic"] and unpicked["node"] == "nonsense"
+
+    # A record missing from the response still gets one lineage entry per factor.
+    class Short(Stub):
+        async def complete(self, role, prompt, system, task="unknown"):
+            return json.dumps({"records": [{"id": "r1", "plan": "p", "picked": {"topic": "alpha"}, "record": {"input": "q", "output": "a"}}]})
+
+    short = {row["attempt_index"]: row for row in asyncio.run(_combined_batch(cfg, Short(), taxonomy, strategies, [0, 1]))}
+    assert not short[1]["accepted"]
+    assert [entry["factor"] for entry in short[1]["taxonomy_mix"]] == ["topic", "other", "query_domain"]
+    assert short[1]["taxonomy_mix"][0]["node"] == "unpicked"
     assert "- topic: alpha_extra" in rows[0]["meta_prompt"]  # the critic sees the pick as an ingredient
 
 
@@ -727,3 +737,11 @@ def test_table_batch_prompt_describes_each_node_once() -> None:
     assert "r1 | T1 | TO1 | yes" in prompt and "r2 | T2 | TO1 | no" in prompt
     records = json.loads(fake_complete(prompt, 1))["records"]
     assert [record["id"] for record in records] == ["r1", "r2"]
+
+
+def test_unknown_model_picked_factor_fails_before_any_strategy_or_record_call(tmp_path: Path) -> None:
+    cfg = load_config(write_config(tmp_path, _gen({"meta_prompts": False, "record_batch_size": 2, "model_picked": {"topicc": 1}})))
+    router = _Recording(cfg.data)
+    with pytest.raises(ValueError, match="'topicc', which is not in the taxonomy"):
+        asyncio.run(generate_dataset(cfg, router, quiet=True))
+    assert "strategy" not in router.tasks and "generate" not in router.tasks
