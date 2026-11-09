@@ -487,6 +487,32 @@ batching (B or C).
 - Open: the batch-prompt section for model-picked factors; how model-picked values enter `taxonomy_mix`
   (row-shape contract change); how the critic checks them.
 
+**Proposal for a proper algorithm (2026-11-10, design only — needs sign-off before building).** The
+minimal version (§0) showed three failures: the model skews toward typical options and drops rare ones,
+its own labels often don't match what it wrote, and 2–3% of picks match no option. Proposal:
+
+1. **Code fixes the counts, the model fixes the matching ("model-assigned").** For each batch, code
+   samples the model-picked factor's values exactly as it samples code-picked ones (same seeded walk, so
+   the run-wide distribution is exact), but does not attach them to records. The prompt offers the batch's
+   multiset ("use exactly these across the 5 records: 2× gift_browsing, 1× exact_product_search, …") and
+   the model decides which record gets which. The coherence benefit (an option goes to the product it fits)
+   stays; skew and lost rare values become impossible. Batch size ≥ 2 required; at batch size 1 it is just
+   code-picked.
+2. **Deciding code vs model per factor: a deterministic rule, written to a reviewable artifact.** At
+   `stop_after: strategies`, write `factor_roles.json` with one line per factor and the reason. A factor is
+   eligible for model assignment only if, at the offered level, it has at most `record_batch_size` options
+   and is not open-ended content; everything else is code-picked. The user can flip eligible factors in
+   the file (hand edits survive, like strategies.json). No model call: the evidence says the useful signal
+   is "small closed set", which code can count. `validate` warns when a listed factor breaks the rule.
+3. **Invalid picks.** Each returned pick must name one of the batch's offered values, and together the
+   picks must use the multiset exactly. One unmatched pick with exactly one value left over is assigned by
+   elimination; anything else rejects that record (no more "unpicked" lineage). Expected loss today: ~2–3%.
+4. **Labels must match the record.** The critic prompt receives the assigned values as ingredients and
+   rejects (or fixes) a record that does not reflect them. This needs dataset critics that read the
+   meta-prompt ingredients; the e-commerce critic currently ignores them.
+5. **Measure before adopting:** one 500-row pilot arm against code-picked at the same level (CP5 in §0):
+   label agreement (judge), realism/coherence, exactness of the distribution, cost.
+
 ---
 
 ## 4. Backlog (not yet planned in detail)
