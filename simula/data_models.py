@@ -173,7 +173,7 @@ class GenerationCfg(BaseModel):
     overgenerate_ratio: float = Field(1.3, ge=1.0)
     trim: bool = True
     meta_prompts: bool = True
-    scenarios_per_mix: int = Field(1, gt=0)
+    meta_prompts_per_mix: int = Field(1, gt=0)
     meta_batch_size: int = Field(1, gt=0)
     record_batch_size: int = Field(1, gt=0)
     model_picked: dict[str, int] = Field(default_factory=dict)
@@ -193,8 +193,8 @@ class GenerationCfg(BaseModel):
 
     @model_validator(mode="after")
     def _mode_knobs_match(self) -> "GenerationCfg":
-        # scenarios_per_mix and meta_batch_size shape the meta-prompt step, which the combined path skips.
-        for knob in ("scenarios_per_mix", "meta_batch_size"):
+        # meta_prompts_per_mix and meta_batch_size shape the meta-prompt step, which the combined path skips.
+        for knob in ("meta_prompts_per_mix", "meta_batch_size"):
             if not self.meta_prompts and getattr(self, knob) > 1:
                 raise ValueError(f"generation.{knob} > 1 requires generation.meta_prompts: true.")
         # Model-picked factors are offered as options inside the combined batch prompt.

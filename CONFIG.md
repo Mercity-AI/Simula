@@ -149,7 +149,7 @@ Volume and behavior of the generation pass (`simula generate`).
 | `overgenerate_ratio` | `1.3` | `attempts = ceil(target_size × ratio)`. Buffer for rows the critic/schema rejects. `1.0` = no buffer. |
 | `trim` | `true` | Coverage-trim accepted rows to `target_size`. Set false to skip selection and retain all accepted rows after optional dedupe, in their existing order. |
 | `meta_prompts` | `true` | Write a reviewable scenario per attempt first (`meta_prompts.jsonl`, editable via `stop_after: meta_prompts`), then generate the record from it. `false` = the **combined path**: records are written straight from their sampled mixes, `record_batch_size` per call, with no meta-prompt step or artifact. |
-| `scenarios_per_mix` | `1` | Scenarios one meta-prompt call writes for one sampled mix. Every scenario becomes its own attempt sharing that mix (attempts `k·K … k·K+K−1`), so `K>1` means fewer distinct mixes and fewer meta-prompt calls. Requires `meta_prompts: true`. |
+| `meta_prompts_per_mix` | `1` | Scenarios one meta-prompt call writes for one sampled mix. Every scenario becomes its own attempt sharing that mix (attempts `k·K … k·K+K−1`), so `K>1` means fewer distinct mixes and fewer meta-prompt calls. Requires `meta_prompts: true`. |
 | `meta_batch_size` | `1` | **Batch mode A:** mixes per meta-prompt call (each still gets its own scenario(s) and keeps its own lineage). Requires `meta_prompts: true`. |
 | `record_batch_size` | `1` | Records written per record call. With `meta_prompts: true` this is **batch mode B** (records from several scenarios per call; set both batch sizes for A+B); with `meta_prompts: false` it is **mode C**, the combined path. Each record is still validated, repaired and critiqued on its own and keeps its own lineage. Batching amortizes the instruction prompt, not hidden reasoning — see the note below. |
 | `model_picked` | `{}` | Combined path only. `{factor: level}`: instead of code sampling these factors, the batch prompt offers the factor's nodes at that tree level (with the share code sampling would give each) and the model picks one per record, reporting it in `"picked"`. The pick becomes the row's lineage entry for that factor, marked `"picked_by": "model"`; code-picked factors are sampled exactly as before. Strategy roots and `never_combine` do not apply to model-picked factors. |
@@ -162,7 +162,7 @@ Volume and behavior of the generation pass (`simula generate`).
 
 **Resume note:** `target_size`, `overgenerate_ratio`, `trim`, `concurrency`, and `checkpoint_every` are
 excluded from the resume fingerprint, so you can grow or re-pace a run and still `--resume`. Changing
-`meta_prompts`, `scenarios_per_mix`, `meta_batch_size`, `record_batch_size`, `model_picked`, `complexity_ratio`, `critic`, `max_refine_attempts` (or the
+`meta_prompts`, `meta_prompts_per_mix`, `meta_batch_size`, `record_batch_size`, `model_picked`, `complexity_ratio`, `critic`, `max_refine_attempts` (or the
 description/schema/seed/models/prompts/sampling/taxonomy) invalidates resume and requires `--no-resume`.
 
 **Cost note (measured on DeepSeek v4 flash, reasoning effort low):** hidden reasoning is most of the

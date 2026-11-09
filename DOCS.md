@@ -317,7 +317,7 @@ taxonomy:
 generation:
   target_size: 5                   # rows wanted in dataset.final.jsonl
   overgenerate_ratio: 1.4          # attempts = ceil(5 * 1.4) = 7 (buffer for rejections)
-  scenarios_per_mix: 2             # one meta-prompt call writes 2 scenarios per mix; BOTH become attempts
+  meta_prompts_per_mix: 2             # one meta-prompt call writes 2 scenarios per mix; BOTH become attempts
   complexity_ratio: 0.2            # ~20% of points routed through the complexify step
   max_refine_attempts: 1           # at most one refine, which is then critiqued again
   concurrency: 1                   # in-flight model calls
@@ -435,7 +435,7 @@ change it (blank sections fall back to defaults). Required fields have no defaul
 | `target_size`        | Rows wanted in `dataset.final.jsonl`.                             | `50`    | yes         | integer > 0 |
 | `overgenerate_ratio` | `attempts = ceil(target_size * ratio)`; buffer for rejections.    | `1.3`   | yes         | float ≥ 1.0 |
 | `meta_prompts`       | Write a reviewable scenario per attempt first; `false` = combined path. | `true` | yes      | bool |
-| `scenarios_per_mix`  | Scenarios per meta-prompt call; **each becomes an attempt** sharing the mix. | `1` | yes      | integer > 0 (needs `meta_prompts: true` when > 1) |
+| `meta_prompts_per_mix`  | Scenarios per meta-prompt call; **each becomes an attempt** sharing the mix. | `1` | yes      | integer > 0 (needs `meta_prompts: true` when > 1) |
 | `meta_batch_size`    | Batch mode A: mixes per meta-prompt call.                         | `1`     | yes         | integer > 0 (needs `meta_prompts: true` when > 1) |
 | `record_batch_size`         | Records per record call: mode B with meta prompts, mode C without. | `1`    | yes         | integer > 0 |
 | `model_picked`       | Combined path: `{factor: level}` the model picks per record.      | `{}`    | yes         | mapping of factor name → level ≥ 1 |
@@ -494,7 +494,7 @@ The number of rows is driven by the **attempt count**:
 attempts = ceil(target_size * overgenerate_ratio)   # one record per attempt
 ```
 
-`scenarios_per_mix` (default `1`) does not change that count; it changes how many distinct mixes are
+`meta_prompts_per_mix` (default `1`) does not change that count; it changes how many distinct mixes are
 drawn. One meta-prompt call writes K scenarios for one sampled point and **every one becomes its own
 attempt**, so K=3 means a third as many mixes and meta-prompt calls, three records per mix.
 

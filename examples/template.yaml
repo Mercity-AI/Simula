@@ -62,7 +62,7 @@ generation:
   overgenerate_ratio: 1.3      # attempts = ceil(target_size * this); buffer for rejected rows
   trim: true                 # false keeps all accepted rows after optional dedupe, even above target
   meta_prompts: true           # false = combined path: records straight from mixes, record_batch_size per call
-  scenarios_per_mix: 1         # scenarios per meta-prompt call; each becomes an attempt sharing the mix
+  meta_prompts_per_mix: 1         # scenarios per meta-prompt call; each becomes an attempt sharing the mix
   meta_batch_size: 1           # mode A: mixes per meta-prompt call
   record_batch_size: 1                # records per record call: mode B (meta prompts on) or C (meta_prompts: false)
   model_picked: {}             # combined path: {factor: level} the model picks per record instead of code

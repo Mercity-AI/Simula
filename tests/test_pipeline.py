@@ -28,7 +28,7 @@ def write_config(tmp_path: Path, extra: dict | None = None) -> Path:
             "critic": {"model": "fake"},
         },
         "taxonomy": {"depth": 1, "best_of_n": 1, "review_mode": "auto_accept", "children_per_node": 2},
-        "generation": {"target_size": 5, "overgenerate_ratio": 1.2, "complexity_ratio": 0, "scenarios_per_mix": 2},
+        "generation": {"target_size": 5, "overgenerate_ratio": 1.2, "complexity_ratio": 0, "meta_prompts_per_mix": 2},
     }
     if extra:
         data.update(extra)
@@ -276,7 +276,7 @@ def test_generation_concurrency_is_bounded(tmp_path: Path) -> None:
     cfg = load_config(
         write_config(
             tmp_path,
-            {"generation": {"target_size": 8, "overgenerate_ratio": 1.0, "complexity_ratio": 0, "scenarios_per_mix": 2, "concurrency": 2}},
+            {"generation": {"target_size": 8, "overgenerate_ratio": 1.0, "complexity_ratio": 0, "meta_prompts_per_mix": 2, "concurrency": 2}},
         )
     )
     router = TrackingRouter(cfg.data)
@@ -522,7 +522,7 @@ def test_critic_off_accepts_valid_records_without_critic_calls(tmp_path: Path) -
 
 
 def test_every_scenario_of_a_mix_becomes_an_attempt(tmp_path: Path) -> None:
-    cfg = load_config(write_config(tmp_path, _gen({"scenarios_per_mix": 2})))
+    cfg = load_config(write_config(tmp_path, _gen({"meta_prompts_per_mix": 2})))
     router = _Recording(cfg.data)
     asyncio.run(generate_dataset(cfg, router, quiet=True))
     meta = {row["attempt_index"]: row for row in read_jsonl(artifact_path(cfg.output_dir, "meta_prompts"))}

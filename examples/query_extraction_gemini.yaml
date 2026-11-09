@@ -112,7 +112,7 @@ taxonomy:
 generation:
   target_size: 500
   overgenerate_ratio: 1.05
-  scenarios_per_mix: 3
+  meta_prompts_per_mix: 3
   complexity_ratio: 0.35
   max_refine_attempts: 1
   concurrency: 8

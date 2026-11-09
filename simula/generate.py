@@ -148,7 +148,7 @@ def _report_mix_space(cfg: Config, taxonomy: dict[str, Any], strategies: list[di
     # Sampling is independent per mix (with replacement), so a mix space near the number of mixes
     # drawn means repeated combinations; say how big the space is before paying for generation.
     space = sum(mix_space(taxonomy, strategy) for strategy in strategies)
-    mixes = math.ceil(attempts / cfg.generation.scenarios_per_mix)
+    mixes = math.ceil(attempts / cfg.generation.meta_prompts_per_mix)
     info(f"[dim]Mix space: up to {space:,} distinct mixes; this run samples {mixes:,}[/dim]")
     if space < mixes:
         warn(f"only {space:,} distinct mixes for {mixes:,} samples, so mixes will repeat; widen or deepen the taxonomy for more variety.")
@@ -176,7 +176,7 @@ async def _build_meta_prompts(
 ) -> dict[int, dict[str, Any]]:
     """Produce one meta-prompt row per attempt index and persist them to meta_prompts.jsonl.
 
-    One call writes scenarios_per_mix (K) distinct scenarios for one sampled mix, and every scenario
+    One call writes meta_prompts_per_mix (K) distinct scenarios for one sampled mix, and every scenario
     becomes its own attempt: attempts mix_id*K .. mix_id*K+K-1 share that mix's lineage. Reuse-if-present
     like taxonomy/strategies: existing indexes are kept (so hand edits survive a rerun), only missing
     ones are generated; delete lines or the file to regenerate. A failed model call is stored with an
@@ -190,7 +190,7 @@ async def _build_meta_prompts(
         return rows
 
     phase(f"Generating {len(missing)} meta prompts")
-    k = cfg.generation.scenarios_per_mix
+    k = cfg.generation.meta_prompts_per_mix
     limiter = asyncio.Semaphore(cfg.generation.concurrency)
 
     async def _mix_group(mix_ids: list[int]) -> list[dict[str, Any]]:
@@ -258,7 +258,7 @@ def _run_fingerprint(cfg: Config, taxonomy: dict[str, Any], strategies: list[dic
         "seed": cfg.seed,
         "models": {role: cfg.data["models"][role]["model"] for role in ("strategic", "bulk", "critic")},
         "meta_prompts": generation.meta_prompts,
-        "scenarios_per_mix": generation.scenarios_per_mix,
+        "meta_prompts_per_mix": generation.meta_prompts_per_mix,
         "meta_batch_size": generation.meta_batch_size,
         "record_batch_size": generation.record_batch_size,
         "model_picked": generation.model_picked,

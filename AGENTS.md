@@ -174,7 +174,7 @@ When modifying this code, test that `taxonomy_mix` contains one lineage entry pe
 2. Loads or builds strategies.
 3. Loads or builds meta prompts (`meta_prompts.jsonl`: one row per attempt index carrying the
    sampled strategy/mix lineage, the meta prompt, and the complexify flag; missing indexes are
-   generated, existing ones reused so hand edits survive). One call writes `scenarios_per_mix` (K)
+   generated, existing ones reused so hand edits survive). One call writes `meta_prompts_per_mix` (K)
    scenarios for one mix and every one becomes an attempt (attempts `k·K…k·K+K−1` share the mix).
    Skipped entirely with `generation.meta_prompts: false` (the combined path).
 4. Schedules generation attempts, `record_batch_size` records per call: from their scenarios

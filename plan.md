@@ -23,7 +23,7 @@ update `CONFIG.md`/`template.yaml`/README when config changes, no real model cal
 | 9 Per-task reasoning effort | **dropped** | User decision: reasoning stays on at the run's normal effort. Also measured: DeepSeek treats `minimal` as `low` and ignores `reasoning.max_tokens`. |
 | 10 Critic fixes | done (3 of 4) | Off-by-one fixed (every refine is re-critiqued); `generation.critic: false`; a rejecting critic may return `"revised"` and a schema-valid fix is accepted directly (built-in JSON critic + e-commerce critic do this). **Mechanical-check hook not built:** 70% of baseline critic rejections are semantic hallucinations, ~15% mechanical. |
 | 11 Small fixes | done | `/` replaced in node names; dotted names inside slash paths round-trip; blank and non-string scenarios dropped (the 10K run had 4 dict-valued `meta_prompt`s). |
-| 3 Keep every scenario | done | `scenarios_per_mix` default 1; K>1 = K attempts share one mix. Built-in and e-commerce meta prompts now describe the record instead of writing it. |
+| 3 Keep every scenario | done | `meta_prompts_per_mix` default 1; K>1 = K attempts share one mix. Built-in and e-commerce meta prompts now describe the record instead of writing it. |
 | 4 Mix-space report | done | Printed before generation; warns when the space is smaller than the mixes drawn. |
 | 6 Batching | done (A, B, C) | Two knobs instead of a mode list: `meta_batch_size` (A: mixes per scenario call) and `record_batch_size` (records per record call: B with meta prompts on, C = the combined path with `meta_prompts: false`); A+B = both. Malformed batch JSON is salvaged item by item. Concurrency bounds whole units (`concurrency // record_batch_size`) so critiques never queue behind other batches. Results in round 3 below. |
 | 7 Code- vs model-picked factors | built (minimal), not recommended | `generation.model_picked: {factor: level}` on the combined path: those factors are offered as options (with the share code sampling would give each) and the model's pick becomes lineage (`"picked_by": "model"`). No automatic per-factor decision step. Round 3: the model skews the distribution and mislabels its own picks; most of the readability gain comes from coarser specs, which code-picking at the same level gets too. |
@@ -141,9 +141,11 @@ of a 10K run; cheaper routing for the strategic role is the next untested lever.
 - **Terminology: "scenario" vs "meta-prompt" (user note, 2026-11-10).** Both words name the same thing
   (the short brief a model writes from a mix, telling the generator what record to make), and using
   both is confusing. Pick one and use it everywhere: config keys (`meta_prompts`, `meta_batch_size`,
-  `scenarios_per_mix`), the artifact (`meta_prompts.jsonl`), the row field (`meta_prompt`), prompt
+  `meta_prompts_per_mix`), the artifact (`meta_prompts.jsonl`), the row field (`meta_prompt`), prompt
   function names (`meta_prompt_prompt`, `meta_prompt_batch_prompt`), task names (`meta_prompt`), and
   all docs. Renaming touches the row-shape/artifact contract, so it needs a deliberate decision first.
+  Done so far: `scenarios_per_mix` renamed to `meta_prompts_per_mix` (leaning to "meta-prompt"); "scenario"
+  still appears in docs, code comments and prompt wording.
 
 ---
 
@@ -359,12 +361,12 @@ and one cheap model. Real calls cost money — get the user's go-ahead first.
 
 #### 3. Never throw scenarios away
 
-- **Why:** one `meta_prompt` call writes `scenarios_per_mix` (default 3) scenarios for one mix in one
+- **Why:** one `meta_prompt` call writes `meta_prompts_per_mix` (default 3) scenarios for one mix in one
   response and keeps one at random — paying for and discarding two. The Simula paper (arXiv 2603.29791)
   does this to avoid mode collapse when *one mix is reused for several records* ("generate multiple
   simultaneously, then sub-sample the required fraction"); we sample a fresh mix per attempt, so that
   reason doesn't apply. The discarded drafts also invite drift away from the mix (see lineage problem).
-- **Change:** keep every scenario. `scenarios_per_mix: K` = one call writes K scenarios for one mix and
+- **Change:** keep every scenario. `meta_prompts_per_mix: K` = one call writes K scenarios for one mix and
   all K become attempts sharing that mix. Default `1`. Prompt asks for genuinely distinct scenarios.
 - **Work through:** mixes sampled = ceil(attempts / K); one meta row per attempt with shared lineage;
   per-mix RNG; resume/fingerprint; trim/coverage with shared mixes. Applies to today's path and batch
