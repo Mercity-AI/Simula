@@ -43,7 +43,7 @@ models:
 taxonomy:
   depth: 2                      # levels below each factor root (0 = factors only)
   factors: null                # null = let the model discover 3-6 factors; or list {name, description}
-  best_of_n: 2                  # candidate child lists per node before the critic refines
+  best_of_n: 1                  # child lists drafted per node; a critic call then refines them (n+1 calls)
   # auto_accept = write & proceed | write_then_edit = write & halt for hand-editing | interactive_confirm = prompt
   review_mode: "auto_accept"
   children_per_node: 4          # target children requested per node when expanding
@@ -61,9 +61,14 @@ generation:
   target_size: 50              # rows wanted in dataset.final.jsonl (accepted rows trimmed back to this)
   overgenerate_ratio: 1.3      # attempts = ceil(target_size * this); buffer for rejected rows
   trim: true                 # false keeps all accepted rows after optional dedupe, even above target
-  scenarios_per_mix: 3         # candidate meta-prompts drafted per sampled mix; each attempt picks one
-  complexity_ratio: 0.3        # fraction of points routed through the complexify step
-  max_refine_attempts: 2       # critic->refine retries per record (0 = critique once, never refine)
+  meta_prompts: true           # false = combined path: records straight from mixes, record_batch_size per call
+  scenarios_per_mix: 1         # scenarios per meta-prompt call; each becomes an attempt sharing the mix
+  meta_batch_size: 1           # mode A: mixes per meta-prompt call
+  record_batch_size: 1                # records per record call: mode B (meta prompts on) or C (meta_prompts: false)
+  model_picked: {}             # combined path: {factor: level} the model picks per record instead of code
+  complexity_ratio: 0.3        # fraction of points made harder (complexify call, or a (harder) flag in a batch)
+  critic: true                 # false = accept every schema-valid record without critique
+  max_refine_attempts: 2       # refines after critic rejections; each refined record is re-critiqued
   concurrency: 4               # in-flight model calls; lower this if the provider rate-limits
   checkpoint_every: 50         # write run_state.json every N completed attempts
   # Halt generate/run once this stage's artifact is written, to inspect/edit it before rerunning:

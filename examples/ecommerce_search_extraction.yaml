@@ -38,6 +38,9 @@ prompts:
 # excluded EXPLICITLY per role (effort low, exclude true) — clean JSON, cheaper, faster. There is no
 # automatic model-id detection in this build, so the extra_body must be set on every role. max_tokens
 # is generous so the hidden reasoning fits alongside the JSON without truncating a verdict/record.
+# Routing: plain model ids use OpenRouter's default (price-aware) routing. Measured 2026-11-08 it billed
+# below list for flash, while the ":nitro" suffix (fastest provider) billed ~2.1x list and reasoned ~2x
+# more per call: ~5x the cost for the same config, in exchange for speed.
 provider:
   base_url: "https://openrouter.ai/api/v1"
   api_key_env: "OPENROUTER_API_KEY"
@@ -50,21 +53,23 @@ models:
     temperature: 0.5
     max_tokens: 16384
     extra_body: {reasoning: {effort: low, exclude: true}}
-  # Bulk generation: the cheaper/faster flash model writes meta-prompts + queries + extractions.
+  # Bulk generation: the cheaper flash model writes the queries + extractions, 5 per call (a batch
+  # reasons ~5-10K tokens before answering, so max_tokens leaves room for it).
   bulk:
-    model: "deepseek/deepseek-v4-flash:nitro"
+    model: "deepseek/deepseek-v4-flash"
     temperature: 0.75
-    max_tokens: 16384
+    max_tokens: 65536
     extra_body: {reasoning: {effort: low, exclude: true}}
   # Critic: same flash model, low temperature for consistent, strict accept/reject verdicts.
   critic:
-    model: "deepseek/deepseek-v4-flash:nitro"
+    model: "deepseek/deepseek-v4-flash"
     temperature: 0.1
     max_tokens: 16384
     extra_body: {reasoning: {effort: low, exclude: true}}
 
-# 4-node-deep taxonomy. children_per_node=3 keeps it rich (~81 leaves/factor) without the depth-4
-# blowup of the default 4 (~256 leaves/factor) and its concurrency bursts. Built once on pro, reused.
+# 4-node-deep taxonomy. children_per_node=3 is a request: the critic refine fills in what a node's
+# description implies (product_vertical gets all 21 listed verticals). One proposal + the critic = 2 calls
+# per expanded node (~$1.85 at list for this tree). Built once on pro, reused.
 taxonomy:
   depth: 4
   factors:
@@ -76,7 +81,7 @@ taxonomy:
       description: "Which families of atomic attributes dominate the query and extraction: sizing & fit, color/pattern/appearance, material & composition, brand & seller preferences (including exclusions), price/budget/discount, ratings/reviews/social proof, technical specifications, condition & newness, shipping/delivery/availability, compatibility, and certifications/eco/dietary."
     - name: "query_complexity"
       description: "The linguistic shape and constraint count of the query, which sets the extraction size: terse keyword strings with 3-5 constraints (small JSON), normal sentences with 6-11 constraints (medium JSON), and chatty multi-sentence requests with 12-20 constraints (large JSON). Also covers negation/exclusion, ambiguity, comparative phrasing, and colloquial/typo-laden text."
-  best_of_n: 2
+  best_of_n: 1
   review_mode: "auto_accept"
   children_per_node: 3
 
@@ -90,17 +95,21 @@ strategy:
     Include a healthy fraction of queries with exclusions/negation and occasional ambiguity. Avoid
     unrealistic attribute combinations for a given vertical.
 
-# Smoke values. After the smoke is reviewed and approved, bump target_size to 10000, raise
-# concurrency (~24) and lower overgenerate_ratio (~1.3), then re-run `generate` in the SAME output_dir
-# (taxonomy + strategies + smoke rows are reused via resume). The fingerprinted knobs below
-# (scenarios_per_mix, complexity_ratio, max_refine_attempts) MUST stay constant across that bump.
+# Combined path: records are written straight from their sampled mixes, 5 per call, then validated and
+# critiqued one by one (the critic returns fixes, so ~99% of attempts are accepted; hence the small
+# overgenerate buffer). Piloted 2026-11-08 at ~$0.40 per 1K rows billed; batch 10 is ~15% cheaper but
+# drifts further from the sampled query shape (see plan.md §0). To grow a run, raise target_size and
+# re-run `generate` in the SAME output_dir (resume); the fingerprinted knobs (meta_prompts, record_batch_size,
+# complexity_ratio, critic, max_refine_attempts) must stay constant. concurrency counts model calls:
+# 80 = 16 batches in flight (default routing is slower per call than :nitro).
 generation:
   target_size: 10000
-  overgenerate_ratio: 1.3
-  scenarios_per_mix: 3
+  overgenerate_ratio: 1.05
+  meta_prompts: false
+  record_batch_size: 5
   complexity_ratio: 0.3
   max_refine_attempts: 1
-  concurrency: 48
+  concurrency: 80
   checkpoint_every: 50
 
 evaluation:
