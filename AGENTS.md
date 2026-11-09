@@ -148,8 +148,10 @@ Taxonomy generation is breadth-first. For each factor:
 
 1. Expand current-level nodes concurrently (bounded by `generation.concurrency`).
 2. Use `best_of_n` raw proposals (default 1, requested in parallel).
-3. Refine children with a critic-style model call (always, even for one proposal: it adds children the
-   node's description implies and removes duplicates).
+3. Refine children with a critic-style model call (`taxonomy.critic`, default on, even for one proposal:
+   it adds children the node's description implies and removes duplicates). `critic: false` (only with
+   `best_of_n: 1`) skips it: 1 call per node, but measured to keep 3 of 21 described verticals and to
+   raise repeated node names from 4% to 21%.
 4. Generate a next-level plan when more depth remains.
 
 Node names never contain `/` (the strategy path separator; `_child` replaces it). Strategy paths split

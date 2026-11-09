@@ -44,6 +44,7 @@ taxonomy:
   depth: 2                      # levels below each factor root (0 = factors only)
   factors: null                # null = let the model discover 3-6 factors; or list {name, description}
   best_of_n: 1                  # child lists drafted per node; a critic call then refines them (n+1 calls)
+  critic: true                  # false = no refine call (1 call/node), but a coarser tree with more duplicates
   # auto_accept = write & proceed | write_then_edit = write & halt for hand-editing | interactive_confirm = prompt
   review_mode: "auto_accept"
   children_per_node: 4          # target children requested per node when expanding

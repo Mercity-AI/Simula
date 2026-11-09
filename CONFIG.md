@@ -88,7 +88,8 @@ Knobs for the breadth-first taxonomy build (`simula taxonomy`).
 |---|---|---|
 | `depth` | `2` | Levels expanded below each factor root. `0` = factors only, no children. More depth = more structure, more model calls. |
 | `factors` | `null` | `null` lets the model discover 3–6 factors. Or provide a list of `{name, description}` to fix them yourself. |
-| `best_of_n` | `1` | Candidate child-lists drafted per node (in parallel). A critic call then refines them for completeness and low duplication, so each expanded node costs `best_of_n + 1` calls. `2` adds variety at 1.5× the cost of `1`. `children_per_node` is a request, not a cap: the critic may add children the node's description implies. |
+| `best_of_n` | `1` | Candidate child-lists drafted per node (in parallel). A critic call then refines them (when `critic` is on) for completeness and low duplication, so each expanded node costs `best_of_n + 1` calls. `2` adds variety at 1.5× the cost of `1`. `children_per_node` is a request, not a cap: the critic may add children the node's description implies. |
+| `critic` | `true` | Refine each node's proposals with a critic call. `false` uses the single proposal as is: 1 call per expanded node instead of 2, but measured on the e-commerce tree it kept 3 of the 21 verticals the factor description lists and repeated node names rose from 4% to 21%, because the critic is what adds the children a node's description implies and drops duplicates. Requires `best_of_n: 1`. |
 | `children_per_node` | `4` | Target number of children requested when expanding each node (passed to the expand prompt). |
 | `review_mode` | `"auto_accept"` | Gate after the taxonomy is built — see below. |
 | `log_style` | `"light"` | How the build is surfaced live — see below. |

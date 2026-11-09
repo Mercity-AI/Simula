@@ -98,7 +98,8 @@ class TaxonomyCfg(_Section):
 
     depth: int = Field(2, ge=0)
     factors: list[dict[str, Any]] | None = None
-    best_of_n: int = Field(1, gt=0)  # proposals per node; a critic call always refines them (best_of_n + 1 calls)
+    best_of_n: int = Field(1, gt=0)  # proposals per node, then one critic refine call when critic is on
+    critic: bool = True  # False: use the single proposal as is (1 call per node; coarser, more duplicates)
     review_mode: str = "auto_accept"
     children_per_node: int = Field(4, gt=0)
     log_style: str = "light"  # how the build is surfaced: flat per-node breadcrumbs, or a live tree
@@ -116,6 +117,13 @@ class TaxonomyCfg(_Section):
         if value not in {"tree", "light"}:
             raise ValueError("taxonomy.log_style must be tree or light.")
         return value
+
+    @model_validator(mode="after")
+    def _critic_merges_proposals(self) -> "TaxonomyCfg":
+        # Several proposals need the critic to merge them into one child list.
+        if not self.critic and self.best_of_n > 1:
+            raise ValueError("taxonomy.critic: false requires taxonomy.best_of_n: 1 (several proposals need the critic to merge them).")
+        return self
 
 
 class DiversityCfg(_Section):

@@ -14,8 +14,8 @@ from .utils import artifact_path, read_json, write_json
 async def build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, Any]:
     """Breadth-first expand each factor into a depth-bounded taxonomy tree, then write + review it.
 
-    Per level: expand every node concurrently (best_of_n proposals, merged by a critic call when there
-    are several), then ask for one global plan that guides the next level. The review step may halt
+    Per level: expand every node concurrently (best_of_n proposals, then a critic refine call unless
+    taxonomy.critic is off), then ask for one global plan that guides the next level. The review step may halt
     the run so the user can edit.
     """
     depth = cfg.taxonomy.depth
@@ -277,18 +277,21 @@ async def _expand_one_node(
         async with limiter:
             return await router.complete_json("strategic", prompt, system=cfg.prompts.SYSTEM_JSON, task=task)
 
-    # Best-of-N candidate child lists, requested concurrently, then one critic call that refines them
-    # for completeness and low duplication. The critic is not just a merge: even with a single proposal
-    # it fills in children the node's description implies and drops duplicates (measured: without it a
-    # depth-4 tree kept 3 of 21 described verticals and 5x the repeated names). Malformed output (~6% of
-    # expansions on DeepSeek v4 pro) gets one retry; a second failure prunes only this branch.
+    # Best-of-N candidate child lists, requested concurrently, then (taxonomy.critic, default on) one
+    # critic call that refines them for completeness and low duplication. The critic is not just a merge:
+    # even with a single proposal it fills in children the node's description implies and drops
+    # duplicates (measured: without it a depth-4 tree kept 3 of 21 described verticals and 5x the repeated
+    # names). critic: false (only with best_of_n 1) uses the proposal as is, 1 call per node. Malformed
+    # output (~6% of expansions on DeepSeek v4 pro) gets one retry; a second failure prunes only this branch.
     expand = cfg.prompts.expand_prompt(cfg.description, factor, node, siblings, plan, cfg.taxonomy.children_per_node)
     for attempt in range(2):
         try:
             proposals = await asyncio.gather(*(ask(expand, TaskType.NODE_EXPANSION) for _ in range(cfg.taxonomy.best_of_n)))
-            raw_children = [child for response in proposals for child in response.get("children", [])]
-            refined = await ask(cfg.prompts.refine_nodes_prompt(cfg.description, node, raw_children), TaskType.TAXONOMY_CRITIC)
-            return [_child(child, level, node.get("path", [node["name"]])) for child in refined.get("children", [])]
+            children = [child for response in proposals for child in response.get("children", [])]
+            if cfg.taxonomy.critic:
+                refined = await ask(cfg.prompts.refine_nodes_prompt(cfg.description, node, children), TaskType.TAXONOMY_CRITIC)
+                children = refined.get("children", [])
+            return [_child(child, level, node.get("path", [node["name"]])) for child in children]
         except Exception as exc:  # noqa: BLE001 - malformed provider output should only prune one branch.
             if attempt:
                 warn(f"node expansion failed for {node.get('name')}: {exc}")

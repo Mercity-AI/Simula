@@ -375,3 +375,9 @@ def test_unknown_or_renamed_keys_are_errors(tmp_path: Path) -> None:
     # Role-level decoding params stay open (they pass through to the provider).
     models = {**_fake_models(), "bulk": {"model": "fake", "min_p": 0.05}}
     assert load_config(_write_config(tmp_path, {"models": models})).models.bulk.model == "fake"
+
+
+def test_taxonomy_critic_off_needs_a_single_proposal(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="taxonomy.critic: false requires"):
+        load_config(_write_config(tmp_path, {"taxonomy": {"critic": False, "best_of_n": 2}}))
+    assert load_config(_write_config(tmp_path, {"taxonomy": {"critic": False}})).taxonomy.critic is False

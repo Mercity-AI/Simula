@@ -472,9 +472,9 @@ def _gen(extra: dict) -> dict:
     return {"generation": {"target_size": 4, "overgenerate_ratio": 1.0, "complexity_ratio": 0, **extra}}
 
 
-@pytest.mark.parametrize("best_of_n, expansions, critics", [(1, 2, 2), (2, 4, 2)])
-def test_taxonomy_proposals_then_one_critic_refine_per_node(tmp_path: Path, best_of_n, expansions, critics) -> None:
-    taxonomy = {"depth": 1, "best_of_n": best_of_n, "review_mode": "auto_accept", "children_per_node": 2}
+@pytest.mark.parametrize("best_of_n, critic, expansions, critics", [(1, True, 2, 2), (2, True, 4, 2), (1, False, 2, 0)])
+def test_taxonomy_proposals_then_one_critic_refine_per_node(tmp_path: Path, best_of_n, critic, expansions, critics) -> None:
+    taxonomy = {"depth": 1, "best_of_n": best_of_n, "critic": critic, "review_mode": "auto_accept", "children_per_node": 2}
     cfg = load_config(write_config(tmp_path, {"taxonomy": taxonomy}))
     router = _Recording(cfg.data)
     built = asyncio.run(build_taxonomy(cfg, router))
