@@ -138,6 +138,12 @@ of a 10K run; cheaper routing for the strategic role is the next untested lever.
 - Backlog §4: provider batch pricing, retryable infra failures on resume, response cache, sibling-only
   expansion prompts, sending the strategy call the path list instead of the whole taxonomy.
 - Critic leniency differs by provider; re-check judge numbers on a larger sample before a big run.
+- **Terminology: "scenario" vs "meta-prompt" (user note, 2026-11-10).** Both words name the same thing
+  (the short brief a model writes from a mix, telling the generator what record to make), and using
+  both is confusing. Pick one and use it everywhere: config keys (`meta_prompts`, `meta_batch_size`,
+  `scenarios_per_mix`), the artifact (`meta_prompts.jsonl`), the row field (`meta_prompt`), prompt
+  function names (`meta_prompt_prompt`, `meta_prompt_batch_prompt`), task names (`meta_prompt`), and
+  all docs. Renaming touches the row-shape/artifact contract, so it needs a deliberate decision first.
 
 ---
 
