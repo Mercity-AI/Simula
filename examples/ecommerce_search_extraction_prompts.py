@@ -136,6 +136,25 @@ Return JSON:
 """.strip()
 
 
+def complexify_record_prompt(description: str, schema: dict[str, Any] | None, meta_prompt: str, record: Any) -> str:
+    # Combined path: complexify rewrites the finished example. Same meaning of "harder" as above
+    # (harder to parse, not bigger), and the extraction must be rebuilt to match the rewritten query.
+    return f"""
+Dataset description:
+{description}
+
+Example (query + extraction):
+{json.dumps(record, ensure_ascii=False)}
+
+Rewrite the query so it is harder to parse correctly while keeping the same product, intent, phrasing
+style and number of constraints. {_HARDER_RULE}
+Then rebuild the extraction from the rewritten query: every field must be stated or clearly implied by
+the new query, no stated constraint may be dropped, and every field stays atomic (split ranges into
+min/max, put exclusions in *_excluded fields).
+Return ONLY the JSON object with keys "query" and "extraction".
+""".strip()
+
+
 # The record contract shared by the one-record and the batch generate prompts.
 _RECORD_RULES = f"""
 Each example is a JSON object with EXACTLY these two top-level keys:
@@ -244,7 +263,7 @@ def combined_batch_prompt(description: str, schema: dict[str, Any] | None, items
     # Batch mode C, the combined path: several examples per call straight from their sampled mixes, so
     # the planning rules of meta_prompt_prompt live here too. Static text first (cacheable prefix).
     # choices = model-picked factors (generation.model_picked): offered as options, reported in "picked".
-    specs = "\n\n".join(f"{item['id']}{' (harder)' if item['harder'] else ''}:\n{mix_text(item['mix'])}" for item in items)
+    specs = "\n\n".join(f"{item['id']}:\n{mix_text(item['mix'])}" for item in items)
     picked = ""
     if choices:
         picked = (
@@ -268,7 +287,6 @@ Planning each example from its spec (the sampled taxonomy nodes):{picked}
 {_SIZE_RULE.replace("- set the", "- Set the", 1)}
 - Phrasing style follows query_complexity too: terse keyword string, a normal sentence, or a chatty
   multi-sentence request.
-- A spec marked (harder) must be harder to parse. {_HARDER_RULE}
 - First write a one-sentence "plan": the product, the buying context, the phrasing style and the target
   field count. Then write the example so it matches the plan.
 

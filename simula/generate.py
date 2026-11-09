@@ -171,7 +171,7 @@ def _report_mix_space(cfg: Config, taxonomy: dict[str, Any], strategies: list[di
 
 def _sample_lineage(cfg: Config, taxonomy: dict[str, Any], strategies: list[dict[str, Any]], mix_id: int, count: int) -> dict[str, Any]:
     # All generation randomness lives here: the strategy pick, the mix, then one complexify coin per
-    # attempt sharing the mix. Seeded per mix (seed + mix_id), so reruns and resumes redraw identical
+    # attempt sharing the mix (spent on the meta-prompt, or on the record on the combined path). Seeded per mix (seed + mix_id), so reruns and resumes redraw identical
     # lineage; record/critic calls stay rng-free.
     rng = random.Random(cfg.seed + mix_id)
     strategy = choose_strategy(strategies, rng)
@@ -383,7 +383,9 @@ async def _combined_batch(
     No meta-prompt step: each attempt's lineage is sampled here (seeded per attempt, like the
     meta-prompt phase) and the model writes a one-line plan plus the record for every spec. The row's
     meta_prompt holds the plan + the sampled ingredients: what the record was built from, and what the
-    critic judges it against. Factors in generation.model_picked are left out of the specs and offered
+    critic judges it against. A record whose complexify coin came up is then rewritten by its own
+    complexify call (record in, harder record out) before validation and critique, so the model has
+    something concrete to make harder. Factors in generation.model_picked are left out of the specs and offered
     as options instead; the model's pick becomes that factor's lineage entry ("picked_by": "model").
     The full mix is still sampled first, so code-picked factors draw exactly what they would otherwise.
     """
@@ -402,14 +404,42 @@ async def _combined_batch(
         meta_row.update(strategy_id=lineage["strategy_id"], taxonomy_mix=lineage["taxonomy_mix"], complexified=lineage["harder"][0])
         meta_row["taxonomy_mix"] = [entry for entry in meta_row["taxonomy_mix"] if entry["factor"] not in picked]
         metas.append(meta_row)
-        items.append({"id": f"r{len(items) + 1}", "mix": meta_row["taxonomy_mix"], "harder": meta_row["complexified"]})
+        items.append({"id": f"r{len(items) + 1}", "mix": meta_row["taxonomy_mix"]})
     if not items:
         return rows
     written, missing_reason = await _send_batch(cfg, router, cfg.prompts.combined_batch_prompt(cfg.description, cfg.schema, items, choices))
-    for meta_row, spec in zip(metas, items):
-        _record_plan(meta_row, written.get(spec["id"]), choices, taxonomy)
-    finished = await asyncio.gather(*(_finish_item(cfg, router, meta_row, written.get(spec["id"]), missing_reason) for meta_row, spec in zip(metas, items)))
+    async def finish(meta_row: dict[str, Any], item: dict[str, Any] | None) -> dict[str, Any]:
+        _record_plan(meta_row, item, choices, taxonomy)
+        if item is not None and meta_row["complexified"]:
+            item = await _complexify_record(cfg, router, meta_row, item)
+        return await _finish_item(cfg, router, meta_row, item, missing_reason)
+
+    finished = await asyncio.gather(*(finish(meta_row, written.get(spec["id"])) for meta_row, spec in zip(metas, items)))
     return rows + list(finished)
+
+
+async def _complexify_record(cfg: Config, router: ModelRouter, meta_row: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+    """Combined-path complexify: one call takes the written record and returns a harder version of it.
+
+    The harder record replaces the original and goes through validation, repair and critique as usual.
+    If there is no usable record to work from, or the call fails, the original is kept and the row is
+    not marked complexified.
+    """
+    record = item.get("record")
+    try:
+        if not record:
+            raise ValueError("no record to complexify")
+        prompt = cfg.prompts.complexify_record_prompt(cfg.description, cfg.schema, meta_row["meta_prompt"], record)
+        if cfg.is_schema_free:
+            harder: Any = (await router.complete("bulk", prompt, system=cfg.prompts.SYSTEM_TEXT, task=TaskType.COMPLEXIFY)).strip()
+        else:
+            harder = await router.complete_json("bulk", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.COMPLEXIFY)
+        if harder:
+            return {**item, "record": harder}
+    except Exception:  # noqa: BLE001 - a failed complexify keeps the record as written.
+        pass
+    meta_row["complexified"] = False
+    return item
 
 
 def _record_plan(meta_row: dict[str, Any], item: dict[str, Any] | None, choices: list[dict[str, Any]], taxonomy: dict[str, Any]) -> None:

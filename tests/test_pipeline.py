@@ -728,13 +728,13 @@ def test_table_batch_prompt_describes_each_node_once() -> None:
         return {"factor": factor, "node": path[-1], "path": [factor, *path], "description": f"{path[-1]} described"}
 
     items = [
-        {"id": "r1", "mix": [entry("topic", "alpha"), entry("tone", "dry")], "harder": True},
-        {"id": "r2", "mix": [entry("topic", "beta"), entry("tone", "dry")], "harder": False},
+        {"id": "r1", "mix": [entry("topic", "alpha"), entry("tone", "dry")]},
+        {"id": "r2", "mix": [entry("topic", "beta"), entry("tone", "dry")]},
     ]
     prompt = combined_table_batch_prompt("Tiny QA.", None, items, [])
     assert prompt.count("dry described") == 1  # shared node: one glossary line, two references
     # "topic" and "tone" share an initial, so the second factor's ids use two letters.
-    assert "r1 | T1 | TO1 | yes" in prompt and "r2 | T2 | TO1 | no" in prompt
+    assert "r1 | T1 | TO1" in prompt and "r2 | T2 | TO1" in prompt
     records = json.loads(fake_complete(prompt, 1))["records"]
     assert [record["id"] for record in records] == ["r1", "r2"]
 
@@ -762,3 +762,37 @@ def test_code_level_cuts_lineage_on_both_record_paths(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="code_level names factor 'topicc'"):
         asyncio.run(generate_dataset(cfg, router, quiet=True))
     assert "strategy" not in router.tasks and "generate" not in router.tasks
+
+
+def test_combined_path_complexifies_the_written_record_in_its_own_call(tmp_path: Path) -> None:
+    class Stub(_Recording):
+        async def complete(self, role, prompt, system, task="unknown"):  # type: ignore[override]
+            if str(task) == "generate":
+                assert "harder" not in prompt  # the batch prompt carries no complexify flag
+            if str(task) == "complexify":
+                self.tasks.append("complexify")
+                assert '"input": "Question' in prompt  # the written record is the input
+                return json.dumps({"input": "A harder question?", "output": "A harder answer."})
+            return await super().complete(role, prompt, system, task=task)
+
+    cfg = load_config(write_config(tmp_path, _gen({"meta_prompts": False, "record_batch_size": 2, "complexity_ratio": 1.0})))
+    router = Stub(cfg.data)
+    rows = asyncio.run(generate_dataset(cfg, router, quiet=True))
+    asyncio.run(router.flush_logs())
+    # 4 attempts in 2 batches: every record is complexified once, after generation and before its critique.
+    assert router.tasks.count("generate") == 2 and router.tasks.count("complexify") == 4
+    assert all(row["complexified"] and row["record"]["input"] == "A harder question?" for row in rows)
+    first_critic = router.tasks.index("semantic_critic")
+    assert "complexify" in router.tasks[:first_critic]
+
+    # A failed complexify keeps the record as written and does not mark the row.
+    class Failing(_Recording):
+        async def complete(self, role, prompt, system, task="unknown"):  # type: ignore[override]
+            if str(task) == "complexify":
+                raise RuntimeError("boom")
+            return await super().complete(role, prompt, system, task=task)
+
+    (tmp_path / "failing").mkdir()
+    cfg = load_config(write_config(tmp_path / "failing", _gen({"meta_prompts": False, "record_batch_size": 2, "complexity_ratio": 1.0})))
+    rows = asyncio.run(generate_dataset(cfg, Failing(cfg.data), quiet=True))
+    assert len(rows) == 4 and all(row["accepted"] and not row["complexified"] for row in rows)

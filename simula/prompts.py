@@ -348,8 +348,8 @@ Return JSON:
 
 def combined_batch_prompt(description: str, schema: dict[str, Any] | None, items: list[dict[str, Any]], choices: list[dict[str, Any]]) -> str:
     # Batch mode C, the combined path (generation.meta_prompts: false): several records per call, straight from their
-    # sampled mixes. items = [{"id": "r1", "mix": [...], "harder": bool}]. Every spec lists its nodes inline.
-    specs = "\n\n".join(f"{item['id']}{' (harder)' if item['harder'] else ''}:\n{mix_text(item['mix'])}" for item in items)
+    # sampled mixes. items = [{"id": "r1", "mix": [...]}]. Every spec lists its nodes inline.
+    specs = "\n\n".join(f"{item['id']}:\n{mix_text(item['mix'])}" for item in items)
     intro = "Write one record per spec below. Each spec lists the sampled ingredients for its record (taxonomy nodes; not a strict checklist)."
     return _combined_prompt(description, schema, intro, specs, choices)
 
@@ -381,10 +381,10 @@ def nodes_table(items: list[dict[str, Any]]) -> str:
             if key not in ids:
                 ids[key] = f"{prefixes[entry['factor']]}{sum(1 for k in ids if k[0] == entry['factor']) + 1}"
                 glossary.append(f"{ids[key]}  {mix_text([entry])[2:]}")
-    rows = [" | ".join(["id", *factors, "harder"])]
+    rows = [" | ".join(["id", *factors])]
     for item in items:
         cells = {entry["factor"]: ids[(entry["factor"], *(entry.get("path") or [entry["node"]]))] for entry in item["mix"]}
-        rows.append(" | ".join([item["id"], *(cells.get(factor, "-") for factor in factors), "yes" if item["harder"] else "no"]))
+        rows.append(" | ".join([item["id"], *(cells.get(factor, "-") for factor in factors)]))
     return "NODES:\n" + "\n".join(glossary) + "\n\nRECORDS:\n" + "\n".join(rows)
 
 
@@ -412,7 +412,6 @@ Dataset description:
 
 {intro}
 - First write a one-sentence "plan": what the record will be, given what its ingredients imply together. Coverage of the ingredients matters, but coherence matters as much: if ingredients conflict or their sum would be incoherent, build around the load-bearing ones and soften or drop the rest.
-- A record marked harder ("(harder)" on its spec, or harder = yes in its row) is more complex or challenging than a typical one, while staying true to its ingredients.
 - The records are independent examples of one dataset. Make each one distinct: different names, people, places, numbers, details and phrasing; never reuse a template across the batch.
 - Give every record the length and depth it would have if it were written on its own.
 - The ingredients are instructions to you, not content: never copy their names, paths or descriptions into a record.
@@ -421,6 +420,29 @@ Dataset description:
 
 Return JSON:
 {{"records": [{{"id": "r1", "plan": "..."{pick_field}, "record": ...}}]}}
+""".strip()
+
+
+def complexify_record_prompt(description: str, schema: dict[str, Any] | None, meta_prompt: str, record: Any) -> str:
+    # Combined path (generation.meta_prompts: false): complexify works on the written record. meta_prompt is
+    # the record's plan + sampled ingredients. schema None = a free-text record.
+    if schema is None:
+        shown, reply = str(record), "Return only the rewritten text. No JSON wrapping. No preamble."
+    else:
+        shown = json.dumps(record, ensure_ascii=False)
+        reply = f"Return the rewritten record as JSON only, matching this JSON Schema:\n{schema_text(schema)}"
+    return f"""
+Dataset description:
+{description}
+
+What this record was built from:
+{meta_prompt}
+
+Record:
+{shown}
+
+Rewrite this record so it is more complex or challenging than it is now. It must stay the same record: keep what it is about and what it was built from, keep it realistic, and change only what the added difficulty needs.
+{reply}
 """.strip()
 
 

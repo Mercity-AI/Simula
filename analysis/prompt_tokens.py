@@ -35,7 +35,7 @@ def tokens(text: str) -> int:
 
 def inline_specs(items: list[dict]) -> str:
     # The spec block combined_batch_prompt (and the e-commerce override) writes.
-    return "\n\n".join(f"{item['id']}{' (harder)' if item['harder'] else ''}:\n{mix_text(item['mix'])}" for item in items)
+    return "\n\n".join(f"{item['id']}:\n{mix_text(item['mix'])}" for item in items)
 
 
 def json_specs(items: list[dict]) -> str:
@@ -69,7 +69,7 @@ def main() -> None:
     mixes = []
     for index in range(args.attempts):
         lineage = _sample_lineage(cfg, taxonomy, strategies, index, 1)
-        mixes.append({"mix": lineage["taxonomy_mix"], "harder": lineage["harder"][0]})
+        mixes.append({"mix": lineage["taxonomy_mix"]})
 
     # Static part of the real prompt (everything but the spec block), from the configured prompt module.
     sample = batches(mixes, args.batch)[0]

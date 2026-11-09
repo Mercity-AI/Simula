@@ -194,8 +194,10 @@ When modifying this code, test that `taxonomy_mix` contains one lineage entry pe
    from their sampled mixes with a plan per record (`_combined_batch`, mode C; `model_picked` factors are
    offered as options and the model's pick becomes lineage). `meta_batch_size` batches the scenario step
    itself (mode A, `_make_scenarios`). Batched records are validated/repaired and critiqued one by one
-   (`_send_batch` + `_finish_item`); a malformed item loses only itself (`_batch_items`). All paths end in
-   `_finish_row`.
+   (`_send_batch` + `_finish_item`); a malformed item loses only itself (`_batch_items`). Complexify is
+   always its own call: on the scenario in the meta-prompt phase, or on the combined path on the written
+   record (`_complexify_record`, record in, harder record out) before validation and critique. Batch
+   prompts carry no "harder" flag. All paths end in `_finish_row`.
 5. Writes raw/accepted rows as each future completes.
 6. Updates `run_state.json`.
 7. Dedupes accepted rows if configured.

@@ -224,7 +224,7 @@ def fake_complete(prompt: str, counter: int = 0) -> str:
                  for m in re.findall(r"^(m\d+)\b", prompt, flags=re.MULTILINE)]
         return json.dumps({"mixes": mixes})
     if '"records"' in prompt:
-        # Record batch prompts (B and C): one record per spec id ("r1:", "r2 (harder):", ...) at a line start.
+        # Record batch prompts (B and C): one record per spec id ("r1:", "r2:", ...) at a line start.
         text = "free-form text" in prompt
         records = []
         for item_id in re.findall(r"^(r\d+)\b", prompt, flags=re.MULTILINE):
