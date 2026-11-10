@@ -862,3 +862,45 @@ def test_built_in_prompts_carry_the_context_rules() -> None:
                    P.generate_record_prompt("d", schema, "mp"), P.generate_record_batch_prompt("d", schema, [{"id": "r1", "meta_prompt": "mp"}]),
                    P.combined_batch_prompt("d", schema, [{"id": "r1", "mix": mix}], []), P.generate_text_prompt("d", "mp")):
         assert P.CONTEXT_RULE in prompt
+
+
+def test_subject_pool_requires_a_subject(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="subject_pool requires"):
+        load_config(write_config(tmp_path, _gen({"meta_prompts": False, "subject_pool": True})))
+
+
+@pytest.mark.parametrize("path", ["combined", "meta_prompts"])
+def test_subject_pool_gives_each_record_its_own_situation(tmp_path: Path, path: str, monkeypatch) -> None:
+    import simula.generate as G
+
+    monkeypatch.setattr(G, "SUBJECT_POOL_CHUNK", 2)  # several pool calls per node, so later ones see earlier ones
+    gen = {"meta_prompts": False, "record_batch_size": 2} if path == "combined" else {"meta_batch_size": 2}
+    cfg = load_config(write_config(tmp_path, _gen({**gen, "subject": "topic", "subject_pool": True, "target_size": 8, "concurrency": 8})))
+    router = _Recording(cfg.data)
+    rows = asyncio.run(generate_dataset(cfg, router, quiet=True))
+    asyncio.run(router.flush_logs())
+    pool = read_jsonl(artifact_path(cfg.output_dir, "subject_pool"))
+    log = read_jsonl(Path(cfg.output_dir) / "llm_calls.jsonl")
+    pool_prompts = [row["prompt"] for row in log if row["task"] == "subject_pool"]
+    writer = [row["prompt"] for row in log if row["task"] == ("generate" if path == "combined" else "meta_prompt")]
+    # One situation per attempt, never reused within a node; pool calls after the first on a node see earlier ones.
+    assert len(rows) == 8 and len(pool) == 8
+    by_node: dict[str, list[str]] = {}
+    for row in pool:
+        by_node.setdefault("/".join(row["subject"]), []).append(row["situation"])
+    assert all(len(set(v)) == len(v) for v in by_node.values())
+    assert any("Already listed for this subject" in prompt for prompt in pool_prompts)
+    assert all("- situation: " in prompt for prompt in writer)
+    if path == "combined":
+        assert all(row["meta_prompt"].count("Situation: ") == 1 for row in rows)
+
+
+def test_built_in_writer_prompts_carry_the_phrasing_rule() -> None:
+    from simula import prompts as P
+
+    mix = [{"factor": "topic", "node": "a", "path": ["topic", "a"], "description": ""}]
+    schema = {"type": "object", "properties": {"q": {"type": "string"}}}
+    for prompt in (P.meta_prompt_batch_prompt("d", schema, [{"id": "m1", "mix": mix, "count": 1}]),
+                   P.generate_record_prompt("d", schema, "mp"), P.generate_record_batch_prompt("d", schema, [{"id": "r1", "meta_prompt": "mp"}]),
+                   P.combined_batch_prompt("d", schema, [{"id": "r1", "mix": mix}], []), P.generate_text_prompt("d", "mp")):
+        assert P.PHRASING_RULE in prompt

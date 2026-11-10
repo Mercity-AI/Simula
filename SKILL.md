@@ -75,6 +75,8 @@ Choose once, before the pilot. Switching later needs `--no-resume`.
 - **Name the subject.** Set `generation.subject` to the factor that says what a record is about (topic, issue,
   document type) whenever its nodes are shared by many records. Batches then hold one subject node and see the
   situations already written for it, so records on a shared node stop repeating the node's obvious instance.
+  Add `subject_pool: true` when nodes are shared by dozens of records: each record then gets its own concrete
+  situation from a list written per node, which spreads records far more than memory alone.
 - **Complexify is its own call** for `complexity_ratio` of the records: it rewrites the scenario, or on
   the combined path takes the written record and returns a harder one. Budget that many extra calls,
   or set it to 0 when "harder" means nothing for the dataset.
@@ -235,7 +237,8 @@ Which functions matter:
 The built-in tree and writer prompts carry two context rules from `simula/prompts.py`: `TAXONOMY_CONTEXT_RULE`
 (nodes are general kinds, with no named details or "such as" examples copied from the description) and
 `CONTEXT_RULE` (supplied context is background, not a menu; use its named details only when a record needs them,
-and vary wording widely). An override of `expand_prompt`, `refine_nodes_prompt` or a writer prompt should import
+and vary wording widely), plus `PHRASING_RULE` for writers (show ingredients through content, not stock phrases;
+vary openings, closings and names). An override of `expand_prompt`, `refine_nodes_prompt` or a writer prompt should import
 and include them; otherwise the context's few concrete details end up in a large share of records.
 
 Three rules, each learned from a bad run:

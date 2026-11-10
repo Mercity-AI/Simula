@@ -97,6 +97,7 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
         limiter = asyncio.Semaphore(max(1, cfg.generation.concurrency // size))
 
         plans: dict[tuple[str, ...], list[str]] = {}  # subject node -> plans written so far (combined path)
+        record_situations: dict[int, str] = {}  # combined path with generation.subject_pool
         locks: dict[tuple[str, ...], asyncio.Lock] = {}
 
         async def _unit(unit: list[int], key: tuple[str, ...] = ()) -> list[dict[str, Any]]:
@@ -106,7 +107,7 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
             async with _subject_lock(locks, lock_key), limiter:
                 if not cfg.generation.meta_prompts:
                     seen = plans.get(key, [])[-SUBJECT_MEMORY:] if key else None
-                    rows = await _combined_batch(cfg, router, taxonomy, strategies, unit, seen)
+                    rows = await _combined_batch(cfg, router, taxonomy, strategies, unit, seen, record_situations)
                     if key:
                         plans.setdefault(key, []).extend(_gist(row["meta_prompt"].split("\n")[0]) for row in rows if row.get("meta_prompt"))
                     return rows
@@ -123,6 +124,9 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
                 except Exception:  # noqa: BLE001 - unusable mixes are rejected inside the batch
                     return []
             units = _subject_units([(_subject_key(cfg, _mix_of(index)), index) for index in indexes], size)
+            if cfg.generation.subject_pool and not cfg.generation.meta_prompts:
+                entries = [(index, entry) for index in indexes if (entry := _subject_entry(cfg, _mix_of(index)))]
+                record_situations = await _build_subject_pool(cfg, router, entries)
         else:
             units = [((), indexes[start : start + size]) for start in range(0, len(indexes), size)]
         async with asyncio.TaskGroup() as tg:
@@ -222,6 +226,60 @@ def _gist(text: str) -> str:
     return " ".join(words[:SUBJECT_GIST_WORDS]) + (" …" if len(words) > SUBJECT_GIST_WORDS else "")
 
 
+SUBJECT_POOL_CHUNK = 25   # situations per pool call
+SUBJECT_POOL_SHOWN = 120  # earlier situations shown to a pool call
+
+
+async def _build_subject_pool(cfg: Config, router: ModelRouter, entries: list[tuple[int, dict[str, Any]]]) -> dict[int, str]:
+    """generation.subject_pool: one concrete situation per attempt, drawn without replacement from a list written per
+    subject node. entries = (attempt_index, the attempt's subject mix entry). Calls for one node run one after another
+    (each sees what the node already has, so the list stays distinct); nodes run in parallel. Reuse-if-present like
+    the other artifacts: subject_pool.jsonl keeps {attempt_index, subject, situation}; only missing attempts are filled.
+    An attempt left without a situation (a short or failed call) is written from its mix alone."""
+    path = artifact_path(cfg.output_dir, "subject_pool")
+    have = {row["attempt_index"]: row for row in read_jsonl(path, tolerant=True) if isinstance(row.get("attempt_index"), int)}
+    pool = {index: row["situation"] for index, row in have.items()}
+    nodes: dict[tuple[str, ...], tuple[dict[str, Any], list[int]]] = {}
+    for index, entry in entries:
+        key = tuple(entry.get("path") or [entry["node"]])
+        nodes.setdefault(key, (entry, []))[1].append(index)
+    todo = {key: (entry, [i for i in indexes if i not in pool]) for key, (entry, indexes) in nodes.items()}
+    todo = {key: value for key, value in todo.items() if value[1]}
+    if not todo:
+        return pool
+    phase(f"Writing situations for {sum(len(v[1]) for v in todo.values())} attempts over {len(todo)} subject nodes")
+    limiter = asyncio.Semaphore(cfg.generation.concurrency)
+
+    async def _node(key: tuple[str, ...], entry: dict[str, Any], indexes: list[int]) -> list[dict[str, Any]]:
+        written = [pool[i] for i in nodes[key][1] if i in pool]
+        rows = []
+        for start in range(0, len(indexes), SUBJECT_POOL_CHUNK):
+            chunk = indexes[start : start + SUBJECT_POOL_CHUNK]
+            prompt = cfg.prompts.subject_pool_prompt(cfg.description, entry, len(chunk), written[-SUBJECT_POOL_SHOWN:])
+            try:
+                async with limiter:
+                    response = await router.complete_json("bulk", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.SUBJECT_POOL)
+                situations = [s.strip() for s in response.get("situations") or [] if isinstance(s, str) and s.strip()]
+            except Exception:  # noqa: BLE001 - a failed pool call leaves its attempts to their mixes
+                situations = []
+            for index, situation in zip(chunk, situations):
+                rows.append({"attempt_index": index, "subject": list(key), "situation": situation})
+                written.append(situation)
+        return rows
+
+    async with asyncio.TaskGroup() as tg:
+        tasks = [tg.create_task(_node(key, entry, indexes)) for key, (entry, indexes) in todo.items()]
+        for future in asyncio.as_completed(tasks):
+            for row in await future:
+                pool[row["attempt_index"]] = row["situation"]
+                append_jsonl(path, row)
+    return pool
+
+
+def _subject_entry(cfg: Config, mix: list[dict[str, Any]]) -> dict[str, Any] | None:
+    return next((entry for entry in mix if entry.get("factor") == cfg.generation.subject), None)
+
+
 def _report_mix_space(cfg: Config, taxonomy: dict[str, Any], strategies: list[dict[str, Any]], attempts: int) -> None:
     # Sampling is independent per mix (with replacement), so a mix space near the number of mixes
     # drawn means repeated combinations; say how big the space is before paying for generation.
@@ -307,7 +365,8 @@ async def _build_meta_prompts(
             try:
                 specs = [(attempt_rows[0]["taxonomy_mix"], len(attempt_rows)) for attempt_rows in live]
                 seen = covered.get(key, [])[-SUBJECT_MEMORY:] if key else None
-                scenario_lists = await _make_scenarios(cfg, router, specs, seen) if live else []
+                spec_situations = [situations.get(attempt_rows[0]["attempt_index"]) for attempt_rows in live]
+                scenario_lists = await _make_scenarios(cfg, router, specs, seen, spec_situations) if live else []
                 if key:
                     covered.setdefault(key, []).extend(_gist(text) for scenarios in scenario_lists for text in scenarios)
             except Exception as exc:  # noqa: BLE001 - a failed meta prompt call should not abort the phase.
@@ -325,9 +384,14 @@ async def _build_meta_prompts(
     # Append rows in completion order from the main task, mirroring the generation loop's IO pattern.
     mix_ids = sorted({index // k for index in missing})
     size = cfg.generation.meta_batch_size
+    situations: dict[int, str] = {}
     if cfg.generation.subject:
-        keyed = [(_subject_key(cfg, _mix_attempts(mix_id)[0]["taxonomy_mix"]), mix_id) for mix_id in mix_ids]
+        first_mix = {mix_id: _mix_attempts(mix_id)[0]["taxonomy_mix"] for mix_id in mix_ids}
+        keyed = [(_subject_key(cfg, first_mix[mix_id]), mix_id) for mix_id in mix_ids]
         groups = _subject_units(keyed, size)
+        if cfg.generation.subject_pool:  # one situation per mix (keyed by the mix's first attempt index)
+            entries = [(mix_id * k, entry) for mix_id in mix_ids if (entry := _subject_entry(cfg, first_mix[mix_id]))]
+            situations = await _build_subject_pool(cfg, router, entries)
     else:
         groups = [((), mix_ids[start : start + size]) for start in range(0, len(mix_ids), size)]
     async with asyncio.TaskGroup() as tg:
@@ -361,6 +425,7 @@ def _run_fingerprint(cfg: Config, taxonomy: dict[str, Any], strategies: list[dic
         "model_picked": generation.model_picked,
         "code_level": generation.code_level,
         "subject": generation.subject,
+        "subject_pool": generation.subject_pool,
         "complexity_ratio": generation.complexity_ratio,
         "critic": generation.critic,
         "max_refine_attempts": generation.max_refine_attempts,
@@ -453,6 +518,7 @@ async def _combined_batch(
     strategies: list[dict[str, Any]],
     indexes: list[int],
     covered: list[str] | None = None,
+    situations: dict[int, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Combined path: write one record per attempt in a single call, straight from the sampled mixes.
 
@@ -480,7 +546,11 @@ async def _combined_batch(
         meta_row.update(strategy_id=lineage["strategy_id"], taxonomy_mix=lineage["taxonomy_mix"], complexified=lineage["harder"][0])
         meta_row["taxonomy_mix"] = [entry for entry in meta_row["taxonomy_mix"] if entry["factor"] not in picked]
         metas.append(meta_row)
-        items.append({"id": f"r{len(items) + 1}", "mix": meta_row["taxonomy_mix"], **({"covered": covered} if covered is not None else {})})
+        situation = (situations or {}).get(index)
+        if situation:
+            meta_row["situation"] = situation
+        items.append({"id": f"r{len(items) + 1}", "mix": meta_row["taxonomy_mix"], **({"covered": covered} if covered is not None else {}),
+                      **({"situation": situation} if situation else {})})
     if not items:
         return rows
     written, missing_reason = await _send_batch(cfg, router, cfg.prompts.combined_batch_prompt(cfg.description, cfg.schema, items, choices))
@@ -528,7 +598,8 @@ def _record_plan(meta_row: dict[str, Any], item: dict[str, Any] | None, choices:
     if item is None:
         return
     plan = str(item.get("plan") or "").strip()
-    meta_row["meta_prompt"] = "\n".join(filter(None, [plan, "Sampled ingredients:", mix_text(meta_row["taxonomy_mix"])]))
+    situation = f"Situation: {meta_row['situation']}" if meta_row.get("situation") else ""
+    meta_row["meta_prompt"] = "\n".join(filter(None, [plan, situation, "Sampled ingredients:", mix_text(meta_row["taxonomy_mix"])]))
 
 
 def _picked_entries(item: dict[str, Any], choices: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -621,7 +692,8 @@ async def _finish_row(
 
 
 async def _make_scenarios(
-    cfg: Config, router: ModelRouter, specs: list[tuple[list[dict[str, Any]], int]], covered: list[str] | None = None
+    cfg: Config, router: ModelRouter, specs: list[tuple[list[dict[str, Any]], int]], covered: list[str] | None = None,
+    situations: list[str | None] | None = None,
 ) -> list[list[str]]:
     """Scenario lists for (mix, count) specs: one meta_prompt call for a single mix, or one batched call
     covering every mix (meta_batch_size > 1). A mix missing from a batched reply gets no scenarios."""
@@ -636,7 +708,9 @@ async def _make_scenarios(
         response = await router.complete_json("bulk", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.META_PROMPT)
         return [clean(response.get("meta_prompts"))]
     extra = {"covered": covered} if covered is not None else {}
-    items = [{"id": f"m{position + 1}", "mix": mix, "count": count, **extra} for position, (mix, count) in enumerate(specs)]
+    items = [{"id": f"m{position + 1}", "mix": mix, "count": count, **extra,
+              **({"situation": situations[position]} if situations and situations[position] else {})}
+             for position, (mix, count) in enumerate(specs)]
     prompt = cfg.prompts.meta_prompt_batch_prompt(cfg.description, cfg.schema, items)
     response = await router.complete("bulk", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.META_PROMPT)
     written = {str(item.get("id")): item for item in _batch_items(response, "meta_prompts")}

@@ -33,6 +33,7 @@ class TaskType(StrEnum):
     REFINE = "refine"
     COMPLEXITY_SCORE = "complexity_score"
     NODE_ASSIGN = "node_assign"
+    SUBJECT_POOL = "subject_pool"
 
 
 # Decoding params known to numeric validation (unknown params still pass through to extra_body).
@@ -185,7 +186,8 @@ class GenerationCfg(_Section):
     path instead of code sampling them. code_level {factor: level} stops code at that level of the
     factor's tree (exact shares there); the writer chooses the specifics beneath. subject names the factor
     that says what a record is about: batches then hold one subject node each and are shown the situations
-    already written for it, so records on a shared node stop converging. critic=False accepts every
+    already written for it, so records on a shared node stop converging. subject_pool gives every record its own
+    concrete situation, drawn without replacement from a list written per subject node. critic=False accepts every
     schema-valid record."""
 
     # validate_assignment: the CLI's --stop-after is set after load and must hit the same checks.
@@ -201,6 +203,7 @@ class GenerationCfg(_Section):
     model_picked: dict[str, int] = Field(default_factory=dict)
     code_level: dict[str, int] = Field(default_factory=dict)
     subject: str | None = None
+    subject_pool: bool = False
     complexity_ratio: float = Field(0.3, ge=0.0, le=1.0)
     critic: bool = True
     max_refine_attempts: int = Field(2, ge=0)
@@ -235,6 +238,8 @@ class GenerationCfg(_Section):
         if both := sorted(set(self.code_level) & set(self.model_picked)):
             raise ValueError(f"generation.code_level and generation.model_picked both name {both}; a factor is picked by one or the other.")
         # Records are grouped by their code-sampled subject node, so the subject cannot be model-picked.
+        if self.subject_pool and self.subject is None:
+            raise ValueError("generation.subject_pool requires generation.subject (the factor whose nodes get a situation pool).")
         if self.subject is not None and self.subject in self.model_picked:
             raise ValueError(f"generation.subject {self.subject!r} is also in generation.model_picked; the subject must be code-sampled.")
         return self
