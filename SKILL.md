@@ -139,6 +139,30 @@ Keep each factor about one thing. A factor that packs several unrelated ideas in
 sentence shape and special expressions) gives each record only one of them, and a factor whose deep
 leaves describe another factor's territory produces contradictions.
 
+### Output length is a factor you usually have to add yourself
+
+Ask the user whether the length of the output matters. It often does (a model trained on 70-word
+examples writes 70-word answers), and it depends on the use, so it is theirs to say. If it matters, do not
+leave it to the writer: a model left alone settles on one length. One writer-labelled story set came out
+at about 900 words for nearly every story although the request was a mix of flash, short and medium, and
+records written several per call come out shorter than records written alone.
+
+Control it with a length factor of its own in `taxonomy.factors`, written by hand:
+
+```yaml
+taxonomy:
+  factors:
+    - name: "length"
+      description: "How long the record is, which the text must actually match. Bands by word count:
+        one line (under 25 words), short (25-80), medium (80-200), long (200-400)."
+```
+
+Then, after the design step, open `taxonomy.json` and set the bands' `weight`s to the mix the user wants
+(the tree builder guesses them). Keep the factor about length only; shape and register belong in other
+factors. Say in the writer prompt that the band is binding. With `examples/stories_freetext_v2.yaml`,
+which does this, stories landed on their band's target in every run (about 280, 800 and 1,200 words).
+In the pilot, check the word-count distribution per band, not just the overall median.
+
 ## Review the design before you pay
 
 `taxonomy.json` (with per-node `weight`) and `strategies.json` (roots, weights, `never_combine`)
@@ -435,6 +459,9 @@ Work through all of these. Each line says what to look at and what to do when it
   Details from the description are removed at the source ("Write the description like a spec"). Default
   names survive every instruction we have tried ("draw names from many cultures" moved one name from 5%
   to 1% and left another at 8%); when names matter, make them a factor so code picks them.
+- **Length.** If the user cares about length, compare word counts with each record's length band. One
+  cluster for every band means the writer is ignoring the factor; see "Output length is a factor you
+  usually have to add yourself".
 - **Stock phrases.** Read twenty openings and twenty closings in a row. Records that all start by
   stating who is writing, or all sign off the same way, need the dataset's own stock phrases added next
   to `PHRASING_RULE` in the prompt module.
