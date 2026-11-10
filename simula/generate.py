@@ -100,7 +100,10 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
         locks: dict[tuple[str, ...], asyncio.Lock] = {}
 
         async def _unit(unit: list[int], key: tuple[str, ...] = ()) -> list[dict[str, Any]]:
-            async with _subject_lock(locks, key), limiter:
+            # Only the combined path carries memory in its record batches, so only it needs one batch per node in
+            # flight; on the meta-prompt path the scenarios already differ and record batches run freely.
+            lock_key = () if cfg.generation.meta_prompts else key
+            async with _subject_lock(locks, lock_key), limiter:
                 if not cfg.generation.meta_prompts:
                     seen = plans.get(key, [])[-SUBJECT_MEMORY:] if key else None
                     rows = await _combined_batch(cfg, router, taxonomy, strategies, unit, seen)
