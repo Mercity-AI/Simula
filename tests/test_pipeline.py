@@ -812,8 +812,9 @@ def test_subject_must_be_a_code_sampled_taxonomy_factor(tmp_path: Path) -> None:
         asyncio.run(generate_dataset(cfg, _Recording(cfg.data), quiet=True))
 
 
+@pytest.mark.parametrize("concurrency", [1, 64])
 @pytest.mark.parametrize("path", ["combined", "meta_prompts"])
-def test_subject_batches_share_one_node_and_see_earlier_situations(tmp_path: Path, path: str) -> None:
+def test_subject_batches_share_one_node_and_see_earlier_situations(tmp_path: Path, path: str, concurrency: int) -> None:
     class Capture(_Recording):
         prompts: dict[str, list[str]] = {}
 
@@ -823,7 +824,7 @@ def test_subject_batches_share_one_node_and_see_earlier_situations(tmp_path: Pat
 
     Capture.prompts = {}
     gen = {"meta_prompts": False, "record_batch_size": 2} if path == "combined" else {"meta_batch_size": 2}
-    cfg = load_config(write_config(tmp_path, _gen({**gen, "subject": "topic", "target_size": 8, "concurrency": 1})))
+    cfg = load_config(write_config(tmp_path, _gen({**gen, "subject": "topic", "target_size": 8, "concurrency": concurrency})))
     rows = asyncio.run(generate_dataset(cfg, Capture(cfg.data), quiet=True))
     prompts = Capture.prompts["generate" if path == "combined" else "meta_prompt"]
     assert len(rows) == 8 and len(prompts) >= 4
@@ -831,7 +832,8 @@ def test_subject_batches_share_one_node_and_see_earlier_situations(tmp_path: Pat
         # One subject node per batch, and the batch is told its records share it.
         assert len({line for line in prompt.splitlines() if line.startswith("- topic:")}) == 1
         assert "share the same subject" in prompt
-    # Run one batch at a time: every batch after the first on a node sees what earlier batches wrote for it.
+    # At most one batch per node is in flight, so even with high concurrency every batch after the first on a
+    # node sees what earlier batches wrote for it.
     seen: dict[str, int] = {}
     for prompt in prompts:
         node = next(line for line in prompt.splitlines() if line.startswith("- topic:"))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import math
@@ -96,9 +97,10 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
         limiter = asyncio.Semaphore(max(1, cfg.generation.concurrency // size))
 
         plans: dict[tuple[str, ...], list[str]] = {}  # subject node -> plans written so far (combined path)
+        locks: dict[tuple[str, ...], asyncio.Lock] = {}
 
         async def _unit(unit: list[int], key: tuple[str, ...] = ()) -> list[dict[str, Any]]:
-            async with limiter:
+            async with _subject_lock(locks, key), limiter:
                 if not cfg.generation.meta_prompts:
                     seen = plans.get(key, [])[-SUBJECT_MEMORY:] if key else None
                     rows = await _combined_batch(cfg, router, taxonomy, strategies, unit, seen)
@@ -204,6 +206,14 @@ def _subject_units(keyed: list[tuple[tuple[str, ...], Any]], size: int) -> list[
     return units
 
 
+def _subject_lock(locks: dict[tuple[str, ...], asyncio.Lock], key: tuple[str, ...]) -> Any:
+    # At most one batch in flight per subject node, so each batch sees everything written for its node before it.
+    # Different nodes still run in parallel (bounded by concurrency). No subject -> no lock.
+    if not key:
+        return contextlib.nullcontext()
+    return locks.setdefault(key, asyncio.Lock())
+
+
 def _gist(text: str) -> str:
     words = str(text).split()
     return " ".join(words[:SUBJECT_GIST_WORDS]) + (" …" if len(words) > SUBJECT_GIST_WORDS else "")
@@ -284,12 +294,13 @@ async def _build_meta_prompts(
             row["error"] = str(exc)
 
     covered: dict[tuple[str, ...], list[str]] = {}  # subject node -> situations written so far
+    locks: dict[tuple[str, ...], asyncio.Lock] = {}
 
     async def _mix_group(mix_ids: list[int], key: tuple[str, ...] = ()) -> list[dict[str, Any]]:
         # One scenario call covers meta_batch_size mixes (1 = one call per mix); with a subject they share one node.
         mixes = [_mix_attempts(mix_id) for mix_id in mix_ids]
         live = [attempt_rows for attempt_rows in mixes if "error" not in attempt_rows[0]]
-        async with limiter:
+        async with _subject_lock(locks, key), limiter:
             try:
                 specs = [(attempt_rows[0]["taxonomy_mix"], len(attempt_rows)) for attempt_rows in live]
                 seen = covered.get(key, [])[-SUBJECT_MEMORY:] if key else None
