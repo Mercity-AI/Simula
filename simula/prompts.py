@@ -40,11 +40,12 @@ CONTEXT_RULE = (
 
 # Phrasing rule: sampled ingredients (writer, tone, shape) tend to be written out as the same stock phrases in every
 # record ("I'm the workspace admin", "third time writing", one default name), which makes records read alike.
+# Kept general here; a prompt module can add the stock phrases of its own dataset.
 PHRASING_RULE = (
     "Let the sampled ingredients show through what each record says and does, not through stock phrases that "
-    "announce them: do not open with the writer's role, tenure or team size unless the record needs it, and do not "
-    "label the tone or the history (\"third time writing\", \"I hope this finds you well\"). Vary openings, closings "
-    "and any names widely: draw names from many cultures and avoid the first common name that comes to mind."
+    "announce them: a record should not state who is behind it, its tone or its backstory outright unless it "
+    "naturally would. Vary openings, closings and any names widely: draw names from many cultures and avoid the "
+    "first common name that comes to mind."
 )
 
 
@@ -308,7 +309,9 @@ List {count} distinct concrete situations that a record about this subject could
   genuinely different from each other (different objects, causes, circumstances and scales), not rewordings.
 - Describe only the subject matter. Leave out tone, urgency, who is writing and the record's format: those are
   chosen separately for each record.
-- {TAXONOMY_CONTEXT_RULE}{listed}
+- Invent the specifics yourself. Do not anchor on named details from the description or any context given with it
+  (named features, products, people, error codes, numbers, dates), and cover the subject widely, beyond what the
+  description happens to mention.{listed}
 
 Return JSON:
 {{"situations": ["..."]}}
