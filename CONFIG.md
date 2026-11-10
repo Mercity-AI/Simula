@@ -11,7 +11,7 @@ its default, and when it matters. It is the human-facing companion to two other 
 Only two things are required: a non-empty `description`, and a `model` id for each of the three roles
 (`strategic`, `bulk`, `critic`). Everything else has a default — omit a key to accept it. A blank
 section header (e.g. `evaluation:` with nothing under it) is treated as "use defaults", not "wipe the
-section". An unknown key (a typo, or a renamed knob such as `scenarios_per_mix` → `meta_prompts_per_mix`
+section". An unknown key (a typo, or a knob that was renamed
 or `batch_size` → `record_batch_size`) is an error, not silently ignored; only `models.<role>` accepts
 extra keys, because those are decoding params passed through to the provider.
 
@@ -168,7 +168,7 @@ Four words used below, in the order they appear in a run:
   `meta_prompts.jsonl`, where it can be read and edited before records are written.
 - **Record.** The finished row.
 
-A situation says *what* a record is about and comes from one factor. A meta-prompt is the full brief for
+A situation says *what* a record is about and comes from one factor. A meta-prompt is the full plan for
 the record and comes from all of them. They stack: with both on, the situation goes into the meta-prompt;
 with `meta_prompts: false` it goes straight into the writer's spec and the writer makes its own one-line
 plan in the same call that writes the record.

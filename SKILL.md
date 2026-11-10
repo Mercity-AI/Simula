@@ -17,7 +17,7 @@ repeats field tables.
 - **Situation.** One sentence naming the concrete thing a record is about: one specific case of its
   subject node. Content only, nothing about tone, length or who is writing. Listed per subject node
   before any writing; each is used by exactly one record. Needs `generation.subject`.
-- **Meta-prompt.** A short brief for one record, written by a model from the whole mix (and the
+- **Meta-prompt.** A short instruction for one record, written by a model from the whole mix (and the
   situation, when there is one). Needs `generation.meta_prompts: true`.
 - **Record.** The finished row.
 
@@ -81,11 +81,11 @@ Choose once, before the pilot. Switching later needs `--no-resume`.
 | Path | Config | Use it when |
 |---|---|---|
 | **Combined** (recommended) | `meta_prompts: false`, `record_batch_size: 5` | You want the cheapest good data. One call writes 5 records straight from their mixes, each with a one-line plan; every record is still validated and critiqued on its own. In our pilots it cost about half the meta-prompt path with one record per call, and its records were more faithful to their mixes. |
-| **Meta-prompt** | `meta_prompts: true` (built-in default), `meta_batch_size: 10`, `record_batch_size: 5–10` | The user wants to read or edit the per-record briefs (`meta_prompts.jsonl`, `--stop-after meta_prompts`) before records are written, or stock phrasing is the main complaint: with the brief written first, records announced their ingredients less often (follow-up framing in 13% of tickets against 15%). Batched like this its cost is in the same range as the combined path. |
+| **Meta-prompt** | `meta_prompts: true` (built-in default), `meta_batch_size: 10`, `record_batch_size: 5–10` | The user wants to read or edit the per-record meta-prompts (`meta_prompts.jsonl`, `--stop-after meta_prompts`) before records are written, or stock phrasing is the main complaint: with the meta-prompt written first, records announced their ingredients less often (follow-up framing in 13% of tickets against 15%). Batched like this its cost is in the same range as the combined path. |
 
 Do you need meta-prompts? Usually not. In a 1,000-ticket benchmark with situations on, the two paths gave
 the same variety (Vendi 51.2 combined, 51.4 meta-prompt). The meta-prompt path earns its extra step when
-a human will edit the briefs, or when a record needs planning the writer cannot do in one line.
+a human will edit the meta-prompts, or when a record needs planning the writer cannot do in one line.
 
 - **Set the subject.** `generation.subject: auto` (or name the factor). Each node of the subject then
   gets a list of situations, one per record, so records that share a node are about different things.
@@ -95,7 +95,7 @@ a human will edit the briefs, or when a record needs planning the writer cannot 
 - **Batch size follows record length.** 5 for short records (queries, QA pairs, tickets); 1–2 for long
   free text, because records written together come out shorter. Past about 5 on the combined path,
   records drift from the shape that was sampled for them.
-- **Keep meta-prompt batches at 10 or under.** At 30 per call a cheap model returned briefs that only
+- **Keep meta-prompt batches at 10 or under.** At 30 per call a cheap model returned meta-prompts that only
   restated their ingredients, and the share of records whose labels matched their mix fell from 94% to
   88–90%.
 - **Give `bulk` room.** A batch reasons before it answers. Set `models.bulk.max_tokens` high (the
@@ -116,8 +116,8 @@ a human will edit the briefs, or when a record needs planning the writer cannot 
 The description (and anything a prompt module pastes in beside it) is read by every prompt. State what a
 record is, what it is for, and the rules. Leave out anecdotes, example incidents, sample IDs, named
 people and "recent events": whatever is concrete in the context gets copied. In one benchmark a feature
-name mentioned once in the brief appeared in 26% of tickets and an error code in 5%; the built-in context
-rules cut the codes to about 1%, and deleting the line from the brief took them to zero. If the model
+name mentioned once in the description appeared in 26% of tickets and an error code in 5%; the built-in context
+rules cut the codes to about 1%, and deleting the line from the description took them to zero. If the model
 needs facts to stay consistent (plan names, limits, units), give those; give no incidents.
 
 ## Archetype → variation axes
@@ -331,7 +331,7 @@ expensive in 50,000.
   costs, in plain terms, before you run it.
 
 What our own pilots would have caught, had they been this size: one label at 40% of the data against a
-25% target (a strategy); one name in 8% of records; a brief's example in 26% of them; and low-priority
+25% target (a strategy); one name in 8% of records; an example from the description in 26% of them; and low-priority
 labels on tickets that read as high.
 
 ## Check the pilot

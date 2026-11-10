@@ -335,7 +335,7 @@ def test_failed_meta_row_rejects_without_model_calls(tmp_path: Path) -> None:
     # A router with no complete/complete_json proves the failure path makes zero model calls.
     row = asyncio.run(_generate_one_safe(cfg, NoCallRouter(), meta_row))
     assert row["accepted"] is False
-    assert "Meta prompt failed: boom" in row["rejection_reason"]
+    assert "Meta-prompt failed: boom" in row["rejection_reason"]
 
 
 def test_stop_after_halts_each_stage_then_run_completes(tmp_path: Path) -> None:
@@ -545,7 +545,7 @@ def test_blank_meta_prompts_are_dropped(tmp_path: Path) -> None:
 
 def test_combined_batches_write_records_straight_from_mixes(tmp_path: Path) -> None:
     (tmp_path / "combined").mkdir()
-    (tmp_path / "scenario").mkdir()
+    (tmp_path / "meta").mkdir()
     combined = load_config(write_config(tmp_path / "combined", _gen({"meta_prompts": False, "record_batch_size": 3, "target_size": 7})))
     router = _Recording(combined.data)
     rows = asyncio.run(generate_dataset(combined, router, quiet=True))
@@ -557,9 +557,9 @@ def test_combined_batches_write_records_straight_from_mixes(tmp_path: Path) -> N
     assert all("Sampled ingredients:" in row["meta_prompt"] for row in rows)
 
     # Lineage is seeded per attempt exactly like the meta-prompt path, so both draw the same mixes.
-    scenario = load_config(write_config(tmp_path / "scenario", _gen({"target_size": 7})))
-    scenario_rows = asyncio.run(generate_dataset(scenario, ModelRouter(scenario.data), quiet=True))
-    mixes = {row["attempt_index"]: row["taxonomy_mix"] for row in scenario_rows}
+    meta = load_config(write_config(tmp_path / "meta", _gen({"target_size": 7})))
+    meta_rows = asyncio.run(generate_dataset(meta, ModelRouter(meta.data), quiet=True))
+    mixes = {row["attempt_index"]: row["taxonomy_mix"] for row in meta_rows}
     assert all(row["taxonomy_mix"] == mixes[row["attempt_index"]] for row in rows)
 
 
@@ -750,7 +750,7 @@ def test_unknown_model_picked_factor_fails_before_any_strategy_or_record_call(tm
 def test_code_level_cuts_lineage_on_both_record_paths(tmp_path: Path) -> None:
     # depth 2 gives each fake factor leaves at level 2; code_level stops "topic" at level 1.
     taxonomy = {"depth": 2, "best_of_n": 1, "review_mode": "auto_accept", "children_per_node": 2}
-    for name, extra in (("combined", {"meta_prompts": False, "record_batch_size": 2}), ("scenario", {})):
+    for name, extra in (("combined", {"meta_prompts": False, "record_batch_size": 2}), ("meta", {})):
         (tmp_path / name).mkdir()
         cfg = load_config(write_config(tmp_path / name, {"taxonomy": taxonomy, **_gen({"code_level": {"topic": 1}, **extra})}))
         rows = asyncio.run(generate_dataset(cfg, ModelRouter(cfg.data), quiet=True))

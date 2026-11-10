@@ -22,10 +22,10 @@ update `CONFIG.md`/`template.yaml`/README when config changes, no real model cal
 | 2 Parallel proposals, bounded fan-out | done | Plus one retry per failed node expansion: v4-pro returned bad JSON on ~6% of expansions, silently pruning branches (once a whole factor). |
 | 9 Per-task reasoning effort | **dropped** | User decision: reasoning stays on at the run's normal effort. Also measured: DeepSeek treats `minimal` as `low` and ignores `reasoning.max_tokens`. |
 | 10 Critic fixes | done (3 of 4) | Off-by-one fixed (every refine is re-critiqued); `generation.critic: false`; a rejecting critic may return `"revised"` and a schema-valid fix is accepted directly (built-in JSON critic + e-commerce critic do this). **Mechanical-check hook not built:** 70% of baseline critic rejections are semantic hallucinations, ~15% mechanical. |
-| 11 Small fixes | done | `/` replaced in node names; dotted names inside slash paths round-trip; blank and non-string scenarios dropped (the 10K run had 4 dict-valued `meta_prompt`s). |
-| 3 Keep every scenario | done | `meta_prompts_per_mix` default 1; K>1 = K attempts share one mix. Built-in and e-commerce meta prompts now describe the record instead of writing it. |
+| 11 Small fixes | done | `/` replaced in node names; dotted names inside slash paths round-trip; blank and non-string meta-prompts dropped (the 10K run had 4 dict-valued `meta_prompt`s). |
+| 3 Keep every meta-prompt | done | `meta_prompts_per_mix` default 1; K>1 = K attempts share one mix. Built-in and e-commerce meta-prompts now describe the record instead of writing it. |
 | 4 Mix-space report | done | Printed before generation; warns when the space is smaller than the mixes drawn. |
-| 6 Batching | done (A, B, C) | Two knobs instead of a mode list: `meta_batch_size` (A: mixes per scenario call) and `record_batch_size` (records per record call: B with meta prompts on, C = the combined path with `meta_prompts: false`); A+B = both. Malformed batch JSON is salvaged item by item. Concurrency bounds whole units (`concurrency // record_batch_size`) so critiques never queue behind other batches. Results in round 3 below. **Not built from item 6:** length as a per-record category (the e-commerce `query_complexity` factor already sets size), and a *quality* test of subject-grouped vs random batches (only measured for tokens, offline). The compact ID-table prompt is written (`combined_table_batch_prompt`) but not wired in — see the token measurement below. |
+| 6 Batching | done (A, B, C) | Two knobs instead of a mode list: `meta_batch_size` (A: mixes per meta-prompt call) and `record_batch_size` (records per record call: B with meta-prompts on, C = the combined path with `meta_prompts: false`); A+B = both. Malformed batch JSON is salvaged item by item. Concurrency bounds whole units (`concurrency // record_batch_size`) so critiques never queue behind other batches. Results in round 3 below. **Not built from item 6:** length as a per-record category (the e-commerce `query_complexity` factor already sets size), and a *quality* test of subject-grouped vs random batches (only measured for tokens, offline). The compact ID-table prompt is written (`combined_table_batch_prompt`) but not wired in — see the token measurement below. |
 | 7 Code- vs model-picked factors | built (minimal), not recommended | `generation.model_picked: {factor: level}` on the combined path: those factors are offered as options (with the share code sampling would give each) and the model's pick becomes lineage (`"picked_by": "model"`). No automatic per-factor decision step. Round 3: the model skews the distribution and mislabels its own picks; most of the readability gain comes from coarser specs, which code-picking at the same level gets too. |
 
 E-commerce prompt module fixes: no more "vary the vertical across the K"; complexify keeps the size class
@@ -70,7 +70,7 @@ fit / 47% complexity / 59% faithful at $5.94/1K list; combined-5 93% / 73% / 78%
   top-3 phrases in the 10K run). Fixing the prompts fixes both.
 - **Hidden reasoning does not shrink with batching.** A 10-record batch reasons about as much per record
   as ten single calls (~1–2K tokens each at effort low). Batching saves calls, repeated prompt input and
-  (on the combined path) the scenario step — not reasoning.
+  (on the combined path) the meta-prompt step — not reasoning.
 - **Batching drifts on shape, not product.** Product fit holds (95% → 91%), complexity fit slides
   (80% → 73% → 69% at 1/5/10 per call), and a "large multi-need" spec can come back as a 5-word query.
   Batch size 5 is the sweet spot.
@@ -114,17 +114,17 @@ All on plain `deepseek-v4-flash` (default routing), same 500 mixes; compare with
 
 | Arm | $/1K billed | calls/row | product fit | complexity fit | faithful | realism | coherence | Vendi | Vendi len-matched |
 |---|---|---|---|---|---|---|---|---|---|
-| Scenario path, unbatched | 0.84 | 3.33 | 92% | 64% | 52% | 4.05 | 4.24 | 80.4 | 44.0 |
-| A: 5 mixes per scenario call | 0.74 | 2.56 | 95% | 58% | 55% | 3.97 | 4.21 | 80.9 | 44.3 |
+| Meta-prompt path, unbatched | 0.84 | 3.33 | 92% | 64% | 52% | 4.05 | 4.24 | 80.4 | 44.0 |
+| A: 5 mixes per meta-prompt call | 0.74 | 2.56 | 95% | 58% | 55% | 3.97 | 4.21 | 80.9 | 44.3 |
 | B: 5 records per record call | 0.70 | 2.54 | 95% | 64% | 49% | 3.89 | 4.11 | 80.0 | 41.4 |
 | A+B | 0.55 | 1.72 | 96% | 64% | 58% | 3.91 | 4.25 | 83.6 | 45.3 |
 | **C: combined, 5 per call (R5)** | **0.40** | 1.22 | 90% | 74% | **71%** | 3.90 | 4.22 | 79.0 | 42.3 |
 | C, intent/attribute cut to level 2 (code-picked) | 0.44 | 1.22 | 92% | 79% | 66% | 4.11 | 4.31 | 81.3 | 43.5 |
 | C, intent/attribute **model-picked** at level 2 | 0.40 | 1.21 | 91% | 80% | 64% | 4.25 | 4.53 | 84.4 | 44.5 |
 
-- **A and B work and hold quality.** A saves 12%, B 17%, A+B 35% against the unbatched scenario path,
+- **A and B work and hold quality.** A saves 12%, B 17%, A+B 35% against the unbatched meta-prompt path,
   with product fit unchanged or better. B's first drafts drop more stated constraints (32% faithful
-  before the critic vs 43%); the critic repairs most of it. Scenario-path arms miss more constraints
+  before the critic vs 43%); the critic repairs most of it. Meta-prompt-path arms miss more constraints
   than C overall (their queries are longer). C stays the cheapest and most faithful: half A+B's cost.
 - **Model-picked skews and mislabels.** Picks concentrate on typical options (`category_browsing` 26%,
   `exact_product_search` 22% against 8–11% targets; evenness 0.85 vs 0.99 for code), rare options vanish
@@ -137,7 +137,7 @@ All on plain `deepseek-v4-flash` (default routing), same 500 mixes; compare with
   "color_code") force odd records; that is a taxonomy-shape issue, fixable by a shallower tree for those
   factors.
 - **Recommendation:** combined path, batch 5, code-picked (as in the example config). Use A+B when
-  reviewable scenarios matter. Keep `model_picked` for factors that do not need an exact label or
+  reviewable meta-prompts matter. Keep `model_picked` for factors that do not need an exact label or
   distribution (tone, style); do not use it for labelled factors.
 - **Hangs:** default routing occasionally hangs a request. The OpenAI SDK's own retries stacked under
   ours (one stuck request could hold an attempt for over an hour); the client now runs with
@@ -221,14 +221,10 @@ of a 10K run; cheaper routing for the strategic role is the next untested lever.
 - Backlog §4: provider batch pricing, retryable infra failures on resume, response cache, sibling-only
   expansion prompts, sending the strategy call the path list instead of the whole taxonomy.
 - Critic leniency differs by provider; re-check judge numbers on a larger sample before a big run.
-- **Terminology: "scenario" vs "meta-prompt" (user note, 2026-11-10).** Both words name the same thing
-  (the short brief a model writes from a mix, telling the generator what record to make), and using
-  both is confusing. Pick one and use it everywhere: config keys (`meta_prompts`, `meta_batch_size`,
-  `meta_prompts_per_mix`), the artifact (`meta_prompts.jsonl`), the row field (`meta_prompt`), prompt
-  function names (`meta_prompt_prompt`, `meta_prompt_batch_prompt`), task names (`meta_prompt`), and
-  all docs. Renaming touches the row-shape/artifact contract, so it needs a deliberate decision first.
-  Done so far: `scenarios_per_mix` renamed to `meta_prompts_per_mix` (leaning to "meta-prompt"); "scenario"
-  still appears in docs, code comments and prompt wording.
+- **Terminology (user note, 2026-11-10; done 2026-11-11).** The short instruction a model writes from a mix,
+  telling the generator what record to make, is a **meta-prompt** everywhere: config keys, the artifact, the
+  row field, prompt function names, task names, code and docs. A **situation** is a different thing: one
+  sentence of subject matter per record, listed per node of the subject factor (`generation.subject`).
 
 ---
 
@@ -254,9 +250,9 @@ of a 10K run; cheaper routing for the strategic role is the next untested lever.
 - **Mix** — one sampled leaf per factor for one record (e.g. Cowboy Boots × low-spec bulk × capacity
   quantity × small). Sampled in code, no model call.
 - **Strategy (lane)** — limits which branches each factor may draw from, picked by weight per attempt.
-- **Scenario = meta-prompt** — the paragraph a model writes from a mix, telling the generator exactly
-  what record to make. Same thing; the benchmark says "scenario", the code says `meta_prompt`.
-- **Complexify** — a separate call that rewrites the *scenario* (not the record) to be harder.
+- **Meta-prompt** — the paragraph a model writes from a mix, telling the generator exactly
+  what record to make.
+- **Complexify** — a separate call that rewrites the *meta-prompt* (not the record) to be harder.
 - **Critic / refine / repair** — critic judges a record (accept/reject); refine rewrites a rejected
   record; repair fixes broken JSON or a schema failure right after generate (independent of the critic).
 - **Code-picked / model-picked factor** — who chooses a factor's value: code (sampled into the mix) or
@@ -336,10 +332,10 @@ the August strategy fixes).
 **Problems found (beyond cost):**
 
 - **Lineage is wrong for ~60% of rows.** The ecommerce prompt module tells `meta_prompt` to "vary the
-  vertical across the 3"; one scenario is kept at random. Only ~40% of kept scenarios mention their
+  vertical across the 3"; one meta-prompt is kept at random. Only ~40% of kept meta-prompts mention their
   sampled product (word-match heuristic). The complexify override hard-codes "12–20 fields": 72% of
   rows sampled as "small (3–5 fields)" have >8 fields.
-- **The scenario writes the record.** Scenarios include a full example query + extraction; `generate`
+- **The meta-prompt writes the record.** Meta-prompts include a full example query + extraction; `generate`
   copies it, including invented details (traced: complexify invented a "Tony Lama" brand exclusion,
   generate copied it, critic + refine spent 2 more calls removing it).
 - **Off-by-one in `_critic_loop`** (`simula/generate.py`): after the last rejection it refines once more
@@ -442,19 +438,19 @@ and one cheap model. Real calls cost money — get the user's go-ahead first.
 
 ### Phase 2 — meta-prompts
 
-#### 3. Never throw scenarios away
+#### 3. Never throw meta-prompts away
 
-- **Why:** one `meta_prompt` call writes `scenarios_per_mix` (default 3) scenarios for one mix in one
+- **Why:** one `meta_prompt` call writes several meta-prompts (3 by default at the time) for one mix in one
   response and keeps one at random — paying for and discarding two. The Simula paper (arXiv 2603.29791)
   does this to avoid mode collapse when *one mix is reused for several records* ("generate multiple
   simultaneously, then sub-sample the required fraction"); we sample a fresh mix per attempt, so that
   reason doesn't apply. The discarded drafts also invite drift away from the mix (see lineage problem).
-- **Change:** keep every scenario. `scenarios_per_mix: K` = one call writes K scenarios for one mix and
-  all K become attempts sharing that mix. Default `1`. Prompt asks for genuinely distinct scenarios.
+- **Change:** keep every meta-prompt. `meta_prompts_per_mix: K` = one call writes K meta-prompts for one mix and
+  all K become attempts sharing that mix. Default `1`. Prompt asks for genuinely distinct meta-prompts.
 - **Work through:** mixes sampled = ceil(attempts / K); one meta row per attempt with shared lineage;
   per-mix RNG; resume/fingerprint; trim/coverage with shared mixes. Applies to today's path and batch
   mode A only.
-- **Also:** scenarios should describe *what to make*, not write the record; cap their length (they are
+- **Also:** meta-prompts should describe *what to make*, not write the record; cap their length (they are
   re-sent to generate/critic/refine).
 
 #### 4. Report the size of the mix space
@@ -473,8 +469,8 @@ Three batch targets, selected as a list so A and B can coexist:
 
 | Mode | What one call does | Config (sketch) |
 |---|---|---|
-| A: batch the meta step | M mixes → M scenarios | `generation.batch: [meta]` |
-| B: batch the generate step | M scenarios → M records (benchmark experiment) | `generation.batch: [generate]` |
+| A: batch the meta step | M mixes → M meta-prompts | `generation.batch: [meta]` |
+| B: batch the generate step | M meta-prompts → M records (benchmark experiment) | `generation.batch: [generate]` |
 | A + B | both, as two steps | `generation.batch: [meta, generate]` |
 | C: combined (most promising) | M mixes → M records directly; meta-prompt phase skipped | `generation.batch: [combined]` |
 

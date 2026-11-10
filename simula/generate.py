@@ -40,7 +40,7 @@ from .utils import (
 
 
 async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = True, quiet: bool = False) -> list[dict[str, Any]]:
-    """Build/load taxonomy + strategies (+ meta prompts), run record generation, then dedupe + trim.
+    """Build/load taxonomy + strategies (+ meta-prompts), run record generation, then dedupe + trim.
 
     Two record paths: with generation.meta_prompts (the default) every attempt first gets a reviewable
     meta-prompt in meta_prompts.jsonl and then its own record call; without it, records are written
@@ -340,7 +340,7 @@ async def _build_meta_prompts(
         info(f"[dim]Reusing meta_prompts.jsonl ({len(rows)} prompts)[/dim]")
         return rows
 
-    phase(f"Generating {len(missing)} meta prompts")
+    phase(f"Generating {len(missing)} meta-prompts")
     k = cfg.generation.meta_prompts_per_mix
     limiter = asyncio.Semaphore(cfg.generation.concurrency)
 
@@ -378,7 +378,7 @@ async def _build_meta_prompts(
                 specs = [(attempt_rows[0]["taxonomy_mix"], len(attempt_rows)) for attempt_rows in live]
                 spec_situations = [situations.get(attempt_rows[0]["attempt_index"]) for attempt_rows in live]
                 meta_prompt_lists = await _make_meta_prompts(cfg, router, specs, spec_situations) if live else []
-            except Exception as exc:  # noqa: BLE001 - a failed meta prompt call should not abort the phase.
+            except Exception as exc:  # noqa: BLE001 - a failed meta-prompt call should not abort the phase.
                 meta_prompt_lists = [[] for _ in live]
                 for row in (row for attempt_rows in live for row in attempt_rows):
                     row["error"] = str(exc)
@@ -402,7 +402,7 @@ async def _build_meta_prompts(
         situations = await _write_situations(cfg, router, nodes)
     async with asyncio.TaskGroup() as tg:
         tasks = [tg.create_task(_mix_group([index // k for index in batch])) for batch in _batches(first, size, nodes)]
-        with track(len(missing), "Meta prompts", quiet=quiet) as advance:
+        with track(len(missing), "Meta-prompts", quiet=quiet) as advance:
             for future in asyncio.as_completed(tasks):
                 for row in await future:
                     rows[row["attempt_index"]] = row
@@ -455,7 +455,7 @@ def _build_row(
     critic_verdicts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     # Single source of truth for the dataset row shape (see the Artifact Contract in AGENTS.md).
-    # Lineage (strategy, mix, meta prompt, complexify flag) always comes from the attempt's meta row,
+    # Lineage (strategy, mix, meta-prompt, complexify flag) always comes from the attempt's meta row,
     # so a failed attempt reports the same lineage a success would.
     index = meta_row["attempt_index"]
     return {
@@ -488,7 +488,7 @@ async def _generate_one_safe(cfg: Config, router: ModelRouter, meta_row: dict[st
     """
     # A meta row that failed (or was edited down to nothing) rejects without spending model calls.
     if meta_row.get("error") or not meta_row.get("meta_prompt"):
-        return _rejected(cfg, router, meta_row, f"Meta prompt failed: {meta_row.get('error') or 'empty meta prompt'}")
+        return _rejected(cfg, router, meta_row, f"Meta-prompt failed: {meta_row.get('error') or 'empty meta-prompt'}")
     try:
         make = _make_text if cfg.is_schema_free else _make_record
         record, schema_valid, rejection_reason = await make(cfg, router, meta_row["meta_prompt"])
@@ -503,7 +503,7 @@ async def _meta_prompt_batch(cfg: Config, router: ModelRouter, metas: list[dict[
     Each record keeps its own meta row (lineage + meta-prompt); a failed meta row rejects without a call.
     """
     rows = [
-        _rejected(cfg, router, meta_row, f"Meta prompt failed: {meta_row.get('error') or 'empty meta prompt'}")
+        _rejected(cfg, router, meta_row, f"Meta-prompt failed: {meta_row.get('error') or 'empty meta-prompt'}")
         for meta_row in metas
         if meta_row.get("error") or not meta_row.get("meta_prompt")
     ]
@@ -729,7 +729,7 @@ async def _complexify(cfg: Config, router: ModelRouter, meta_prompt: str) -> str
 
 
 async def _make_record(cfg: Config, router: ModelRouter, meta_prompt: str) -> tuple[Any, bool, str | None]:
-    """Generate a JSON record from a meta prompt; _check_record validates (and repairs) it."""
+    """Generate a JSON record from a meta-prompt; _check_record validates (and repairs) it."""
     raw_response = await router.complete(
         "bulk",
         cfg.prompts.generate_record_prompt(cfg.description, cfg.schema, meta_prompt),  # type: ignore[arg-type]

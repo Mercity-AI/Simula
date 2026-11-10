@@ -1,6 +1,6 @@
 """Per-run prompt overrides for stories_freetext_v2.
 
-Only the meta-prompt is overridden. The goal: SHORT, evocative briefs that seed a story
+Only the meta-prompt is overridden. The goal: SHORT, evocative meta-prompts that seed a story
 rather than over-specify it. v1's meta-prompts were ~150-200 words each and dictated POV,
 setting, plot beats, and "such as ..." example menus — which produced mechanical, same-shaped
 stories with stacked devices. Here a meta-prompt is a seed: the premise plus the one or two
@@ -28,13 +28,13 @@ Dataset: {description}
 Ingredients sampled for this story (a guide, NOT a checklist):
 {ingredients}
 
-Write {k} SHORT meta-prompt{'s' if k > 1 else ''}{', each a genuinely different story' if k > 1 else ''}. A meta-prompt is a brief handed to a story writer — a seed, not an outline.
+Write {k} SHORT meta-prompt{'s' if k > 1 else ''}{', each a genuinely different story' if k > 1 else ''}. A meta-prompt is a short instruction handed to a story writer — a seed, not an outline.
 
 Rules for every meta-prompt:
 - Keep it to 1-3 sentences, roughly 40-90 words. Shorter is better.
 - Give the premise and only the 1-2 ingredients that most define THIS story; let the writer invent the rest. Do not enumerate every ingredient.
 - Always convey the rough length (from the length ingredient) in a few words.
-- If the mix includes an unusual form — second person, a letter/diary (epistolary), a documentary/archive presentation, a framed/nested telling, or a nonlinear timeline — that form is the SPINE of this story: build the brief around it and state it plainly. It is not optional and must never be dropped or softened away. If the mix is ordinary narrated prose, don't mention form at all.
+- If the mix includes an unusual form — second person, a letter/diary (epistolary), a documentary/archive presentation, a framed/nested telling, or a nonlinear timeline — that form is the SPINE of this story: build the meta-prompt around it and state it plainly. It is not optional and must never be dropped or softened away. If the mix is ordinary narrated prose, don't mention form at all.
 - Do NOT dictate the opening, the plot beats, the ending, or a "final image", and do NOT give "such as ..." example menus.
 - Do NOT add craft adjectives ("vivid", "emotionally resonant", "no filler", "distinct voice") — trust the writer.
 - If the THEMATIC ingredients (genre, tone, setting) clash, reconcile them — soften or drop the weaker one; coherence beats coverage. This never applies to the unusual form above, which always stays.

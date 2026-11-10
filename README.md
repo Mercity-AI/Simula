@@ -109,7 +109,7 @@ Builds `taxonomy.json` and, depending on `taxonomy.review_mode`, either accepts 
 simula generate CONFIG.yaml
 ```
 
-Loads or builds the taxonomy, builds strategies and meta prompts if missing (skipped with `generation.meta_prompts: false`), generates data, validates records, runs critic/refine, and writes dataset artifacts. It does not run evaluation.
+Loads or builds the taxonomy, builds strategies and meta-prompts if missing (skipped with `generation.meta_prompts: false`), generates data, validates records, runs critic/refine, and writes dataset artifacts. It does not run evaluation.
 
 Pass `--stop-after {taxonomy,strategies,meta_prompts}` (or set `generation.stop_after` in the
 config) to halt once that stage's artifact is written. Edit the artifact, then rerun: existing
@@ -322,7 +322,7 @@ memory. Highly repetitive inputs can still produce many candidate comparisons.
 It is written before anything else and reused when present, so a rerun only fills attempts that have
 none. With `subject: auto` the model's pick of the subject factor is stored in `taxonomy.json` under
 `"subject"`. A situation is not a meta-prompt: it covers one factor and says only what the record is
-about, while a meta-prompt is the whole brief for the record (`DOCS.md`, "Situations and meta-prompts").
+about, while a meta-prompt is the whole plan for the record (`DOCS.md`, "Situations and meta-prompts").
 
 `meta_prompts.jsonl` holds one row per attempt (`attempt_index`, sampled `strategy_id` +
 `taxonomy_mix`, `meta_prompt`, `complexified`). Like `taxonomy.json` and `strategies.json` it is

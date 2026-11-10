@@ -128,7 +128,7 @@ These are two different things, and a run can use neither, either or both.
 
 | | Situation | Meta-prompt |
 |---|---|---|
-| What it is | One sentence naming the concrete thing a record is about: one specific case of its subject node | A short brief (about 80 words) for one record: what happens, who is involved, how it is written |
+| What it is | One sentence naming the concrete thing a record is about: one specific case of its subject node | A short instruction (about 80 words) for one record: what happens, who is involved, how it is written |
 | Built from | One factor, the **subject** | The whole mix, plus the situation when there is one |
 | Says nothing about | Tone, length, format, who is writing | Nothing: it is the full plan |
 | Turned on by | `generation.subject` (a factor name, or `auto`) | `generation.meta_prompts: true` (the default) |
@@ -473,7 +473,7 @@ change it (blank sections fall back to defaults). Required fields have no defaul
 | `meta_prompts`       | Write a reviewable meta-prompt per attempt first; `false` = combined path. | `true` | yes      | bool |
 | `meta_prompts_per_mix`  | Meta-prompts per sampled mix; **each becomes an attempt** sharing the mix. | `1` | yes      | integer > 0 (needs `meta_prompts: true` when > 1) |
 | `meta_batch_size`    | Batch mode A: mixes per meta-prompt call.                         | `1`     | yes         | integer > 0 (needs `meta_prompts: true` when > 1) |
-| `record_batch_size`         | Records per record call: mode B with meta prompts, mode C without. | `1`    | yes         | integer > 0 |
+| `record_batch_size`         | Records per record call: mode B with meta-prompts, mode C without. | `1`    | yes         | integer > 0 |
 | `model_picked`       | Combined path: `{factor: level}` the model picks per record.      | `{}`    | yes         | mapping of factor name → level ≥ 1 |
 | `code_level`         | `{factor: level}`: code samples the factor down to this level; the writer picks specifics beneath. | `{}`    | yes         | mapping of factor name → level ≥ 1 |
 | `subject`            | The factor that says what a record is about; each of its nodes gets a list of situations, one per record, and batches hold one node. `auto` = the model picks once the tree is built. | `null`  | yes         | a factor name (code-sampled), `auto`, `null` |
@@ -537,7 +537,7 @@ drawn. One call writes K meta-prompts for one sampled point and **every one beco
 attempt**, so K=3 means a third as many mixes and meta-prompt calls, three records per mix.
 
 Three batch modes cut calls: **A** `meta_batch_size` writes the meta-prompts for several mixes in one
-call, **B** `record_batch_size` (with meta prompts on) writes the records for several meta-prompts in one call,
+call, **B** `record_batch_size` (with meta-prompts on) writes the records for several meta-prompts in one call,
 and they combine. `generation.meta_prompts: false` is mode **C**, the **combined path**: no meta-prompt step and no
 `meta_prompts.jsonl`; one `bulk` call writes `record_batch_size` records straight from their sampled points,
 each with a one-line plan. Every record is then validated, repaired and critiqued on its own and keeps

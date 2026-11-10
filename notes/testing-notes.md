@@ -240,7 +240,7 @@ critic) + up to max_refine_attempts refine(+critique). Accept-first-try ~3.3 cal
 ### 2026-06-24 — FULL 10K RUN: LAUNCHED
 - Pricing (OpenRouter, web-checked): flash $0.09/M in, $0.18/M out; pro $0.435/M in, $0.87/M out.
 - SPEND so far (sunk): taxonomy ~$4.79 (1877 pro calls, 3.28M in/3.87M out) + smoke ~$0.16 = ~$5.
-- 10K estimate: scale smoke per-attempt (3752 in / 5265 out, incl. reasoning + 3-scenario meta) x 13000
+- 10K estimate: scale smoke per-attempt (3752 in / 5265 out, incl. reasoning + 3-meta-prompt meta) x 13000
   attempts (10K/0.97 accept, overgen 1.3) -> ~48.8M in + ~68.4M out -> ~$16.7; with nitro/variance margin
   ~$17-25. Total project ~$22-30.
 - USER DECISIONS: nitro on (bulk+critic = deepseek-v4-flash:nitro), meta_prompts_per_mix=3 kept (max

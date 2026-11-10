@@ -353,7 +353,7 @@ def test_meta_prompt_knobs_require_the_meta_prompt_step(tmp_path: Path) -> None:
     for knob in ("meta_prompts_per_mix", "meta_batch_size"):
         with pytest.raises(ValueError, match=knob):
             load_config(_write_config(tmp_path, {"generation": {"meta_prompts": False, knob: 2}}))
-    # record_batch_size batches the record step on either path (mode B with meta prompts, mode C without).
+    # record_batch_size batches the record step on either path (mode B with meta-prompts, mode C without).
     assert load_config(_write_config(tmp_path, {"generation": {"record_batch_size": 4}})).generation.record_batch_size == 4
     assert load_config(_write_config(tmp_path, {"generation": {"meta_prompts": False, "record_batch_size": 4}})).generation.record_batch_size == 4
 
@@ -369,7 +369,7 @@ def test_model_picked_needs_the_combined_path(tmp_path: Path) -> None:
 
 def test_unknown_or_renamed_keys_are_errors(tmp_path: Path) -> None:
     # A typo or an old knob name must not be silently ignored.
-    for extra in ({"generation": {"scenarios_per_mix": 3}}, {"generation": {"batch_size": 5}}, {"taxonomy": {"depht": 3}}, {"genration": {}}):
+    for extra in ({"generation": {"prompts_per_mix": 3}}, {"generation": {"batch_size": 5}}, {"taxonomy": {"depht": 3}}, {"genration": {}}):
         with pytest.raises(ValueError, match="Extra inputs are not permitted"):
             load_config(_write_config(tmp_path, extra))
     # Role-level decoding params stay open (they pass through to the provider).

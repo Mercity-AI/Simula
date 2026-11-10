@@ -62,7 +62,7 @@ generation:
   target_size: 50              # rows wanted in dataset.final.jsonl (accepted rows trimmed back to this)
   overgenerate_ratio: 1.3      # attempts = ceil(target_size * this); buffer for rejected rows
   trim: true                 # false keeps all accepted rows after optional dedupe, even above target
-  # A meta-prompt is a short written brief for one record, built from its whole mix (and its situation, see
+  # A meta-prompt is a short written instruction for one record, built from its whole mix (and its situation, see
   # `subject`). true = one is written per record first and kept in meta_prompts.jsonl, where you can read and
   # edit it; false = the combined path: the writer plans and writes record_batch_size records per call, straight
   # from their mixes. The combined path is the cheaper one (CONFIG.md, SKILL.md "Pick the generation path").

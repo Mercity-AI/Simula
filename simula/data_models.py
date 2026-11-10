@@ -49,7 +49,7 @@ _NUMERIC_SAMPLING_PARAMS = {
 
 
 class _Section(BaseModel):
-    """Base for config sections: an unknown key (a typo, or a renamed knob like scenarios_per_mix) is an
+    """Base for config sections: an unknown key (a typo, or a knob that was renamed) is an
     error at load instead of being silently ignored."""
 
     model_config = ConfigDict(extra="forbid")

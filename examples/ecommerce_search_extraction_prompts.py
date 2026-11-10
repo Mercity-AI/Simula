@@ -61,7 +61,7 @@ _TYPE_SPECS = (
 
 
 def meta_prompt_prompt(description: str, schema: dict[str, Any] | None, mix: list[dict[str, Any]], k: int) -> str:
-    # Each meta-prompt is a short brief for ONE search inside the sampled mix: the product, how the
+    # Each meta-prompt is a short instruction for ONE search inside the sampled mix: the product, how the
     # shopper phrases it, and HOW MANY atomic constraints (which sets both the JSON size and the query
     # length). It describes the search; the generator writes the query and picks the exact values.
     several = (
@@ -83,15 +83,15 @@ dominate, and the linguistic complexity / number of constraints):
 
 {_CONFLICT_RULE}
 
-Write {k} meta-prompt{"s" if k > 1 else ""}. A meta-prompt is a brief (at most 70 words) for a generator and MUST:
-{_BRIEF_RULES}{several}
+Write {k} meta-prompt{"s" if k > 1 else ""}. A meta-prompt is a short instruction (at most 70 words) for a generator and MUST:
+{_META_PROMPT_RULES}{several}
 Return JSON:
 {{"meta_prompts": ["..."]}}
 """.strip()
 
 
 def meta_prompt_batch_prompt(description: str, schema: dict[str, Any] | None, items: list[dict[str, Any]]) -> str:
-    # Batch mode A: briefs for several sampled mixes in one call, under the same rules as meta_prompt_prompt.
+    # Batch mode A: meta-prompts for several sampled mixes in one call, under the same rules as meta_prompt_prompt.
     specs = "\n\n".join(f"{item['id']} ({item['count']} meta-prompt{'s' if item['count'] > 1 else ''}):\n{mix_text(item['mix'])}" for item in items)
     return f"""
 You are planning examples for an e-commerce search-query extraction dataset.
@@ -104,9 +104,9 @@ which attribute families dominate, and the linguistic complexity / number of con
 
 {_CONFLICT_RULE}
 
-For each id, write the number of meta-prompts it asks for. A meta-prompt is a brief (at most 70 words)
+For each id, write the number of meta-prompts it asks for. A meta-prompt is a short instruction (at most 70 words)
 for a generator and MUST:
-{_BRIEF_RULES}
+{_META_PROMPT_RULES}
 Several meta-prompts for one id must be genuinely different searches (a different concrete product inside
 the vertical, buyer, context and phrasing).
 
@@ -188,7 +188,7 @@ Each example is a JSON object with EXACTLY these two top-level keys:
 """.strip()
 
 _BATCH_VARIETY = """These are independent searches by different shoppers: they must not read like a batch. Vary openers,
-sentence shapes, brands, price points, sizes and situations; never reuse a template or the same numbers."""
+sentence shapes, brands, price points, sizes and circumstances; never reuse a template or the same numbers."""
 
 _SIZE_RULE = """- set the TARGET NUMBER OF CONSTRAINTS: small = 3-5 fields, medium = 6-11, large = 12-20. Use the
   size the query_complexity node names; when it names none, pick the size its phrasing implies (a terse
@@ -209,7 +209,7 @@ _HARDER_RULE = (
     "the number of constraints."
 )
 
-_BRIEF_RULES = f"""- name the concrete product being searched for, inside the sampled product vertical, and a realistic
+_META_PROMPT_RULES = f"""- name the concrete product being searched for, inside the sampled product vertical, and a realistic
   buying context that fits the sampled intent;
 - set the phrasing style (terse keyword string, a normal sentence, or a chatty multi-sentence request);
 {_SIZE_RULE}

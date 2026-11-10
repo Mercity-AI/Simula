@@ -326,7 +326,7 @@ Use `"model": "fake"` for tests. Do not require network access in tests.
   `.config`) — do not inline it.
 - Add a command to tail/summarize `llm_calls.jsonl`.
 - Add multi-turn generation modes (see `TODO.md`). Batched generation exists: modes A (`meta_batch_size`),
-  B (`record_batch_size` with meta prompts) and C (the combined path).
+  B (`record_batch_size` with meta-prompts) and C (the combined path).
 
 ## Safety and Privacy
 

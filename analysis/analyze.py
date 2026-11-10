@@ -64,7 +64,7 @@ def pre_critic_records(run: Path, rows: list[dict]) -> dict[int, dict]:
         batch_marker = "Meta-prompts (each is the specific instance to build):\n"
         for call in calls:
             marker = "Meta-prompt (the specific instance to build):\n"
-            if batch_marker in call["prompt"]:  # batch mode B: ids map to scenarios in the prompt
+            if batch_marker in call["prompt"]:  # batch mode B: ids map to meta-prompts in the prompt
                 section = call["prompt"].split(batch_marker, 1)[1].rsplit("\n\nReturn JSON", 1)[0]
                 specs = dict(re.findall(r"^(r\d+):\n(.*?)(?=\n\nr\d+:\n|\Z)", section, flags=re.S | re.M))
                 for item in _batch_items(call["response"], "record"):

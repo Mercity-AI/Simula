@@ -22,7 +22,7 @@ SYSTEM_TEXT = (
 )
 
 
-# Context rules: supplied context (the description, a product brief, examples) is background, not a menu. Without
+# Context rules: supplied context (the description, product notes, examples) is background, not a menu. Without
 # them a model anchors on the context's few concrete details: they end up in node descriptions as "such as"
 # examples and then in a large share of records. Prompt modules can import and include them in their overrides.
 TAXONOMY_CONTEXT_RULE = (
@@ -356,7 +356,7 @@ def meta_prompt_prompt(description: str, schema: dict[str, Any] | None, mix: lis
     # k > 1: every meta-prompt becomes its own record sharing this mix, so they must differ for real.
     format_instruction = "The final data point will be free-form text." if schema is None else f"Output JSON Schema:\n{schema_text(schema)}"
     several = (
-        f"\nAll {k} meta-prompts become separate records built from these same ingredients, so make them genuinely distinct records — different situations, details and angles — not rewordings of one idea."
+        f"\nAll {k} meta-prompts become separate records built from these same ingredients, so make them genuinely distinct records — different content, details and angles — not rewordings of one idea."
         if k > 1
         else ""
     )
@@ -369,7 +369,7 @@ Dataset description:
 Sampled ingredients for this record (not a strict checklist):
 {json.dumps(mix, ensure_ascii=False)}
 
-Write {k} meta-prompt{"s" if k > 1 else ""}. A meta-prompt tells a generator what record to create: the situation and the content the record must carry, in at most 80 words. Describe the record; do not write it.{several}
+Write {k} meta-prompt{"s" if k > 1 else ""}. A meta-prompt tells a generator what record to create: what it is about and the content it must carry, in at most 80 words. Describe the record; do not write it.{several}
 {CONTEXT_RULE}
 Think about what this combination of ingredients implies for the finished record. Full coverage of the ingredients, although important, is not the goal by itself — coherence, and being smart about what the combination should produce, is just as important, if not more. If ingredients conflict or their sum would be incoherent, build the meta-prompt around the load-bearing ones and soften or drop the rest.
 Return JSON:
@@ -389,8 +389,8 @@ Dataset description:
 {format_instruction}
 
 Below are sets of sampled ingredients (not strict checklists), one per id. For each id, write the number of
-meta-prompts it asks for. A meta-prompt tells a generator what record to create: the situation and the
-content the record must carry, in at most 80 words. Describe the record; do not write it.
+meta-prompts it asks for. A meta-prompt tells a generator what record to create: what it is about and the
+content it must carry, in at most 80 words. Describe the record; do not write it.
 - Think about what each combination of ingredients implies for the finished record. Full coverage of the ingredients, although important, is not the goal by itself — coherence, and being smart about what the combination should produce, is just as important, if not more. If ingredients conflict or their sum would be incoherent, build around the load-bearing ones and soften or drop the rest.
 - {DIVERSITY_RULE} This holds across ids and between several meta-prompts for one id.
 - {CONTEXT_RULE}
