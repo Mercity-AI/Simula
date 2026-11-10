@@ -227,12 +227,16 @@ async def _build_subject_pool(cfg: Config, router: ModelRouter, entries: list[tu
         for start in range(0, len(indexes), SUBJECT_POOL_CHUNK):
             chunk = indexes[start : start + SUBJECT_POOL_CHUNK]
             prompt = cfg.prompts.subject_pool_prompt(cfg.description, entry, len(chunk), written[-SUBJECT_POOL_SHOWN:])
-            try:
-                async with limiter:
-                    response = await router.complete_json("bulk", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.SUBJECT_POOL)
-                situations = [s.strip() for s in response.get("situations") or [] if isinstance(s, str) and s.strip()]
-            except Exception:  # noqa: BLE001 - a failed pool call leaves its attempts to their mixes
-                situations = []
+            situations: list[str] = []
+            for _ in range(2):  # a malformed reply loses the whole chunk, so ask once more
+                try:
+                    async with limiter:
+                        response = await router.complete_json("bulk", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.SUBJECT_POOL)
+                    situations = [s.strip() for s in response.get("situations") or [] if isinstance(s, str) and s.strip()]
+                except Exception:  # noqa: BLE001 - a pool call that fails twice leaves its attempts to their mixes
+                    continue
+                if situations:
+                    break
             for index, situation in zip(chunk, situations):
                 rows.append({"attempt_index": index, "subject": list(key), "situation": situation})
                 written.append(situation)

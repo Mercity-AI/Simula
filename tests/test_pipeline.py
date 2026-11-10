@@ -905,6 +905,21 @@ def test_subject_pool_gives_each_record_its_own_situation(tmp_path: Path, path: 
         assert all(row["meta_prompt"].count("Situation: ") == 1 for row in rows)
 
 
+def test_subject_pool_retries_a_failed_call(tmp_path: Path) -> None:
+    # A malformed pool reply would leave its whole chunk of attempts without a situation.
+    class FailsOnce(_Recording):
+        async def complete(self, role, prompt, system, task="unknown"):  # type: ignore[override]
+            if str(task) == "subject_pool" and not self.__dict__.setdefault("failed", False):
+                self.failed = True
+                return '{"situations": ["cut off"}'
+            return await super().complete(role, prompt, system, task=task)
+
+    gen = {"meta_prompts": False, "record_batch_size": 2, "subject": "topic", "subject_pool": True, "target_size": 8}
+    cfg = load_config(write_config(tmp_path, _gen(gen)))
+    asyncio.run(generate_dataset(cfg, FailsOnce(cfg.data), quiet=True))
+    assert len(read_jsonl(artifact_path(cfg.output_dir, "subject_pool"))) == 8
+
+
 def test_built_in_writer_prompts_carry_the_phrasing_rule() -> None:
     from simula import prompts as P
 
