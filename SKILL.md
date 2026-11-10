@@ -47,6 +47,7 @@ fake smoke first") so they can veto; do not ask permission for each.
 | **Fixed vs per-row schema** | Decides between a strict `schema` and an open envelope plus a prompt module. | Ask only if the description is ambiguous; otherwise infer and say so. |
 | **Record critic off** | `generation.critic: false` is the cheapest setting but ships unchecked records. | Only if they ask for the cheapest possible run; tell them the trade. |
 | **Pilot size** | The pilot is the only place a bias is cheap to fix. Skipping or shrinking it is the user's call, not yours. | Say it in these terms: "Before the full run I strongly suggest a pilot on the same tree and strategies the full run will use. Ideally 5–7% of the target, and no less than 2–5%; in rows, at least about 1,000, and 3,000–5,000 for a large run. That is enough to see biases (label shares off target, repeated names and details, labels that do not match the text, near-copies) and fix them before paying for all of it. It will cost about $X. OK?" |
+| **Conflicting combinations** | Excluding them, or keeping them, changes what the dataset contains and what a model trained on it learns. | After the pilot, show the grid of label agreement by pair of factors and the options from "Combinations that pull against a label", with your recommendation. |
 | **Final scale-up** | A large run is real money. | Report what the pilot showed and what you fixed, then confirm once before going to full size. |
 
 ## Workflow
@@ -152,8 +153,10 @@ cheapest quality gate in the pipeline. Check five things:
 - **Bundles vs. concentration.** Ask what a record drawn from each strategy looks like. A strategy
   whose roots for some factor are only unusual branches makes them mandatory. Let taxonomy weights own
   prevalence, and use a bare factor name for any factor a strategy has no opinion about.
-- **Combinations vs. coherence.** Look for two factors owning the same idea, and for pairs that are
-  fine alone but impossible together. A few such pairs are what `never_combine` is for.
+- **Combinations vs. coherence.** Look for two factors owning the same idea (a topic tree whose leaves
+  already say how severe the case is, next to a separate severity factor), and for pairs that are fine
+  alone but impossible together. A few such pairs are what `never_combine` is for; it has side effects,
+  described in "Combinations that pull against a label".
 - **Strategies vs. shares.** A strategy that lists only some branches of a factor overrides that
   factor's tree weights for its share of the run. `generate` measures this as soon as strategies exist
   (so the design step shows it) and prints `strategies skew '<factor>': …` naming the strategy. Treat every such line as a question for
@@ -224,6 +227,78 @@ a first opinion and check its work before you apply it:
 Then set `generation.code_level` before the pilot (it is part of the resume fingerprint). If you
 cannot run the script, answer the two questions yourself from `taxonomy.json`; it is the same
 reasoning.
+
+## Combinations that pull against a label
+
+Factors are drawn independently, but in the real world they are not independent. An angry customer
+usually has a serious problem. A large paying account's outage is urgent; a hobbyist's is not. Independent
+draws therefore produce records whose ingredients pull against a value stored in the record: a low
+priority with a furious tone, an urgent priority on a free plan, a low priority on a topic that is an
+incident by nature.
+
+These records are not mistakes. They exist in real data (an angry customer with a trivial problem), and
+they are exactly what a classifier most needs to see. They are also the hardest records to write, because
+the writer must hold one ingredient against the grain of another. A cheap bulk model, the kind you use
+when generating at scale, usually cannot: it resolves the tension in the text and leaves the label as
+rolled. The ticket gains stakes that justify the anger, now reads as high priority, and still says low. A
+stronger model can probably hold both; we have not measured that, so check it in the pilot before relying
+on it.
+
+**The example this comes from.** 10,000 support tickets written by a small, cheap model (GLM 5.3 Flash),
+with category, priority, mood, customer tier and ticket style all rolled independently. A second model
+labelled every ticket blind, and we counted how often it gave the priority the dataset had.
+
+| Tickets | Share of the set | Priority confirmed |
+|---|---|---|
+| No ingredient pulls against the priority | 66% | 69% |
+| Mood pulls against it (low + frustrated or angry; high or urgent + friendly) | 16% | 33% |
+| Customer tier pulls against it (urgent + free plan; low or medium + enterprise) | 12% | 30% |
+| Topic pulls against it (an incident topic rolled low; a billing question rolled urgent) | 9% | 26% |
+| Style pulls against it (low + a thread that raises several issues) | 9% | 35% |
+
+The two-thirds with no conflict were confirmed as often as a set where the writer chose its own labels
+(68%). The whole gap between the two sets sat in the conflicting third, which produced half of all the
+disagreements. Low + angry alone was confirmed 11% of the time. The critic did not repair it: it rejected
+about half of those tickets, and the rewrite it returned read the same way.
+
+**What excluding them did.** We then put all four kinds in `never_combine`, re-fitted the weights so every
+factor kept its shares, and generated 2,000 more tickets with the same cheap model:
+
+| | Topic conflicts excluded | All four kinds excluded | Writer-labelled set |
+|---|---|---|---|
+| Priority confirmed | 55% | 65% | 68% |
+| Low confirmed | 48% | 70% | 78% |
+| Urgent confirmed | 38% | 54% | 54% |
+| Off by two or more levels | 4.9% | 1.6% | 0.8% |
+
+The labels became about as readable as the writer-labelled set's, and the marginal shares stayed on target.
+The price shows only when you look inside: every enterprise ticket is now high or urgent, no free-plan
+ticket is urgent, no frustrated or angry ticket is low, and no multi-issue thread is low. A model trained
+on this set learns those shortcuts, and it never sees an angry customer with a small problem.
+
+**Find them in the pilot.** Have a model label a sample blind, then tabulate agreement for each label
+against every other factor, one grid per pair. A cell far below the rest of its row is a conflict. Read
+ten records from that cell before deciding anything: sometimes the dataset is right and the labeller is
+reading tone as severity.
+
+**Then choose, and know what each choice costs.** Every option has a second-order consequence.
+
+- **Exclude the pair with `never_combine`.** A violating mix is redrawn whole, so *every* factor's shares
+  move, not only the two you named. In the example, excluding the topic conflicts alone would have taken
+  urgent from 10% to 5% and medium from 35% to 42%. The `strategies skew` warning reports this; re-fit the
+  tree's top-level weights until the shares are back, and expect the weights to end up far from the shares
+  (low priority needed a weight of 1.55 to stay at 30%). Exclusion also rewrites the joint distribution:
+  with enterprise barred from low and medium, every enterprise ticket is high or urgent, and a model
+  trained on that learns "enterprise means high". And it removes the hard cases, so the dataset becomes
+  easier than the world it stands for.
+- **Keep the combination and give it to a model that can write it.** A stronger `bulk` model costs more per
+  record; measure on a few hundred records whether it actually holds the label.
+- **Keep it and say which ingredient decides which field** in the writer prompt (for a ticket: the facts
+  decide priority, the wording carries mood). Cheap to try; untested in our runs.
+- **Keep it and accept the noise.** Then tell the user how much, and in which cells.
+
+Exclude what is impossible. For what is merely hard, the decision is the user's: it changes what the
+dataset contains, so bring it to them with the grid and the options (it is a gate, see "Decision gates").
 
 ## Representation decisions
 
@@ -344,14 +419,10 @@ Work through all of these. Each line says what to look at and what to do when it
   changing labels (compare each record's label with its `taxonomy_mix`). Fix `strategies.json` or the
   prompt, not the count.
 - **Labels against the text.** For any dataset with labels, have a model label a few hundred records
-  blind (it sees the record, never the dataset's label) and compare. Break the agreement down by
-  combination of factors, not just by label: sampling is independent, so a low-priority label can be
-  rolled together with an angry tone, the writer raises the stakes to justify the anger, and the record
-  reads as high while its label says low. In our benchmark low + angry was confirmed 12% of the time and
-  low + positive 77%. Impossible pairs go in `never_combine`. For a pair that is possible but keeps
-  reading wrong, the critic will not save you (it rejects about half of them and its rewrite reads the
-  same): either exclude the pair, accept the noise and tell the user, or let the writer choose that label
-  with `model_picked` and give up exact shares for it. Bring this to the user as a choice.
+  blind (it sees the record, never the dataset's label) and compare, per label and per pair of factors.
+  Low agreement concentrated in a few cells means ingredients are pulling against the label there: follow
+  "Combinations that pull against a label". Low agreement spread evenly means the label definitions
+  themselves are loose; tighten them with the user before generating more.
 - **Lineage.** Nothing verifies that a record matches its `taxonomy_mix`. Read a dozen rows against
   their mix: right subject, right shape or length? If a factor is routinely ignored, fix the prompt or
   the factor before scaling. `evaluation.coverage_mode: reassign` measures it with extra critic calls.
