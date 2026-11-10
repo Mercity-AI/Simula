@@ -71,14 +71,42 @@ async def build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, Any]:
     return taxonomy
 
 
+AUTO_SUBJECT = "auto"  # generation.subject value that lets the model pick the subject factor
+
+
 async def load_or_build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, Any]:
-    """Reuse taxonomy.json if present (so a resumed run keeps an edited tree), else build it."""
+    """Reuse taxonomy.json if present (so a resumed run keeps an edited tree), else build it. With
+    generation.subject: auto, the model's pick of the subject factor is made once and kept in the artifact
+    ("subject": a factor name or null), so reruns reuse it and it can be edited like the tree."""
     path = artifact_path(cfg.output_dir, "taxonomy")
-    existing = read_json(path)
-    if existing:
-        info(f"[dim]Reusing taxonomy.json ({len(existing.get('factors', []))} factors)[/dim]")
-        return existing
-    return await build_taxonomy(cfg, router)
+    taxonomy = read_json(path)
+    if taxonomy:
+        info(f"[dim]Reusing taxonomy.json ({len(taxonomy.get('factors', []))} factors)[/dim]")
+    else:
+        taxonomy = await build_taxonomy(cfg, router)
+    if cfg.generation.subject == AUTO_SUBJECT and "subject" not in taxonomy:
+        taxonomy["subject"] = await _pick_subject(cfg, router, taxonomy)
+        write_json(path, taxonomy)
+    return taxonomy
+
+
+def subject_factor(cfg: Config, taxonomy: dict[str, Any]) -> str | None:
+    """The factor whose nodes get situations (generation.subject): the named factor, or with "auto" the pick kept
+    in taxonomy.json. None = no subject."""
+    subject = cfg.generation.subject
+    return taxonomy.get("subject") if subject == AUTO_SUBJECT else subject
+
+
+async def _pick_subject(cfg: Config, router: ModelRouter, taxonomy: dict[str, Any]) -> str | None:
+    # Model-picked factors are not code-sampled, so they cannot be the subject.
+    eligible = [factor for factor in taxonomy["factors"] if factor["name"] not in cfg.generation.model_picked]
+    with spinner("Picking the subject factor"):
+        prompt = cfg.prompts.subject_prompt(cfg.description, eligible)
+        response = await router.complete_json("strategic", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.SUBJECT)
+    picked = response.get("subject")
+    subject = next((f["name"] for f in eligible if isinstance(picked, str) and _norm_segment(f["name"]) == _norm_segment(picked)), None)
+    info(f'[dim]Subject factor: {subject or "none"} (the model\'s pick; edit "subject" in taxonomy.json to change it)[/dim]')
+    return subject
 
 
 async def build_strategies(cfg: Config, router: ModelRouter, taxonomy: dict[str, Any]) -> list[dict[str, Any]]:
@@ -209,6 +237,16 @@ def mix_space(taxonomy: dict[str, Any], strategy: dict[str, Any], code_level: di
         matched = [node for node in walk_nodes(factor) if _path_key(node.get("path", [node["name"]])) in roots]
         total *= sum(_leaf_count(node, stop) for node in matched) or _leaf_count(factor, stop)
     return total
+
+
+def restricting_strategies(strategies: list[dict[str, Any]], factor_name: str) -> list[str]:
+    """Ids of the strategies whose taxonomy_roots limit this factor to some of its branches."""
+    factor_key = _norm_segment(factor_name)
+    return [
+        strategy.get("id", "general")
+        for strategy in strategies
+        if any(len(key := _root_key(str(root))) > 1 and key[0] == factor_key for root in strategy.get("taxonomy_roots") or [])
+    ]
 
 
 def _leaf_count(node: dict[str, Any], stop: int | None = None) -> int:

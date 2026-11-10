@@ -7,7 +7,7 @@ import yaml
 
 from simula.cli import main
 from simula.config import load_config
-from simula.generate import _generate_one_safe, _subject_units, generate_dataset
+from simula.generate import _batches, _generate_one_safe, _subject_nodes, generate_dataset
 from simula.models import ModelRouter
 from simula.utils import artifact_path, read_jsonl, write_jsonl
 from simula.taxonomy import build_strategies, build_taxonomy, sample_mix
@@ -798,10 +798,14 @@ def test_combined_path_complexifies_the_written_record_in_its_own_call(tmp_path:
     assert len(rows) == 4 and all(row["accepted"] and not row["complexified"] for row in rows)
 
 
-def test_subject_units_group_by_subject() -> None:
-    keyed = [(("topic", "a"), 0), (("topic", "b"), 1), (("topic", "a"), 2), (("topic", "a"), 3), (("topic", "b"), 4)]
-    # Each batch holds one subject node.
-    assert _subject_units(keyed, 2) == [(("topic", "a"), [0, 2]), (("topic", "a"), [3]), (("topic", "b"), [1, 4])]
+def test_batches_hold_one_subject_node() -> None:
+    entry = lambda node: {"factor": "topic", "node": node, "path": ["topic", node]}  # noqa: E731
+    mixes = {0: [entry("a")], 1: [entry("b")], 2: [entry("a")], 3: [entry("a")], 4: [entry("b")], 5: []}
+    nodes = _subject_nodes(mixes, "topic")
+    # Each batch holds one subject node; an attempt with no usable mix is batched apart.
+    assert _batches(list(mixes), 2, nodes) == [[0, 2], [3], [1, 4], [5]]
+    # Without a subject, attempts are batched in order.
+    assert _batches(list(mixes), 4, {}) == [[0, 1, 2, 3], [4, 5]]
 
 
 def test_subject_must_be_a_code_sampled_taxonomy_factor(tmp_path: Path) -> None:
@@ -874,26 +878,21 @@ def test_built_in_prompts_carry_the_context_rules() -> None:
         assert P.CONTEXT_RULE in prompt
 
 
-def test_subject_pool_requires_a_subject(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="subject_pool requires"):
-        load_config(write_config(tmp_path, _gen({"meta_prompts": False, "subject_pool": True})))
-
-
 @pytest.mark.parametrize("path", ["combined", "meta_prompts"])
-def test_subject_pool_gives_each_record_its_own_situation(tmp_path: Path, path: str, monkeypatch) -> None:
+def test_subject_gives_each_record_its_own_situation(tmp_path: Path, path: str, monkeypatch) -> None:
     import simula.generate as G
 
-    monkeypatch.setattr(G, "SUBJECT_POOL_CHUNK", 2)  # several pool calls per node, so later ones see earlier ones
+    monkeypatch.setattr(G, "SITUATIONS_PER_CALL", 2)  # several listing calls per node, so later ones see earlier ones
     gen = {"meta_prompts": False, "record_batch_size": 2} if path == "combined" else {"meta_batch_size": 2}
-    cfg = load_config(write_config(tmp_path, _gen({**gen, "subject": "topic", "subject_pool": True, "target_size": 8, "concurrency": 8})))
+    cfg = load_config(write_config(tmp_path, _gen({**gen, "subject": "topic", "target_size": 8, "concurrency": 8})))
     router = _Recording(cfg.data)
     rows = asyncio.run(generate_dataset(cfg, router, quiet=True))
     asyncio.run(router.flush_logs())
-    pool = read_jsonl(artifact_path(cfg.output_dir, "subject_pool"))
+    pool = read_jsonl(artifact_path(cfg.output_dir, "situations"))
     log = read_jsonl(Path(cfg.output_dir) / "llm_calls.jsonl")
-    pool_prompts = [row["prompt"] for row in log if row["task"] == "subject_pool"]
+    pool_prompts = [row["prompt"] for row in log if row["task"] == "situations"]
     writer = [row["prompt"] for row in log if row["task"] == ("generate" if path == "combined" else "meta_prompt")]
-    # One situation per attempt, never reused within a node; pool calls after the first on a node see earlier ones.
+    # One situation per attempt, never reused within a node; listing calls after the first on a node see earlier ones.
     assert len(rows) == 8 and len(pool) == 8
     by_node: dict[str, list[str]] = {}
     for row in pool:
@@ -905,27 +904,74 @@ def test_subject_pool_gives_each_record_its_own_situation(tmp_path: Path, path: 
         assert all(row["meta_prompt"].count("Situation: ") == 1 for row in rows)
 
 
-def test_subject_pool_retries_a_failed_call(tmp_path: Path) -> None:
-    # A malformed pool reply would leave its whole chunk of attempts without a situation.
+def test_situations_retry_a_failed_call(tmp_path: Path) -> None:
+    # A malformed reply would leave its whole chunk of attempts without a situation.
     class FailsOnce(_Recording):
         async def complete(self, role, prompt, system, task="unknown"):  # type: ignore[override]
-            if str(task) == "subject_pool" and not self.__dict__.setdefault("failed", False):
+            if str(task) == "situations" and not self.__dict__.setdefault("failed", False):
                 self.failed = True
                 return '{"situations": ["cut off"}'
             return await super().complete(role, prompt, system, task=task)
 
-    gen = {"meta_prompts": False, "record_batch_size": 2, "subject": "topic", "subject_pool": True, "target_size": 8}
+    gen = {"meta_prompts": False, "record_batch_size": 2, "subject": "topic", "target_size": 8}
     cfg = load_config(write_config(tmp_path, _gen(gen)))
     asyncio.run(generate_dataset(cfg, FailsOnce(cfg.data), quiet=True))
-    assert len(read_jsonl(artifact_path(cfg.output_dir, "subject_pool"))) == 8
+    assert len(read_jsonl(artifact_path(cfg.output_dir, "situations"))) == 8
 
 
-def test_built_in_writer_prompts_carry_the_phrasing_rule() -> None:
+def test_subject_auto_is_picked_once_and_kept_in_the_taxonomy(tmp_path: Path) -> None:
+    cfg = load_config(write_config(tmp_path, _gen({"meta_prompts": False, "record_batch_size": 2, "subject": "auto"})))
+    router = _Recording(cfg.data)
+    asyncio.run(generate_dataset(cfg, router, quiet=True))
+    # The fake names the first factor; the pick lands in taxonomy.json and situations are written for its nodes.
+    taxonomy = json.loads(artifact_path(cfg.output_dir, "taxonomy").read_text())
+    assert taxonomy["subject"] == "topic" and router.tasks.count("subject") == 1
+    assert {row["subject"][0] for row in read_jsonl(artifact_path(cfg.output_dir, "situations"))} == {"topic"}
+    # A rerun reuses the pick; a hand edit to null turns the subject off.
+    again = _Recording(cfg.data)
+    asyncio.run(generate_dataset(cfg, again, quiet=True))
+    assert "subject" not in again.tasks
+    taxonomy["subject"] = None
+    artifact_path(cfg.output_dir, "taxonomy").write_text(json.dumps(taxonomy))
+    off = _Recording(cfg.data)
+    asyncio.run(generate_dataset(cfg, off, resume=False, quiet=True))
+    assert "subject" not in off.tasks and "situations" not in off.tasks
+
+
+def test_strategy_that_restricts_a_factor_is_reported(tmp_path: Path, capsys) -> None:
+    cfg = load_config(write_config(tmp_path, _gen({"target_size": 400, "stop_after": "meta_prompts"})))
+    router = _Recording(cfg.data)
+    taxonomy = asyncio.run(build_taxonomy(cfg, router))
+    asyncio.run(build_strategies(cfg, router, taxonomy))
+    path = artifact_path(cfg.output_dir, "strategies")
+    capsys.readouterr()
+    # Half the mixes come from a strategy that only draws topic/alpha: alpha's share goes from 50% to 75%.
+    general = {"id": "general", "taxonomy_roots": ["topic", "difficulty"], "weight": 1.0}
+    path.write_text(json.dumps({"strategies": [general, {"id": "alpha_only", "taxonomy_roots": ["topic/alpha", "difficulty"], "weight": 1.0}]}))
+    with pytest.raises(SystemExit):
+        asyncio.run(generate_dataset(cfg, router, quiet=True))
+    err = " ".join(capsys.readouterr().err.split())
+    assert "strategies skew 'topic'" in err and "alpha_only" in err and "'difficulty'" not in err
+    # Unrestricted strategies leave the tree's shares alone: nothing is reported.
+    path.write_text(json.dumps({"strategies": [general]}))
+    with pytest.raises(SystemExit):
+        asyncio.run(generate_dataset(cfg, router, quiet=True))
+    assert "skew" not in capsys.readouterr().err
+
+
+def test_built_in_prompts_carry_the_shared_rules() -> None:
     from simula import prompts as P
 
     mix = [{"factor": "topic", "node": "a", "path": ["topic", "a"], "description": ""}]
     schema = {"type": "object", "properties": {"q": {"type": "string"}}}
-    for prompt in (P.meta_prompt_batch_prompt("d", schema, [{"id": "m1", "mix": mix, "count": 1}]),
-                   P.generate_record_prompt("d", schema, "mp"), P.generate_record_batch_prompt("d", schema, [{"id": "r1", "meta_prompt": "mp"}]),
-                   P.combined_batch_prompt("d", schema, [{"id": "r1", "mix": mix}], []), P.generate_text_prompt("d", "mp")):
+    batch_writers = (P.meta_prompt_batch_prompt("d", schema, [{"id": "m1", "mix": mix, "count": 1}]),
+                     P.generate_record_batch_prompt("d", schema, [{"id": "r1", "meta_prompt": "mp"}]),
+                     P.combined_batch_prompt("d", schema, [{"id": "r1", "mix": mix}], []))
+    for prompt in (*batch_writers, P.generate_record_prompt("d", schema, "mp"), P.generate_text_prompt("d", "mp")):
         assert P.PHRASING_RULE in prompt
+    # Writers that produce several records per call are told to keep them apart.
+    assert all(P.DIVERSITY_RULE in prompt for prompt in batch_writers)
+    # Critics judge the record as a reader would; whoever fixes it changes the content, not the intended values.
+    assert all(P.CRITIC_RULE in prompt for prompt in (P.critique_prompt("d", schema, "mp", {"q": "x"}), P.critique_text_prompt("d", "mp", "x")))
+    for prompt in (P.critique_prompt("d", schema, "mp", {"q": "x"}), P.refine_record_prompt(schema, "mp", {"q": "x"}, "c"), P.refine_text_prompt("d", "mp", "x", "c")):
+        assert P.REVISE_RULE in prompt

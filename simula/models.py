@@ -218,8 +218,11 @@ def fake_complete(prompt: str, counter: int = 0) -> str:
     """Deterministic fake model used by tests and smoke examples."""
     if "Generate exactly one synthetic data point matching the meta-prompt" in prompt:
         return f"Once upon a time there was a cat with id {counter}. The cat had adventures."
+    if "Which one factor is the subject" in prompt:
+        # Subject pick (generation.subject: auto): the first factor listed.
+        return json.dumps({"subject": re.search(r"^- ([^:\n]+):", prompt, flags=re.MULTILINE).group(1), "reason": "fake"})
     if '"situations"' in prompt:
-        # Subject pool prompt ("List N distinct ..."): N numbered fake situations.
+        # Situations prompt ("List N distinct ..."): N numbered fake situations.
         count = int(re.search(r"List (\d+) ", prompt).group(1))
         return json.dumps({"situations": [f"Situation {counter}-{i}" for i in range(count)]})
     if '"mixes"' in prompt:

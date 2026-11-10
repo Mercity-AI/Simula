@@ -15,7 +15,17 @@ from .evaluate import coverage_aware_trim, dedupe_rows, validate_record
 from .models import ModelRouter
 from .data_models import TaskType
 from .prompts import mix_text
-from .taxonomy import build_strategies, choose_strategy, find_option, level_options, load_or_build_taxonomy, mix_space, sample_mix
+from .taxonomy import (
+    build_strategies,
+    choose_strategy,
+    find_option,
+    level_options,
+    load_or_build_taxonomy,
+    mix_space,
+    restricting_strategies,
+    sample_mix,
+    subject_factor,
+)
 from .utils import (
     append_jsonl,
     artifact_path,
@@ -73,6 +83,7 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
     target = cfg.generation.target_size
     attempts = math.ceil(target * cfg.generation.overgenerate_ratio)
     _report_mix_space(cfg, taxonomy, strategies, attempts)
+    _report_strategy_skew(cfg, taxonomy, strategies, attempts)
     meta_rows = await _build_meta_prompts(cfg, router, taxonomy, strategies, attempts, quiet=quiet) if cfg.generation.meta_prompts else {}
     _stop_if_requested(cfg, "meta_prompts")
     completed_indexes = load_completed_attempt_indexes(raw_path) if resume else set()
@@ -95,32 +106,31 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
         size = cfg.generation.record_batch_size
         limiter = asyncio.Semaphore(max(1, cfg.generation.concurrency // size))
 
-        record_situations: dict[int, str] = {}  # combined path with generation.subject_pool
+        nodes: SubjectNodes = {}
+        situations: dict[int, str] = {}  # combined path only: on the meta-prompt path the scenarios carry them
 
-        async def _unit(unit: list[int], key: tuple[str, ...] = ()) -> list[dict[str, Any]]:
+        async def _unit(unit: list[int]) -> list[dict[str, Any]]:
             async with limiter:
                 if not cfg.generation.meta_prompts:
-                    return await _combined_batch(cfg, router, taxonomy, strategies, unit, bool(key), record_situations)
+                    return await _combined_batch(cfg, router, taxonomy, strategies, unit, situations)
                 if size == 1:
                     return [await _generate_one_safe(cfg, router, meta_rows[unit[0]])]
                 return await _scenario_batch(cfg, router, [meta_rows[index] for index in unit])
 
-        if cfg.generation.subject:
-            def _mix_of(index: int) -> list[dict[str, Any]]:
-                if cfg.generation.meta_prompts:
-                    return meta_rows.get(index, {}).get("taxonomy_mix", [])
-                try:  # the same deterministic draw _combined_batch makes for this attempt
-                    return _sample_lineage(cfg, taxonomy, strategies, index, 1)["taxonomy_mix"]
-                except Exception:  # noqa: BLE001 - unusable mixes are rejected inside the batch
-                    return []
-            units = _subject_units([(_subject_key(cfg, _mix_of(index)), index) for index in indexes], size)
-            if cfg.generation.subject_pool and not cfg.generation.meta_prompts:
-                entries = [(index, entry) for index in indexes if (entry := _subject_entry(cfg, _mix_of(index)))]
-                record_situations = await _build_subject_pool(cfg, router, entries)
-        else:
-            units = [((), indexes[start : start + size]) for start in range(0, len(indexes), size)]
+        def _mix_of(index: int) -> list[dict[str, Any]]:
+            if cfg.generation.meta_prompts:
+                return meta_rows.get(index, {}).get("taxonomy_mix", [])
+            try:  # the same deterministic draw _combined_batch makes for this attempt
+                return _sample_lineage(cfg, taxonomy, strategies, index, 1)["taxonomy_mix"]
+            except Exception:  # noqa: BLE001 - unusable mixes are rejected inside the batch
+                return []
+
+        if subject := subject_factor(cfg, taxonomy):
+            nodes = _subject_nodes({index: _mix_of(index) for index in indexes}, subject)
+            if not cfg.generation.meta_prompts:
+                situations = await _write_situations(cfg, router, nodes)
         async with asyncio.TaskGroup() as tg:
-            tasks = [tg.create_task(_unit(unit, key)) for key, unit in units]
+            tasks = [tg.create_task(_unit(unit)) for unit in _batches(indexes, size, nodes)]
             with track(len(indexes), "Generating", quiet=quiet) as advance:
                 for future in asyncio.as_completed(tasks):
                     for row in await future:
@@ -174,85 +184,82 @@ def _check_picked_factors(cfg: Config, taxonomy: dict[str, Any]) -> None:
             raise ValueError(f"generation.model_picked names factor {factor!r}, which is not in the taxonomy (factors: {names}).")
         if not level_options(taxonomy, factor, level):
             raise ValueError(f"generation.model_picked: factor {factor!r} has no nodes to offer at level {level}.")
-    if cfg.generation.subject is not None and cfg.generation.subject not in names:
-        raise ValueError(f"generation.subject names factor {cfg.generation.subject!r}, which is not in the taxonomy (factors: {names}).")
+    subject = subject_factor(cfg, taxonomy)
+    if subject is not None and subject not in names:
+        raise ValueError(f"generation.subject names factor {subject!r}, which is not in the taxonomy (factors: {names}).")
 
 
-# Subject grouping (generation.subject): a batch holds one subject node and is told so, so the records of
-# one call are written as different situations instead of each inventing the node's most obvious instance.
-# Telling records apart across calls is generation.subject_pool's job.
+# Subject and situations (generation.subject). The subject is the factor that says what a record is about. Each of its
+# nodes gets a list of situations, one per record, and a batch holds one node, so records that share a node are written
+# about different concrete things instead of every call inventing the node's most obvious instance.
+SITUATIONS_PER_CALL = 25  # situations one listing call writes
+SITUATIONS_SHOWN = 120    # earlier situations of the node shown to a listing call
+
+SubjectNodes = dict[tuple[str, ...], tuple[dict[str, Any], list[int]]]  # node path -> (its mix entry, attempt indexes)
 
 
-def _subject_key(cfg: Config, mix: list[dict[str, Any]]) -> tuple[str, ...]:
-    # The subject factor's sampled node (its full path); () when grouping is off or the mix is unusable.
-    entry = next((entry for entry in mix if entry.get("factor") == cfg.generation.subject), None)
-    return tuple(entry.get("path") or [entry["node"]]) if entry else ()
+def _subject_nodes(mixes: dict[int, list[dict[str, Any]]], subject: str) -> SubjectNodes:
+    """Attempts grouped by the subject node their mix sampled. An attempt whose mix has no entry for the subject
+    (an unusable mix) belongs to no node."""
+    nodes: SubjectNodes = {}
+    for index, mix in mixes.items():
+        entry = next((entry for entry in mix if entry.get("factor") == subject), None)
+        if entry:
+            nodes.setdefault(tuple(entry.get("path") or [entry["node"]]), (entry, []))[1].append(index)
+    return nodes
 
 
-def _subject_units(keyed: list[tuple[tuple[str, ...], Any]], size: int) -> list[tuple[tuple[str, ...], list[Any]]]:
-    """Chunk items into batches of at most `size` that share one subject key (keys in order of first appearance)."""
-    groups: dict[tuple[str, ...], list[Any]] = {}
-    for key, item in keyed:
-        groups.setdefault(key, []).append(item)
-    return [(key, items[start : start + size]) for key, items in groups.items() for start in range(0, len(items), size)]
+def _batches(indexes: list[int], size: int, nodes: SubjectNodes) -> list[list[int]]:
+    """Attempt indexes in batches of at most `size`, one subject node per batch; attempts outside every node (all of
+    them when there is no subject) are batched in the order given."""
+    in_a_node = {index for _, members in nodes.values() for index in members}
+    groups = [members for _, members in nodes.values()] + [[index for index in indexes if index not in in_a_node]]
+    return [group[start : start + size] for group in groups for start in range(0, len(group), size)]
 
 
-SUBJECT_POOL_CHUNK = 25   # situations per pool call
-SUBJECT_POOL_SHOWN = 120  # earlier situations shown to a pool call
-
-
-async def _build_subject_pool(cfg: Config, router: ModelRouter, entries: list[tuple[int, dict[str, Any]]]) -> dict[int, str]:
-    """generation.subject_pool: one concrete situation per attempt, drawn without replacement from a list written per
-    subject node. entries = (attempt_index, the attempt's subject mix entry). Calls for one node run one after another
-    (each sees what the node already has, so the list stays distinct); nodes run in parallel. Reuse-if-present like
-    the other artifacts: subject_pool.jsonl keeps {attempt_index, subject, situation}; only missing attempts are filled.
-    An attempt left without a situation (a short or failed call) is written from its mix alone."""
-    path = artifact_path(cfg.output_dir, "subject_pool")
-    have = {row["attempt_index"]: row for row in read_jsonl(path, tolerant=True) if isinstance(row.get("attempt_index"), int)}
-    pool = {index: row["situation"] for index, row in have.items()}
-    nodes: dict[tuple[str, ...], tuple[dict[str, Any], list[int]]] = {}
-    for index, entry in entries:
-        key = tuple(entry.get("path") or [entry["node"]])
-        nodes.setdefault(key, (entry, []))[1].append(index)
-    todo = {key: (entry, [i for i in indexes if i not in pool]) for key, (entry, indexes) in nodes.items()}
-    todo = {key: value for key, value in todo.items() if value[1]}
+async def _write_situations(cfg: Config, router: ModelRouter, nodes: SubjectNodes) -> dict[int, str]:
+    """One situation per attempt, each used once: every subject node gets a list as long as its attempts. Listing
+    calls for one node run one after another (each sees what the node already has, so the list stays distinct); nodes
+    run in parallel. Reuse-if-present like the other artifacts: situations.jsonl keeps {attempt_index, subject,
+    situation} and only missing attempts are filled. An attempt left without a situation (a short or twice-failed
+    call) is written from its mix alone."""
+    path = artifact_path(cfg.output_dir, "situations")
+    situations = {row["attempt_index"]: row["situation"] for row in read_jsonl(path, tolerant=True) if isinstance(row.get("attempt_index"), int)}
+    todo = {key: [index for index in members if index not in situations] for key, (_, members) in nodes.items()}
+    todo = {key: missing for key, missing in todo.items() if missing}
     if not todo:
-        return pool
-    phase(f"Writing situations for {sum(len(v[1]) for v in todo.values())} attempts over {len(todo)} subject nodes")
+        return situations
+    phase(f"Writing situations for {sum(map(len, todo.values()))} attempts over {len(todo)} subject nodes")
     limiter = asyncio.Semaphore(cfg.generation.concurrency)
 
-    async def _node(key: tuple[str, ...], entry: dict[str, Any], indexes: list[int]) -> list[dict[str, Any]]:
-        written = [pool[i] for i in nodes[key][1] if i in pool]
+    async def _node(key: tuple[str, ...], missing: list[int]) -> list[dict[str, Any]]:
+        entry, members = nodes[key]
+        listed = [situations[index] for index in members if index in situations]
         rows = []
-        for start in range(0, len(indexes), SUBJECT_POOL_CHUNK):
-            chunk = indexes[start : start + SUBJECT_POOL_CHUNK]
-            prompt = cfg.prompts.subject_pool_prompt(cfg.description, entry, len(chunk), written[-SUBJECT_POOL_SHOWN:])
-            situations: list[str] = []
+        for start in range(0, len(missing), SITUATIONS_PER_CALL):
+            chunk = missing[start : start + SITUATIONS_PER_CALL]
+            prompt = cfg.prompts.situations_prompt(cfg.description, entry, len(chunk), listed[-SITUATIONS_SHOWN:])
+            written: list[str] = []
             for _ in range(2):  # a malformed reply loses the whole chunk, so ask once more
                 try:
                     async with limiter:
-                        response = await router.complete_json("bulk", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.SUBJECT_POOL)
-                    situations = [s.strip() for s in response.get("situations") or [] if isinstance(s, str) and s.strip()]
-                except Exception:  # noqa: BLE001 - a pool call that fails twice leaves its attempts to their mixes
+                        response = await router.complete_json("bulk", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.SITUATIONS)
+                    written = [text.strip() for text in response.get("situations") or [] if isinstance(text, str) and text.strip()]
+                except Exception:  # noqa: BLE001 - a call that fails twice leaves its attempts to their mixes
                     continue
-                if situations:
+                if written:
                     break
-            for index, situation in zip(chunk, situations):
-                rows.append({"attempt_index": index, "subject": list(key), "situation": situation})
-                written.append(situation)
+            rows.extend({"attempt_index": index, "subject": list(key), "situation": situation} for index, situation in zip(chunk, written))
+            listed.extend(written[: len(chunk)])
         return rows
 
     async with asyncio.TaskGroup() as tg:
-        tasks = [tg.create_task(_node(key, entry, indexes)) for key, (entry, indexes) in todo.items()]
+        tasks = [tg.create_task(_node(key, missing)) for key, missing in todo.items()]
         for future in asyncio.as_completed(tasks):
             for row in await future:
-                pool[row["attempt_index"]] = row["situation"]
+                situations[row["attempt_index"]] = row["situation"]
                 append_jsonl(path, row)
-    return pool
-
-
-def _subject_entry(cfg: Config, mix: list[dict[str, Any]]) -> dict[str, Any] | None:
-    return next((entry for entry in mix if entry.get("factor") == cfg.generation.subject), None)
+    return situations
 
 
 def _report_mix_space(cfg: Config, taxonomy: dict[str, Any], strategies: list[dict[str, Any]], attempts: int) -> None:
@@ -263,6 +270,42 @@ def _report_mix_space(cfg: Config, taxonomy: dict[str, Any], strategies: list[di
     info(f"[dim]Mix space: up to {space:,} distinct mixes; this run samples {mixes:,}[/dim]")
     if space < mixes:
         warn(f"only {space:,} distinct mixes for {mixes:,} samples, so mixes will repeat; widen or deepen the taxonomy for more variety.")
+
+
+SKEW_SAMPLE = 5000    # mixes drawn to measure what the strategies do to each factor's shares
+SKEW_TOLERANCE = 0.05  # a top-level branch this far from its tree share is reported
+
+
+def _report_strategy_skew(cfg: Config, taxonomy: dict[str, Any], strategies: list[dict[str, Any]], attempts: int) -> None:
+    # A factor's tree weights say how often each branch should appear. A strategy that restricts the factor to some
+    # branches (or a never_combine rule) overrides them, and the dataset silently gets other shares. Draw this run's
+    # own mixes and compare every code-sampled factor's top-level shares with its weights before paying for records.
+    mixes = min(math.ceil(attempts / cfg.generation.meta_prompts_per_mix), SKEW_SAMPLE)
+    drawn: dict[str, dict[str, int]] = {}
+    for mix_id in range(mixes):
+        try:
+            mix = _sample_lineage(cfg, taxonomy, strategies, mix_id, 1)["taxonomy_mix"]
+        except Exception:  # noqa: BLE001 - an unusable mix is rejected when its attempt runs
+            continue
+        for entry in mix:
+            path = entry.get("path") or []
+            branch = path[1] if len(path) > 1 else entry["node"]
+            counts = drawn.setdefault(entry["factor"], {})
+            counts[branch] = counts.get(branch, 0) + 1
+    for factor, counts in drawn.items():
+        if factor in cfg.generation.model_picked:
+            continue
+        total = sum(counts.values())
+        off = []
+        for option in level_options(taxonomy, factor, 1):
+            share, actual = option["share"], counts.get(option["name"], 0) / total
+            # Past the tolerance and past what sampling noise alone would give at this many mixes.
+            if abs(actual - share) > max(SKEW_TOLERANCE, 3 * math.sqrt(share * (1 - share) / total)):
+                off.append(f"{option['name']} {actual:.0%} of mixes (tree weight {share:.0%})")
+        if off:
+            restricted = restricting_strategies(strategies, factor)
+            cause = f"strategies restricting it: {', '.join(restricted)}" if restricted else "caused by never_combine rules"
+            warn(f"strategies skew {factor!r}: {'; '.join(off)} ({cause}). Edit strategies.json if the tree weights are the shares you want.")
 
 
 def _sample_lineage(cfg: Config, taxonomy: dict[str, Any], strategies: list[dict[str, Any]], mix_id: int, count: int) -> dict[str, Any]:
@@ -329,7 +372,7 @@ async def _build_meta_prompts(
         except Exception as exc:  # noqa: BLE001
             row["error"] = str(exc)
 
-    async def _mix_group(mix_ids: list[int], key: tuple[str, ...] = ()) -> list[dict[str, Any]]:
+    async def _mix_group(mix_ids: list[int]) -> list[dict[str, Any]]:
         # One scenario call covers meta_batch_size mixes (1 = one call per mix); with a subject they share one node.
         mixes = [_mix_attempts(mix_id) for mix_id in mix_ids]
         live = [attempt_rows for attempt_rows in mixes if "error" not in attempt_rows[0]]
@@ -337,7 +380,7 @@ async def _build_meta_prompts(
             try:
                 specs = [(attempt_rows[0]["taxonomy_mix"], len(attempt_rows)) for attempt_rows in live]
                 spec_situations = [situations.get(attempt_rows[0]["attempt_index"]) for attempt_rows in live]
-                scenario_lists = await _make_scenarios(cfg, router, specs, bool(key), spec_situations) if live else []
+                scenario_lists = await _make_scenarios(cfg, router, specs, spec_situations) if live else []
             except Exception as exc:  # noqa: BLE001 - a failed meta prompt call should not abort the phase.
                 scenario_lists = [[] for _ in live]
                 for row in (row for attempt_rows in live for row in attempt_rows):
@@ -353,18 +396,15 @@ async def _build_meta_prompts(
     # Append rows in completion order from the main task, mirroring the generation loop's IO pattern.
     mix_ids = sorted({index // k for index in missing})
     size = cfg.generation.meta_batch_size
+    # A mix is known by its first attempt index, which is also where its situation is kept.
+    first = [mix_id * k for mix_id in mix_ids]
+    nodes: SubjectNodes = {}
     situations: dict[int, str] = {}
-    if cfg.generation.subject:
-        first_mix = {mix_id: _mix_attempts(mix_id)[0]["taxonomy_mix"] for mix_id in mix_ids}
-        keyed = [(_subject_key(cfg, first_mix[mix_id]), mix_id) for mix_id in mix_ids]
-        groups = _subject_units(keyed, size)
-        if cfg.generation.subject_pool:  # one situation per mix (keyed by the mix's first attempt index)
-            entries = [(mix_id * k, entry) for mix_id in mix_ids if (entry := _subject_entry(cfg, first_mix[mix_id]))]
-            situations = await _build_subject_pool(cfg, router, entries)
-    else:
-        groups = [((), mix_ids[start : start + size]) for start in range(0, len(mix_ids), size)]
+    if subject := subject_factor(cfg, taxonomy):
+        nodes = _subject_nodes({index: _mix_attempts(index // k)[0]["taxonomy_mix"] for index in first}, subject)
+        situations = await _write_situations(cfg, router, nodes)
     async with asyncio.TaskGroup() as tg:
-        tasks = [tg.create_task(_mix_group(group, key)) for key, group in groups]
+        tasks = [tg.create_task(_mix_group([index // k for index in batch])) for batch in _batches(first, size, nodes)]
         with track(len(missing), "Meta prompts", quiet=quiet) as advance:
             for future in asyncio.as_completed(tasks):
                 for row in await future:
@@ -394,7 +434,6 @@ def _run_fingerprint(cfg: Config, taxonomy: dict[str, Any], strategies: list[dic
         "model_picked": generation.model_picked,
         "code_level": generation.code_level,
         "subject": generation.subject,
-        "subject_pool": generation.subject_pool,
         "complexity_ratio": generation.complexity_ratio,
         "critic": generation.critic,
         "max_refine_attempts": generation.max_refine_attempts,
@@ -486,7 +525,6 @@ async def _combined_batch(
     taxonomy: dict[str, Any],
     strategies: list[dict[str, Any]],
     indexes: list[int],
-    shared_subject: bool = False,
     situations: dict[int, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Combined path: write one record per attempt in a single call, straight from the sampled mixes.
@@ -518,8 +556,7 @@ async def _combined_batch(
         situation = (situations or {}).get(index)
         if situation:
             meta_row["situation"] = situation
-        items.append({"id": f"r{len(items) + 1}", "mix": meta_row["taxonomy_mix"], **({"shared_subject": True} if shared_subject else {}),
-                      **({"situation": situation} if situation else {})})
+        items.append({"id": f"r{len(items) + 1}", "mix": meta_row["taxonomy_mix"], **({"situation": situation} if situation else {})})
     if not items:
         return rows
     written, missing_reason = await _send_batch(cfg, router, cfg.prompts.combined_batch_prompt(cfg.description, cfg.schema, items, choices))
@@ -661,8 +698,7 @@ async def _finish_row(
 
 
 async def _make_scenarios(
-    cfg: Config, router: ModelRouter, specs: list[tuple[list[dict[str, Any]], int]], shared_subject: bool = False,
-    situations: list[str | None] | None = None,
+    cfg: Config, router: ModelRouter, specs: list[tuple[list[dict[str, Any]], int]], situations: list[str | None] | None = None
 ) -> list[list[str]]:
     """Scenario lists for (mix, count) specs: one meta_prompt call for a single mix, or one batched call
     covering every mix (meta_batch_size > 1). A mix missing from a batched reply gets no scenarios."""
@@ -671,14 +707,12 @@ async def _make_scenarios(
         # Every non-blank scenario is kept (each one becomes its own attempt); blanks and non-strings drop.
         return [text.strip() for text in values or [] if isinstance(text, str) and text.strip()]
 
-    if len(specs) == 1 and not shared_subject:
+    if len(specs) == 1 and not any(situations or []):
         mix, count = specs[0]
         prompt = cfg.prompts.meta_prompt_prompt(cfg.description, cfg.schema, mix, count)
         response = await router.complete_json("bulk", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.META_PROMPT)
         return [clean(response.get("meta_prompts"))]
-    extra = {"shared_subject": True} if shared_subject else {}
-    items = [{"id": f"m{position + 1}", "mix": mix, "count": count, **extra,
-              **({"situation": situations[position]} if situations and situations[position] else {})}
+    items = [{"id": f"m{position + 1}", "mix": mix, "count": count, **({"situation": situations[position]} if situations and situations[position] else {})}
              for position, (mix, count) in enumerate(specs)]
     prompt = cfg.prompts.meta_prompt_batch_prompt(cfg.description, cfg.schema, items)
     response = await router.complete("bulk", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.META_PROMPT)

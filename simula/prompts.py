@@ -48,6 +48,27 @@ PHRASING_RULE = (
     "first common name that comes to mind."
 )
 
+# Diversity rule: records written in one call drift toward one template unless told otherwise.
+DIVERSITY_RULE = (
+    "The records are independent examples of one dataset. Make them substantially different from each other, each "
+    "one unique and the set diverse: different people and names, places, numbers, details, openings and phrasing. "
+    "Never reuse a template across records."
+)
+
+# Critic rules. A critic that reads the meta-prompt first tends to accept whatever matches it, so a record can carry a
+# value (a label, a level) that its content does not support: rolled independently, written faithfully, read wrongly.
+CRITIC_RULE = (
+    "Read the record first as its eventual reader will, without the meta-prompt: what would an independent reader take "
+    "it to be, and which values would they give its fields? Reject it when that reading differs from what the record "
+    "claims or was meant to be, even if every intended ingredient is nominally present: a label, category, level or "
+    "rating that the content does not clearly support is wrong, however well it matches the meta-prompt. Do not let "
+    "the intent talk you into accepting."
+)
+REVISE_RULE = (
+    "Fix a record by changing its content until what was intended is the clear reading. Keep the intended values "
+    "(labels, categories, levels) themselves: do not change them to match the content."
+)
+
 
 class PromptSet:
     def __init__(self, module: ModuleType | None = None, module_path: Path | None = None):
@@ -272,30 +293,47 @@ def choices_text(choices: list[dict[str, Any]]) -> str:
     return "\n\n".join(blocks)
 
 
-def subject_note(items: list[dict[str, Any]]) -> str:
-    """Subject grouping (generation.subject): the items of one batch share a subject node. Returns the note telling
-    the model to make each a different situation (empty when the batch is not grouped)."""
-    if not items or not items[0].get("shared_subject"):
-        return ""
-    return ("\n\nAll records below share the same subject (the same node of the subject factor). Make each one a "
-            "genuinely different concrete situation within that subject, not a variant of one idea.")
-
-
 def situation_line(item: dict[str, Any]) -> str:
-    """generation.subject_pool: the spec line carrying an item's concrete situation (empty when it has none)."""
+    """generation.subject: the spec line carrying an item's situation (empty when it has none)."""
     return f"\n- situation: {item['situation']}" if item.get("situation") else ""
 
 
 def situation_note(items: list[dict[str, Any]]) -> str:
+    """generation.subject: how a batch whose specs carry situations should use them (empty when none does). The specs
+    of one batch share a node of the subject factor."""
     if not any(item.get("situation") for item in items):
         return ""
-    return ("\n\nA spec's situation line is the concrete thing its record is about, taken from a list written for its "
-            "subject: build the record around it, adapting it to the other ingredients.")
+    return ("\n\nAll records below share the same subject (the same node of the subject factor). A spec's situation line "
+            "is the concrete thing its record is about, taken from a list written for that subject: build the record "
+            "around it, adapting it to the other ingredients. A spec without one invents its own, unlike the others.")
 
 
-def subject_pool_prompt(description: str, node: dict[str, Any], count: int, existing: list[str]) -> str:
-    # generation.subject_pool: concrete situations for one node of the subject factor, written together so they
-    # differ; each one becomes the subject matter of exactly one record.
+def subject_prompt(description: str, factors: list[dict[str, Any]]) -> str:
+    # generation.subject: auto. One call, after the tree is built, names the factor whose nodes get situations.
+    def line(factor: dict[str, Any]) -> str:
+        children = ", ".join(child["name"] for child in factor.get("children", []))
+        return f"- {factor['name']}: {factor.get('description', '')}" + (f" (branches: {children})" if children else "")
+
+    return f"""
+Dataset description:
+{description}
+
+Every record is built from one sampled node of each of these factors:
+{chr(10).join(line(factor) for factor in factors)}
+
+Which one factor is the subject: the factor that says what a record is about (its topic, issue, item or document
+type), as opposed to how it is written, by whom, in what tone, at what length or how hard it is?
+Each node of the subject gets a list of concrete situations, one per record, so that records sharing a node are about
+different things. Choose the factor whose nodes are kinds of content that many different concrete cases fall under.
+Answer null when no factor is about content.
+Return JSON:
+{{"subject": "<factor name>" | null, "reason": "..."}}
+""".strip()
+
+
+def situations_prompt(description: str, node: dict[str, Any], count: int, existing: list[str]) -> str:
+    # generation.subject: situations for one node of the subject factor, listed together so they differ; each one
+    # becomes the subject matter of exactly one record.
     path = " > ".join(node.get("path") or [node.get("node", "")])
     listed = ("\nAlready listed for this subject (do not repeat these or close variants):\n" + "\n".join(f"- {s}" for s in existing)) if existing else ""
     return f"""
@@ -304,14 +342,16 @@ Dataset description:
 
 Subject: {path}{f" — {node['description']}" if node.get("description") else ""}
 
-List {count} distinct concrete situations that a record about this subject could be about, one sentence each.
-- Each situation is a specific case of this subject: what happened, to what, in what circumstances. Make them
-  genuinely different from each other (different objects, causes, circumstances and scales), not rewordings.
-- Describe only the subject matter. Leave out tone, urgency, who is writing and the record's format: those are
-  chosen separately for each record.
+List {count} distinct situations that a record about this subject could be about, one sentence each.
+- A situation is one specific case of the subject, clear enough that two writers given it would write about the same
+  thing: what it is or what happened, to what, in what circumstances. It is neither a category of cases nor a
+  finished record.
+- Make them substantially different from each other (different objects, causes, circumstances and scales), not
+  rewordings, and cover the subject widely, beyond what the description happens to mention.
+- Describe only the subject matter. Leave out whatever the record's other ingredients decide (such as tone, urgency,
+  who is writing, length and format): those are chosen separately for each record.
 - Invent the specifics yourself. Do not anchor on named details from the description or any context given with it
-  (named features, products, people, error codes, numbers, dates), and cover the subject widely, beyond what the
-  description happens to mention.{listed}
+  (named features, products, people, error codes, numbers, dates).{listed}
 
 Return JSON:
 {{"situations": ["..."]}}
@@ -358,9 +398,9 @@ Below are sets of sampled ingredients (not strict checklists), one per id. For e
 meta-prompts it asks for. A meta-prompt tells a generator what record to create: the situation and the
 content the record must carry, in at most 80 words. Describe the record; do not write it.
 - Think about what each combination of ingredients implies for the finished record. Full coverage of the ingredients, although important, is not the goal by itself — coherence, and being smart about what the combination should produce, is just as important, if not more. If ingredients conflict or their sum would be incoherent, build around the load-bearing ones and soften or drop the rest.
-- The ids are unrelated records: give each its own situation, people, names and details; never reuse a template across ids. Several meta-prompts for one id must be genuinely different records, not rewordings.
+- {DIVERSITY_RULE} This holds across ids and between several meta-prompts for one id.
 - {CONTEXT_RULE}
-- {PHRASING_RULE}{subject_note(items)}{situation_note(items)}
+- {PHRASING_RULE}{situation_note(items)}
 
 {specs}
 
@@ -415,7 +455,7 @@ Dataset description:
 {record_format}
 
 Write one record per meta-prompt below; each meta-prompt says what its record must be.
-- The records are independent examples of one dataset. Keep each true to its own meta-prompt, and do not let them converge on a shared template or shared details.
+- Keep each record true to its own meta-prompt. {DIVERSITY_RULE}
 - {CONTEXT_RULE}
 - {PHRASING_RULE}
 - Give every record the length and depth it would have if it were written on its own.
@@ -432,7 +472,7 @@ def combined_batch_prompt(description: str, schema: dict[str, Any] | None, items
     # sampled mixes. items = [{"id": "r1", "mix": [...]}]. Every spec lists its nodes inline.
     specs = "\n\n".join(f"{item['id']}:\n{mix_text(item['mix'])}{situation_line(item)}" for item in items)
     intro = "Write one record per spec below. Each spec lists the sampled ingredients for its record (taxonomy nodes; not a strict checklist)."
-    return _combined_prompt(description, schema, intro + subject_note(items) + situation_note(items), specs, choices)
+    return _combined_prompt(description, schema, intro + situation_note(items), specs, choices)
 
 
 def combined_table_batch_prompt(description: str, schema: dict[str, Any] | None, items: list[dict[str, Any]], choices: list[dict[str, Any]]) -> str:
@@ -443,7 +483,7 @@ def combined_table_batch_prompt(description: str, schema: dict[str, Any] | None,
         "Write one record per row of the table below. NODES describes each sampled node once under a short id; each "
         "row lists the node ids that are the ingredients for its record (not a strict checklist)."
     )
-    return _combined_prompt(description, schema, intro + subject_note(items), nodes_table(items), choices)
+    return _combined_prompt(description, schema, intro, nodes_table(items), choices)
 
 
 def nodes_table(items: list[dict[str, Any]]) -> str:
@@ -493,7 +533,7 @@ Dataset description:
 
 {intro}
 - First write a one-sentence "plan": what the record will be, given what its ingredients imply together. Coverage of the ingredients matters, but coherence matters as much: if ingredients conflict or their sum would be incoherent, build around the load-bearing ones and soften or drop the rest.
-- The records are independent examples of one dataset. Make each one distinct: different names, people, places, numbers, details and phrasing; never reuse a template across the batch.
+- {DIVERSITY_RULE}
 - Give every record the length and depth it would have if it were written on its own.
 - The ingredients are instructions to you, not content: never copy their names, paths or descriptions into a record.
 - {CONTEXT_RULE}
@@ -574,7 +614,8 @@ Generated record:
 {json.dumps(record, ensure_ascii=False)}
 
 Does the record satisfy the meta-prompt and schema intent? Explain briefly.
-If you reject it, also return "revised": the record corrected to fix every problem you found (change only what is needed).
+{CRITIC_RULE}
+If you reject it, also return "revised": the record corrected to fix every problem you found (change only what is needed). {REVISE_RULE}
 Return JSON (omit "revised" when accepting):
 {{"verdict": "accept" | "reject", "explanation": "...", "revised": {{...}}}}
 """.strip()
@@ -594,6 +635,7 @@ Generated output:
 ---
 
 Does the output satisfy the meta-prompt? Be strict but fair.
+{CRITIC_RULE}
 Return JSON:
 {{"verdict": "accept" | "reject", "explanation": "..."}}
 """.strip()
@@ -613,7 +655,7 @@ Rejected record:
 Critique:
 {critique}
 
-Revise the record to satisfy the meta-prompt and schema. Return JSON only.
+Revise the record to satisfy the meta-prompt and schema. {REVISE_RULE} Return JSON only.
 """.strip()
 
 
@@ -633,7 +675,7 @@ Rejected output:
 Critique:
 {critique}
 
-Produce a new, better version that addresses the critique.
+Produce a new, better version that addresses the critique. {REVISE_RULE}
 Return only the data point itself. No JSON wrapping. No preamble.
 """.strip()
 

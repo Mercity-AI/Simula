@@ -13,7 +13,7 @@ ARTIFACTS = {
     "taxonomy": "taxonomy.json",
     "strategies": "strategies.json",
     "meta_prompts": "meta_prompts.jsonl",
-    "subject_pool": "subject_pool.jsonl",
+    "situations": "situations.jsonl",
     "raw": "dataset.raw.jsonl",
     "accepted": "dataset.accepted.jsonl",
     "final": "dataset.final.jsonl",
