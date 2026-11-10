@@ -22,6 +22,23 @@ SYSTEM_TEXT = (
 )
 
 
+# Context rules: supplied context (the description, a product brief, examples) is background, not a menu. Without
+# them a model anchors on the context's few concrete details: they end up in node descriptions as "such as"
+# examples and then in a large share of records. Prompt modules can import and include them in their overrides.
+TAXONOMY_CONTEXT_RULE = (
+    "Write each node as a general kind, in your own words. Do not anchor node names or descriptions on specific named "
+    "details from the description or any context given with it (named features, products, people, error codes, numbers, "
+    "dates), and do not list 'such as' / 'e.g.' examples: records invent their own specifics, and an example named here "
+    "gets copied into most of them. Cover the space widely, beyond what the description happens to mention."
+)
+CONTEXT_RULE = (
+    "The dataset description and any context supplied with it are background, not a menu. Do not over-rely on their "
+    "specific named details (named features, products, people, error codes, numbers, dates): use one only when a record "
+    "genuinely needs it, and most records should not. Go wide: vary topics, names, wording and vocabulary across records "
+    "instead of reusing the same salient details."
+)
+
+
 class PromptSet:
     def __init__(self, module: ModuleType | None = None, module_path: Path | None = None):
         self.module = module
@@ -143,6 +160,7 @@ Expansion plan:
 {plan}
 
 Propose {count} useful, non-overlapping child nodes for the current node.
+{TAXONOMY_CONTEXT_RULE}
 Give each child a "weight": its expected prevalence in realistic data for this dataset (dominant ~1.0, common ~0.5, uncommon ~0.15, rare ~0.03). Weight is prevalence, not how interesting the category is to enumerate; rare forms sit an order of magnitude below common ones.
 Return JSON:
 {{"children": [{{"name": "...", "description": "...", "weight": 1.0}}]}}
@@ -161,6 +179,7 @@ Raw proposed children:
 {json.dumps(raw_children, ensure_ascii=False)}
 
 Refine this list for completeness, soundness, specificity, and low duplication.
+{TAXONOMY_CONTEXT_RULE}
 Keep each child's "weight" (its expected prevalence in realistic data, not its interestingness): preserve incoming weights unless a merge or split makes an adjustment necessary, and give any new child a weight on the same scale (dominant ~1.0, common ~0.5, uncommon ~0.15, rare ~0.03).
 Return JSON:
 {{"children": [{{"name": "...", "description": "...", "weight": 1.0}}]}}
@@ -275,6 +294,7 @@ Sampled ingredients for this record (not a strict checklist):
 {json.dumps(mix, ensure_ascii=False)}
 
 Write {k} meta-prompt{"s" if k > 1 else ""}. A meta-prompt tells a generator what record to create: the situation and the content the record must carry, in at most 80 words. Describe the record; do not write it.{several}
+{CONTEXT_RULE}
 Think about what this combination of ingredients implies for the finished record. Full coverage of the ingredients, although important, is not the goal by itself — coherence, and being smart about what the combination should produce, is just as important, if not more. If ingredients conflict or their sum would be incoherent, build the meta-prompt around the load-bearing ones and soften or drop the rest.
 Return JSON:
 {{"meta_prompts": ["..."]}}
@@ -296,7 +316,8 @@ Below are sets of sampled ingredients (not strict checklists), one per id. For e
 meta-prompts it asks for. A meta-prompt tells a generator what record to create: the situation and the
 content the record must carry, in at most 80 words. Describe the record; do not write it.
 - Think about what each combination of ingredients implies for the finished record. Full coverage of the ingredients, although important, is not the goal by itself — coherence, and being smart about what the combination should produce, is just as important, if not more. If ingredients conflict or their sum would be incoherent, build around the load-bearing ones and soften or drop the rest.
-- The ids are unrelated records: give each its own situation, people, names and details; never reuse a template across ids. Several meta-prompts for one id must be genuinely different records, not rewordings.{covered_text(items)}
+- The ids are unrelated records: give each its own situation, people, names and details; never reuse a template across ids. Several meta-prompts for one id must be genuinely different records, not rewordings.
+- {CONTEXT_RULE}{covered_text(items)}
 
 {specs}
 
@@ -330,7 +351,8 @@ Output JSON Schema:
 Meta-prompt:
 {meta_prompt}
 
-Generate exactly one synthetic data record matching the schema. Return the record as JSON only.
+Generate exactly one synthetic data record matching the schema. {CONTEXT_RULE}
+Return the record as JSON only.
 """.strip()
 
 
@@ -351,6 +373,7 @@ Dataset description:
 
 Write one record per meta-prompt below; each meta-prompt says what its record must be.
 - The records are independent examples of one dataset. Keep each true to its own meta-prompt, and do not let them converge on a shared template or shared details.
+- {CONTEXT_RULE}
 - Give every record the length and depth it would have if it were written on its own.
 
 {specs}
@@ -429,6 +452,7 @@ Dataset description:
 - The records are independent examples of one dataset. Make each one distinct: different names, people, places, numbers, details and phrasing; never reuse a template across the batch.
 - Give every record the length and depth it would have if it were written on its own.
 - The ingredients are instructions to you, not content: never copy their names, paths or descriptions into a record.
+- {CONTEXT_RULE}
 
 {specs}
 
@@ -468,7 +492,7 @@ Dataset description:
 Meta-prompt:
 {meta_prompt}
 
-Generate exactly one synthetic data point matching the meta-prompt.
+Generate exactly one synthetic data point matching the meta-prompt. {CONTEXT_RULE}
 Return only the data point itself. No JSON wrapping. No preamble.
 """.strip()
 

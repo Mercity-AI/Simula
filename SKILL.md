@@ -232,6 +232,12 @@ Which functions matter:
 - `critique_prompt` / `critique_text_prompt`: make the critic reject your anti-patterns. On rejection
   it may return the corrected record as `"revised"`, which is accepted directly when valid.
 
+The built-in tree and writer prompts carry two context rules from `simula/prompts.py`: `TAXONOMY_CONTEXT_RULE`
+(nodes are general kinds, with no named details or "such as" examples copied from the description) and
+`CONTEXT_RULE` (supplied context is background, not a menu; use its named details only when a record needs them,
+and vary wording widely). An override of `expand_prompt`, `refine_nodes_prompt` or a writer prompt should import
+and include them; otherwise the context's few concrete details end up in a large share of records.
+
 Three rules, each learned from a bad run:
 
 - **Never ask the model to vary something code already sampled.** "Vary the product across the

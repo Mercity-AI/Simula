@@ -847,3 +847,18 @@ def test_without_subject_batch_prompts_are_unchanged(tmp_path: Path) -> None:
     asyncio.run(generate_dataset(cfg, router, quiet=True))
     log = read_jsonl(Path(cfg.output_dir) / "llm_calls.jsonl")
     assert not any("share the same subject" in row["prompt"] for row in log if row["task"] == "generate")
+
+
+def test_built_in_prompts_carry_the_context_rules() -> None:
+    from simula import prompts as P
+
+    factor = {"name": "topic", "description": "Subject"}
+    node = {"name": "topic", "level": 0, "path": ["topic"]}
+    assert P.TAXONOMY_CONTEXT_RULE in P.expand_prompt("d", factor, node, [], "plan", 3)
+    assert P.TAXONOMY_CONTEXT_RULE in P.refine_nodes_prompt("d", node, [])
+    mix = [{"factor": "topic", "node": "a", "path": ["topic", "a"], "description": ""}]
+    schema = {"type": "object", "properties": {"q": {"type": "string"}}}
+    for prompt in (P.meta_prompt_prompt("d", schema, mix, 1), P.meta_prompt_batch_prompt("d", schema, [{"id": "m1", "mix": mix, "count": 1}]),
+                   P.generate_record_prompt("d", schema, "mp"), P.generate_record_batch_prompt("d", schema, [{"id": "r1", "meta_prompt": "mp"}]),
+                   P.combined_batch_prompt("d", schema, [{"id": "r1", "mix": mix}], []), P.generate_text_prompt("d", "mp")):
+        assert P.CONTEXT_RULE in prompt
