@@ -69,8 +69,8 @@ generation:
   model_picked: {}             # combined path: {factor: level} the model picks per record instead of code
   code_level: {}               # {factor: level}: code samples that factor only down to this level (exact shares
                                # there); the writer chooses the specifics beneath. Use where deep leaves clash.
-  subject: null                # the factor that says what a record is about: batches hold one of its nodes and see
-                               # the situations already written for it (CONFIG.md)
+  subject: null                # the factor that says what a record is about: batches hold one of its nodes and
+                               # are told to make each record a different situation (CONFIG.md)
   subject_pool: false          # each record gets its own concrete situation from a list written per subject node
   complexity_ratio: 0.3        # fraction of points made harder by a separate complexify call
   critic: true                 # false = accept every schema-valid record without critique

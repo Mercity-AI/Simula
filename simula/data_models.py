@@ -185,8 +185,8 @@ class GenerationCfg(_Section):
     step). model_picked {factor: level} lets the model choose those factors per record on the combined
     path instead of code sampling them. code_level {factor: level} stops code at that level of the
     factor's tree (exact shares there); the writer chooses the specifics beneath. subject names the factor
-    that says what a record is about: batches then hold one subject node each and are shown the situations
-    already written for it, so records on a shared node stop converging. subject_pool gives every record its own
+    that says what a record is about: batches then hold one subject node each and are told to make each record
+    a different situation, so the records of one call stop converging. subject_pool gives every record its own
     concrete situation, drawn without replacement from a list written per subject node. critic=False accepts every
     schema-valid record."""
 

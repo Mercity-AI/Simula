@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import json
 import math
@@ -96,21 +95,12 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
         size = cfg.generation.record_batch_size
         limiter = asyncio.Semaphore(max(1, cfg.generation.concurrency // size))
 
-        plans: dict[tuple[str, ...], list[str]] = {}  # subject node -> plans written so far (combined path)
         record_situations: dict[int, str] = {}  # combined path with generation.subject_pool
-        locks: dict[tuple[str, ...], asyncio.Lock] = {}
 
         async def _unit(unit: list[int], key: tuple[str, ...] = ()) -> list[dict[str, Any]]:
-            # Only the combined path carries memory in its record batches, so only it needs one batch per node in
-            # flight; on the meta-prompt path the scenarios already differ and record batches run freely.
-            lock_key = () if cfg.generation.meta_prompts else key
-            async with _subject_lock(locks, lock_key), limiter:
+            async with limiter:
                 if not cfg.generation.meta_prompts:
-                    seen = plans.get(key, [])[-SUBJECT_MEMORY:] if key else None
-                    rows = await _combined_batch(cfg, router, taxonomy, strategies, unit, seen, record_situations)
-                    if key:
-                        plans.setdefault(key, []).extend(_gist(row["meta_prompt"].split("\n")[0]) for row in rows if row.get("meta_prompt"))
-                    return rows
+                    return await _combined_batch(cfg, router, taxonomy, strategies, unit, bool(key), record_situations)
                 if size == 1:
                     return [await _generate_one_safe(cfg, router, meta_rows[unit[0]])]
                 return await _scenario_batch(cfg, router, [meta_rows[index] for index in unit])
@@ -186,11 +176,9 @@ def _check_picked_factors(cfg: Config, taxonomy: dict[str, Any]) -> None:
         raise ValueError(f"generation.subject names factor {cfg.generation.subject!r}, which is not in the taxonomy (factors: {names}).")
 
 
-# Subject grouping (generation.subject): a batch holds one subject node, and it is shown the situations
-# already written for that node, so records that share a node are told apart instead of each call
-# independently inventing the most obvious instance.
-SUBJECT_MEMORY = 60      # most recent situations shown to a batch
-SUBJECT_GIST_WORDS = 16  # each situation is shown as its first words
+# Subject grouping (generation.subject): a batch holds one subject node and is told so, so the records of
+# one call are written as different situations instead of each inventing the node's most obvious instance.
+# Telling records apart across calls is generation.subject_pool's job.
 
 
 def _subject_key(cfg: Config, mix: list[dict[str, Any]]) -> tuple[str, ...]:
@@ -200,30 +188,11 @@ def _subject_key(cfg: Config, mix: list[dict[str, Any]]) -> tuple[str, ...]:
 
 
 def _subject_units(keyed: list[tuple[tuple[str, ...], Any]], size: int) -> list[tuple[tuple[str, ...], list[Any]]]:
-    """Chunk items into batches of at most `size` that share one subject key, then interleave the batches
-    round-robin across keys (in order of first appearance). Interleaving spaces out batches of the same
-    subject, so a later batch usually starts after the earlier ones finished and can see what they wrote."""
+    """Chunk items into batches of at most `size` that share one subject key (keys in order of first appearance)."""
     groups: dict[tuple[str, ...], list[Any]] = {}
     for key, item in keyed:
         groups.setdefault(key, []).append(item)
-    chunked = [[(key, items[start : start + size]) for start in range(0, len(items), size)] for key, items in groups.items()]
-    units = []
-    for round_ in range(max((len(chunks) for chunks in chunked), default=0)):
-        units.extend(chunks[round_] for chunks in chunked if round_ < len(chunks))
-    return units
-
-
-def _subject_lock(locks: dict[tuple[str, ...], asyncio.Lock], key: tuple[str, ...]) -> Any:
-    # At most one batch in flight per subject node, so each batch sees everything written for its node before it.
-    # Different nodes still run in parallel (bounded by concurrency). No subject -> no lock.
-    if not key:
-        return contextlib.nullcontext()
-    return locks.setdefault(key, asyncio.Lock())
-
-
-def _gist(text: str) -> str:
-    words = str(text).split()
-    return " ".join(words[:SUBJECT_GIST_WORDS]) + (" …" if len(words) > SUBJECT_GIST_WORDS else "")
+    return [(key, items[start : start + size]) for key, items in groups.items() for start in range(0, len(items), size)]
 
 
 SUBJECT_POOL_CHUNK = 25   # situations per pool call
@@ -354,21 +323,15 @@ async def _build_meta_prompts(
         except Exception as exc:  # noqa: BLE001
             row["error"] = str(exc)
 
-    covered: dict[tuple[str, ...], list[str]] = {}  # subject node -> situations written so far
-    locks: dict[tuple[str, ...], asyncio.Lock] = {}
-
     async def _mix_group(mix_ids: list[int], key: tuple[str, ...] = ()) -> list[dict[str, Any]]:
         # One scenario call covers meta_batch_size mixes (1 = one call per mix); with a subject they share one node.
         mixes = [_mix_attempts(mix_id) for mix_id in mix_ids]
         live = [attempt_rows for attempt_rows in mixes if "error" not in attempt_rows[0]]
-        async with _subject_lock(locks, key), limiter:
+        async with limiter:
             try:
                 specs = [(attempt_rows[0]["taxonomy_mix"], len(attempt_rows)) for attempt_rows in live]
-                seen = covered.get(key, [])[-SUBJECT_MEMORY:] if key else None
                 spec_situations = [situations.get(attempt_rows[0]["attempt_index"]) for attempt_rows in live]
-                scenario_lists = await _make_scenarios(cfg, router, specs, seen, spec_situations) if live else []
-                if key:
-                    covered.setdefault(key, []).extend(_gist(text) for scenarios in scenario_lists for text in scenarios)
+                scenario_lists = await _make_scenarios(cfg, router, specs, bool(key), spec_situations) if live else []
             except Exception as exc:  # noqa: BLE001 - a failed meta prompt call should not abort the phase.
                 scenario_lists = [[] for _ in live]
                 for row in (row for attempt_rows in live for row in attempt_rows):
@@ -517,7 +480,7 @@ async def _combined_batch(
     taxonomy: dict[str, Any],
     strategies: list[dict[str, Any]],
     indexes: list[int],
-    covered: list[str] | None = None,
+    shared_subject: bool = False,
     situations: dict[int, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Combined path: write one record per attempt in a single call, straight from the sampled mixes.
@@ -549,7 +512,7 @@ async def _combined_batch(
         situation = (situations or {}).get(index)
         if situation:
             meta_row["situation"] = situation
-        items.append({"id": f"r{len(items) + 1}", "mix": meta_row["taxonomy_mix"], **({"covered": covered} if covered is not None else {}),
+        items.append({"id": f"r{len(items) + 1}", "mix": meta_row["taxonomy_mix"], **({"shared_subject": True} if shared_subject else {}),
                       **({"situation": situation} if situation else {})})
     if not items:
         return rows
@@ -692,7 +655,7 @@ async def _finish_row(
 
 
 async def _make_scenarios(
-    cfg: Config, router: ModelRouter, specs: list[tuple[list[dict[str, Any]], int]], covered: list[str] | None = None,
+    cfg: Config, router: ModelRouter, specs: list[tuple[list[dict[str, Any]], int]], shared_subject: bool = False,
     situations: list[str | None] | None = None,
 ) -> list[list[str]]:
     """Scenario lists for (mix, count) specs: one meta_prompt call for a single mix, or one batched call
@@ -702,12 +665,12 @@ async def _make_scenarios(
         # Every non-blank scenario is kept (each one becomes its own attempt); blanks and non-strings drop.
         return [text.strip() for text in values or [] if isinstance(text, str) and text.strip()]
 
-    if len(specs) == 1 and covered is None:
+    if len(specs) == 1 and not shared_subject:
         mix, count = specs[0]
         prompt = cfg.prompts.meta_prompt_prompt(cfg.description, cfg.schema, mix, count)
         response = await router.complete_json("bulk", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.META_PROMPT)
         return [clean(response.get("meta_prompts"))]
-    extra = {"covered": covered} if covered is not None else {}
+    extra = {"shared_subject": True} if shared_subject else {}
     items = [{"id": f"m{position + 1}", "mix": mix, "count": count, **extra,
               **({"situation": situations[position]} if situations and situations[position] else {})}
              for position, (mix, count) in enumerate(specs)]
