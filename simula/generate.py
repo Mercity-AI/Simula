@@ -140,7 +140,9 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
         info("[dim]All attempts already complete; nothing to generate.[/dim]")
 
     # Build the final artifact from accepted rows only; evaluation remains a separate command.
-    accepted = [row for row in read_jsonl(accepted_path, tolerant=True) if row.get("accepted")]
+    # In attempt order, not completion order: once coverage is met the trim keeps the earliest rows, and
+    # completion order follows the subject node when batches are grouped (it would cut whole nodes).
+    accepted = sorted((row for row in read_jsonl(accepted_path, tolerant=True) if row.get("accepted")), key=lambda row: row["attempt_index"])
     accepted_total = len(accepted)
     if cfg.evaluation.dedupe:
         accepted, _ = dedupe_rows(accepted)

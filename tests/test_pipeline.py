@@ -833,6 +833,24 @@ def test_subject_batches_share_one_node(tmp_path: Path, path: str) -> None:
         assert "share the same subject" in prompt
 
 
+def test_trim_does_not_depend_on_completion_order(tmp_path: Path) -> None:
+    # Grouped batches finish node by node, so a trim that kept the first rows to finish would cut whole nodes.
+    class SlowFirst(_Recording):
+        async def complete(self, role, prompt, system, task="unknown"):  # type: ignore[override]
+            if str(task) == "generate" and not self.__dict__.setdefault("slowed", False):
+                self.slowed = True
+                await asyncio.sleep(0.05)  # the first batch finishes last
+            return await super().complete(role, prompt, system, task=task)
+
+    gen = {"meta_prompts": False, "record_batch_size": 2, "subject": "topic", "target_size": 4, "overgenerate_ratio": 2, "concurrency": 8}
+    kept = []
+    for name, router in (("plain", _Recording), ("slow", SlowFirst)):
+        (tmp_path / name).mkdir()
+        cfg = load_config(write_config(tmp_path / name, _gen(gen)))
+        kept.append([row["attempt_index"] for row in asyncio.run(generate_dataset(cfg, router(cfg.data), quiet=True))])
+    assert len(kept[0]) == 4 and kept[0] == kept[1]
+
+
 def test_without_subject_batch_prompts_are_unchanged(tmp_path: Path) -> None:
     cfg = load_config(write_config(tmp_path, _gen({"meta_prompts": False, "record_batch_size": 2})))
     router = _Recording(cfg.data)

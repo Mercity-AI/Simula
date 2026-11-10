@@ -150,7 +150,7 @@ Volume and behavior of the generation pass (`simula generate`).
 |---|---|---|
 | `target_size` | `50` | Desired row count. Sets the attempt budget; caps `dataset.final.jsonl` only when `trim` is true. Rejections/dedupe can leave fewer rows. |
 | `overgenerate_ratio` | `1.3` | `attempts = ceil(target_size × ratio)`. Buffer for rows the critic/schema rejects. `1.0` = no buffer. |
-| `trim` | `true` | Coverage-trim accepted rows to `target_size`. Set false to skip selection and retain all accepted rows after optional dedupe, in their existing order. |
+| `trim` | `true` | Coverage-trim accepted rows to `target_size`: rows that add taxonomy coverage first, then the earliest attempts. Set false to skip selection and retain all accepted rows after optional dedupe, in attempt order. |
 | `meta_prompts` | `true` | Write a reviewable scenario per attempt first (`meta_prompts.jsonl`, editable via `stop_after: meta_prompts`), then generate the record from it. `false` = the **combined path**: records are written straight from their sampled mixes, `record_batch_size` per call, with no meta-prompt step or artifact. |
 | `meta_prompts_per_mix` | `1` | Scenarios one meta-prompt call writes for one sampled mix. Every scenario becomes its own attempt sharing that mix (attempts `k·K … k·K+K−1`), so `K>1` means fewer distinct mixes and fewer meta-prompt calls. Requires `meta_prompts: true`. |
 | `meta_batch_size` | `1` | **Batch mode A:** mixes per meta-prompt call (each still gets its own scenario(s) and keeps its own lineage). Requires `meta_prompts: true`. |
