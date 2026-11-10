@@ -95,17 +95,33 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
         size = cfg.generation.record_batch_size
         limiter = asyncio.Semaphore(max(1, cfg.generation.concurrency // size))
 
-        async def _unit(unit: list[int]) -> list[dict[str, Any]]:
+        plans: dict[tuple[str, ...], list[str]] = {}  # subject node -> plans written so far (combined path)
+
+        async def _unit(unit: list[int], key: tuple[str, ...] = ()) -> list[dict[str, Any]]:
             async with limiter:
                 if not cfg.generation.meta_prompts:
-                    return await _combined_batch(cfg, router, taxonomy, strategies, unit)
+                    seen = plans.get(key, [])[-SUBJECT_MEMORY:] if key else None
+                    rows = await _combined_batch(cfg, router, taxonomy, strategies, unit, seen)
+                    if key:
+                        plans.setdefault(key, []).extend(_gist(row["meta_prompt"].split("\n")[0]) for row in rows if row.get("meta_prompt"))
+                    return rows
                 if size == 1:
                     return [await _generate_one_safe(cfg, router, meta_rows[unit[0]])]
                 return await _scenario_batch(cfg, router, [meta_rows[index] for index in unit])
 
-        units = [indexes[start : start + size] for start in range(0, len(indexes), size)]
+        if cfg.generation.subject:
+            def _mix_of(index: int) -> list[dict[str, Any]]:
+                if cfg.generation.meta_prompts:
+                    return meta_rows.get(index, {}).get("taxonomy_mix", [])
+                try:  # the same deterministic draw _combined_batch makes for this attempt
+                    return _sample_lineage(cfg, taxonomy, strategies, index, 1)["taxonomy_mix"]
+                except Exception:  # noqa: BLE001 - unusable mixes are rejected inside the batch
+                    return []
+            units = _subject_units([(_subject_key(cfg, _mix_of(index)), index) for index in indexes], size)
+        else:
+            units = [((), indexes[start : start + size]) for start in range(0, len(indexes), size)]
         async with asyncio.TaskGroup() as tg:
-            tasks = [tg.create_task(_unit(unit)) for unit in units]
+            tasks = [tg.create_task(_unit(unit, key)) for key, unit in units]
             with track(len(indexes), "Generating", quiet=quiet) as advance:
                 for future in asyncio.as_completed(tasks):
                     for row in await future:
@@ -157,6 +173,40 @@ def _check_picked_factors(cfg: Config, taxonomy: dict[str, Any]) -> None:
             raise ValueError(f"generation.model_picked names factor {factor!r}, which is not in the taxonomy (factors: {names}).")
         if not level_options(taxonomy, factor, level):
             raise ValueError(f"generation.model_picked: factor {factor!r} has no nodes to offer at level {level}.")
+    if cfg.generation.subject is not None and cfg.generation.subject not in names:
+        raise ValueError(f"generation.subject names factor {cfg.generation.subject!r}, which is not in the taxonomy (factors: {names}).")
+
+
+# Subject grouping (generation.subject): a batch holds one subject node, and it is shown the situations
+# already written for that node, so records that share a node are told apart instead of each call
+# independently inventing the most obvious instance.
+SUBJECT_MEMORY = 60      # most recent situations shown to a batch
+SUBJECT_GIST_WORDS = 16  # each situation is shown as its first words
+
+
+def _subject_key(cfg: Config, mix: list[dict[str, Any]]) -> tuple[str, ...]:
+    # The subject factor's sampled node (its full path); () when grouping is off or the mix is unusable.
+    entry = next((entry for entry in mix if entry.get("factor") == cfg.generation.subject), None)
+    return tuple(entry.get("path") or [entry["node"]]) if entry else ()
+
+
+def _subject_units(keyed: list[tuple[tuple[str, ...], Any]], size: int) -> list[tuple[tuple[str, ...], list[Any]]]:
+    """Chunk items into batches of at most `size` that share one subject key, then interleave the batches
+    round-robin across keys (in order of first appearance). Interleaving spaces out batches of the same
+    subject, so a later batch usually starts after the earlier ones finished and can see what they wrote."""
+    groups: dict[tuple[str, ...], list[Any]] = {}
+    for key, item in keyed:
+        groups.setdefault(key, []).append(item)
+    chunked = [[(key, items[start : start + size]) for start in range(0, len(items), size)] for key, items in groups.items()]
+    units = []
+    for round_ in range(max((len(chunks) for chunks in chunked), default=0)):
+        units.extend(chunks[round_] for chunks in chunked if round_ < len(chunks))
+    return units
+
+
+def _gist(text: str) -> str:
+    words = str(text).split()
+    return " ".join(words[:SUBJECT_GIST_WORDS]) + (" …" if len(words) > SUBJECT_GIST_WORDS else "")
 
 
 def _report_mix_space(cfg: Config, taxonomy: dict[str, Any], strategies: list[dict[str, Any]], attempts: int) -> None:
@@ -233,14 +283,19 @@ async def _build_meta_prompts(
         except Exception as exc:  # noqa: BLE001
             row["error"] = str(exc)
 
-    async def _mix_group(mix_ids: list[int]) -> list[dict[str, Any]]:
-        # One scenario call covers meta_batch_size mixes (1 = one call per mix).
+    covered: dict[tuple[str, ...], list[str]] = {}  # subject node -> situations written so far
+
+    async def _mix_group(mix_ids: list[int], key: tuple[str, ...] = ()) -> list[dict[str, Any]]:
+        # One scenario call covers meta_batch_size mixes (1 = one call per mix); with a subject they share one node.
         mixes = [_mix_attempts(mix_id) for mix_id in mix_ids]
         live = [attempt_rows for attempt_rows in mixes if "error" not in attempt_rows[0]]
         async with limiter:
             try:
                 specs = [(attempt_rows[0]["taxonomy_mix"], len(attempt_rows)) for attempt_rows in live]
-                scenario_lists = await _make_scenarios(cfg, router, specs) if live else []
+                seen = covered.get(key, [])[-SUBJECT_MEMORY:] if key else None
+                scenario_lists = await _make_scenarios(cfg, router, specs, seen) if live else []
+                if key:
+                    covered.setdefault(key, []).extend(_gist(text) for scenarios in scenario_lists for text in scenarios)
             except Exception as exc:  # noqa: BLE001 - a failed meta prompt call should not abort the phase.
                 scenario_lists = [[] for _ in live]
                 for row in (row for attempt_rows in live for row in attempt_rows):
@@ -256,8 +311,13 @@ async def _build_meta_prompts(
     # Append rows in completion order from the main task, mirroring the generation loop's IO pattern.
     mix_ids = sorted({index // k for index in missing})
     size = cfg.generation.meta_batch_size
+    if cfg.generation.subject:
+        keyed = [(_subject_key(cfg, _mix_attempts(mix_id)[0]["taxonomy_mix"]), mix_id) for mix_id in mix_ids]
+        groups = _subject_units(keyed, size)
+    else:
+        groups = [((), mix_ids[start : start + size]) for start in range(0, len(mix_ids), size)]
     async with asyncio.TaskGroup() as tg:
-        tasks = [tg.create_task(_mix_group(mix_ids[start : start + size])) for start in range(0, len(mix_ids), size)]
+        tasks = [tg.create_task(_mix_group(group, key)) for key, group in groups]
         with track(len(missing), "Meta prompts", quiet=quiet) as advance:
             for future in asyncio.as_completed(tasks):
                 for row in await future:
@@ -286,6 +346,7 @@ def _run_fingerprint(cfg: Config, taxonomy: dict[str, Any], strategies: list[dic
         "record_batch_size": generation.record_batch_size,
         "model_picked": generation.model_picked,
         "code_level": generation.code_level,
+        "subject": generation.subject,
         "complexity_ratio": generation.complexity_ratio,
         "critic": generation.critic,
         "max_refine_attempts": generation.max_refine_attempts,
@@ -377,6 +438,7 @@ async def _combined_batch(
     taxonomy: dict[str, Any],
     strategies: list[dict[str, Any]],
     indexes: list[int],
+    covered: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Combined path: write one record per attempt in a single call, straight from the sampled mixes.
 
@@ -404,7 +466,7 @@ async def _combined_batch(
         meta_row.update(strategy_id=lineage["strategy_id"], taxonomy_mix=lineage["taxonomy_mix"], complexified=lineage["harder"][0])
         meta_row["taxonomy_mix"] = [entry for entry in meta_row["taxonomy_mix"] if entry["factor"] not in picked]
         metas.append(meta_row)
-        items.append({"id": f"r{len(items) + 1}", "mix": meta_row["taxonomy_mix"]})
+        items.append({"id": f"r{len(items) + 1}", "mix": meta_row["taxonomy_mix"], **({"covered": covered} if covered is not None else {})})
     if not items:
         return rows
     written, missing_reason = await _send_batch(cfg, router, cfg.prompts.combined_batch_prompt(cfg.description, cfg.schema, items, choices))
@@ -544,7 +606,9 @@ async def _finish_row(
     return row
 
 
-async def _make_scenarios(cfg: Config, router: ModelRouter, specs: list[tuple[list[dict[str, Any]], int]]) -> list[list[str]]:
+async def _make_scenarios(
+    cfg: Config, router: ModelRouter, specs: list[tuple[list[dict[str, Any]], int]], covered: list[str] | None = None
+) -> list[list[str]]:
     """Scenario lists for (mix, count) specs: one meta_prompt call for a single mix, or one batched call
     covering every mix (meta_batch_size > 1). A mix missing from a batched reply gets no scenarios."""
 
@@ -552,12 +616,13 @@ async def _make_scenarios(cfg: Config, router: ModelRouter, specs: list[tuple[li
         # Every non-blank scenario is kept (each one becomes its own attempt); blanks and non-strings drop.
         return [text.strip() for text in values or [] if isinstance(text, str) and text.strip()]
 
-    if len(specs) == 1:
+    if len(specs) == 1 and covered is None:
         mix, count = specs[0]
         prompt = cfg.prompts.meta_prompt_prompt(cfg.description, cfg.schema, mix, count)
         response = await router.complete_json("bulk", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.META_PROMPT)
         return [clean(response.get("meta_prompts"))]
-    items = [{"id": f"m{position + 1}", "mix": mix, "count": count} for position, (mix, count) in enumerate(specs)]
+    extra = {"covered": covered} if covered is not None else {}
+    items = [{"id": f"m{position + 1}", "mix": mix, "count": count, **extra} for position, (mix, count) in enumerate(specs)]
     prompt = cfg.prompts.meta_prompt_batch_prompt(cfg.description, cfg.schema, items)
     response = await router.complete("bulk", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.META_PROMPT)
     written = {str(item.get("id")): item for item in _batch_items(response, "meta_prompts")}

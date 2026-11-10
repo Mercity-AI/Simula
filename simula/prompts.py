@@ -243,6 +243,20 @@ def choices_text(choices: list[dict[str, Any]]) -> str:
     return "\n\n".join(blocks)
 
 
+def covered_text(items: list[dict[str, Any]]) -> str:
+    """Subject grouping (generation.subject): the items of one batch share a subject node. Returns the note telling
+    the model to make each a different situation, plus the situations earlier batches already used for it."""
+    if not items or "covered" not in items[0]:
+        return ""
+    note = ("\n\nAll records below share the same subject (the same node of the subject factor). Make each one a "
+            "genuinely different concrete situation within that subject, not a variant of one idea.")
+    covered = items[0]["covered"]
+    if covered:
+        note += ("\nThese situations were already used for this subject in earlier batches; do not repeat them or close "
+                 "variants of them:\n" + "\n".join(f"- {text}" for text in covered))
+    return note
+
+
 def meta_prompt_prompt(description: str, schema: dict[str, Any] | None, mix: list[dict[str, Any]], k: int) -> str:
     # k > 1: every scenario becomes its own record sharing this mix, so they must differ for real.
     format_instruction = "The final data point will be free-form text." if schema is None else f"Output JSON Schema:\n{schema_text(schema)}"
@@ -282,7 +296,7 @@ Below are sets of sampled ingredients (not strict checklists), one per id. For e
 meta-prompts it asks for. A meta-prompt tells a generator what record to create: the situation and the
 content the record must carry, in at most 80 words. Describe the record; do not write it.
 - Think about what each combination of ingredients implies for the finished record. Full coverage of the ingredients, although important, is not the goal by itself — coherence, and being smart about what the combination should produce, is just as important, if not more. If ingredients conflict or their sum would be incoherent, build around the load-bearing ones and soften or drop the rest.
-- The ids are unrelated records: give each its own situation, people, names and details; never reuse a template across ids. Several meta-prompts for one id must be genuinely different records, not rewordings.
+- The ids are unrelated records: give each its own situation, people, names and details; never reuse a template across ids. Several meta-prompts for one id must be genuinely different records, not rewordings.{covered_text(items)}
 
 {specs}
 
@@ -351,7 +365,7 @@ def combined_batch_prompt(description: str, schema: dict[str, Any] | None, items
     # sampled mixes. items = [{"id": "r1", "mix": [...]}]. Every spec lists its nodes inline.
     specs = "\n\n".join(f"{item['id']}:\n{mix_text(item['mix'])}" for item in items)
     intro = "Write one record per spec below. Each spec lists the sampled ingredients for its record (taxonomy nodes; not a strict checklist)."
-    return _combined_prompt(description, schema, intro, specs, choices)
+    return _combined_prompt(description, schema, intro + covered_text(items), specs, choices)
 
 
 def combined_table_batch_prompt(description: str, schema: dict[str, Any] | None, items: list[dict[str, Any]], choices: list[dict[str, Any]]) -> str:
@@ -362,7 +376,7 @@ def combined_table_batch_prompt(description: str, schema: dict[str, Any] | None,
         "Write one record per row of the table below. NODES describes each sampled node once under a short id; each "
         "row lists the node ids that are the ingredients for its record (not a strict checklist)."
     )
-    return _combined_prompt(description, schema, intro, nodes_table(items), choices)
+    return _combined_prompt(description, schema, intro + covered_text(items), nodes_table(items), choices)
 
 
 def nodes_table(items: list[dict[str, Any]]) -> str:

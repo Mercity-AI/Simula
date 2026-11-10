@@ -7,7 +7,7 @@ import yaml
 
 from simula.cli import main
 from simula.config import load_config
-from simula.generate import _generate_one_safe, generate_dataset
+from simula.generate import _generate_one_safe, _subject_units, generate_dataset
 from simula.models import ModelRouter
 from simula.utils import artifact_path, read_jsonl, write_jsonl
 from simula.taxonomy import build_strategies, build_taxonomy, sample_mix
@@ -796,3 +796,52 @@ def test_combined_path_complexifies_the_written_record_in_its_own_call(tmp_path:
     cfg = load_config(write_config(tmp_path / "failing", _gen({"meta_prompts": False, "record_batch_size": 2, "complexity_ratio": 1.0})))
     rows = asyncio.run(generate_dataset(cfg, Failing(cfg.data), quiet=True))
     assert len(rows) == 4 and all(row["accepted"] and not row["complexified"] for row in rows)
+
+
+def test_subject_units_group_by_subject_then_interleave() -> None:
+    keyed = [(("topic", "a"), 0), (("topic", "b"), 1), (("topic", "a"), 2), (("topic", "a"), 3), (("topic", "b"), 4)]
+    # Each batch holds one subject node; batches alternate across nodes so same-node batches are spaced out.
+    assert _subject_units(keyed, 2) == [(("topic", "a"), [0, 2]), (("topic", "b"), [1, 4]), (("topic", "a"), [3])]
+
+
+def test_subject_must_be_a_code_sampled_taxonomy_factor(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="subject"):
+        load_config(write_config(tmp_path, _gen({"meta_prompts": False, "subject": "topic", "model_picked": {"topic": 1}})))
+    cfg = load_config(write_config(tmp_path, _gen({"meta_prompts": False, "record_batch_size": 2, "subject": "nope"})))
+    with pytest.raises(ValueError, match="generation.subject"):
+        asyncio.run(generate_dataset(cfg, _Recording(cfg.data), quiet=True))
+
+
+@pytest.mark.parametrize("path", ["combined", "meta_prompts"])
+def test_subject_batches_share_one_node_and_see_earlier_situations(tmp_path: Path, path: str) -> None:
+    class Capture(_Recording):
+        prompts: dict[str, list[str]] = {}
+
+        async def complete(self, role, prompt, system, task="unknown"):  # type: ignore[override]
+            Capture.prompts.setdefault(str(task), []).append(prompt)
+            return await super().complete(role, prompt, system, task=task)
+
+    Capture.prompts = {}
+    gen = {"meta_prompts": False, "record_batch_size": 2} if path == "combined" else {"meta_batch_size": 2}
+    cfg = load_config(write_config(tmp_path, _gen({**gen, "subject": "topic", "target_size": 8, "concurrency": 1})))
+    rows = asyncio.run(generate_dataset(cfg, Capture(cfg.data), quiet=True))
+    prompts = Capture.prompts["generate" if path == "combined" else "meta_prompt"]
+    assert len(rows) == 8 and len(prompts) >= 4
+    for prompt in prompts:
+        # One subject node per batch, and the batch is told its records share it.
+        assert len({line for line in prompt.splitlines() if line.startswith("- topic:")}) == 1
+        assert "share the same subject" in prompt
+    # Run one batch at a time: every batch after the first on a node sees what earlier batches wrote for it.
+    seen: dict[str, int] = {}
+    for prompt in prompts:
+        node = next(line for line in prompt.splitlines() if line.startswith("- topic:"))
+        assert ("already used for this subject" in prompt) == (seen.get(node, 0) > 0)
+        seen[node] = seen.get(node, 0) + 1
+
+
+def test_without_subject_batch_prompts_are_unchanged(tmp_path: Path) -> None:
+    cfg = load_config(write_config(tmp_path, _gen({"meta_prompts": False, "record_batch_size": 2})))
+    router = _Recording(cfg.data)
+    asyncio.run(generate_dataset(cfg, router, quiet=True))
+    log = read_jsonl(Path(cfg.output_dir) / "llm_calls.jsonl")
+    assert not any("share the same subject" in row["prompt"] for row in log if row["task"] == "generate")

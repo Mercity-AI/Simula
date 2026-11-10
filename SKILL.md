@@ -72,6 +72,9 @@ Choose once, before the pilot. Switching later needs `--no-resume`.
 - **Routing matters more than any knob.** On OpenRouter a `:nitro` model id billed about twice list
   price and reasoned about twice as much as the same model on default routing. Use the plain id for big
   runs unless speed matters; default routing is slower and sometimes hangs.
+- **Name the subject.** Set `generation.subject` to the factor that says what a record is about (topic, issue,
+  document type) whenever its nodes are shared by many records. Batches then hold one subject node and see the
+  situations already written for it, so records on a shared node stop repeating the node's obvious instance.
 - **Complexify is its own call** for `complexity_ratio` of the records: it rewrites the scenario, or on
   the combined path takes the written record and returns a harder one. Budget that many extra calls,
   or set it to 0 when "harder" means nothing for the dataset.
