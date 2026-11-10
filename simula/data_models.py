@@ -181,8 +181,8 @@ class GenerationCfg(_Section):
     ceil(target_size * overgenerate_ratio); trim controls whether accepted rows are capped at target.
     stop_after halts generate/run once that stage's artifact is written, so it can be inspected or
     hand-edited before the next stage spends model calls (the CLI --stop-after flag overrides it).
-    Batching: meta_batch_size mixes per scenario call (mode A), record_batch_size records per record call
-    (mode B, or mode C when meta_prompts=False: records straight from their sampled mixes, no scenario
+    Batching: meta_batch_size mixes per meta-prompt call (mode A), record_batch_size records per record call
+    (mode B, or mode C when meta_prompts=False: records straight from their sampled mixes, no meta-prompt
     step). model_picked {factor: level} lets the model choose those factors per record on the combined
     path instead of code sampling them. code_level {factor: level} stops code at that level of the
     factor's tree (exact shares there); the writer chooses the specifics beneath. subject names the factor

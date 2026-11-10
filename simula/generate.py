@@ -43,7 +43,7 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
     """Build/load taxonomy + strategies (+ meta prompts), run record generation, then dedupe + trim.
 
     Two record paths: with generation.meta_prompts (the default) every attempt first gets a reviewable
-    scenario in meta_prompts.jsonl and then its own record call; without it, records are written
+    meta-prompt in meta_prompts.jsonl and then its own record call; without it, records are written
     straight from their sampled mixes, generation.record_batch_size records per call. Writes raw/accepted rows
     as each attempt completes, checkpoints run_state.json, and finally writes dataset.final.jsonl from
     accepted rows. Resume (the default) skips attempt indexes already present and refuses to mix rows
@@ -54,6 +54,12 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
     _check_picked_factors(cfg, taxonomy)
     _stop_if_requested(cfg, "taxonomy")
     strategies = await build_strategies(cfg, router, taxonomy)
+    # The attempt queue is fixed by target size and overgeneration. Report what the design will draw before
+    # the strategies stop, so a review of the design sees it.
+    target = cfg.generation.target_size
+    attempts = math.ceil(target * cfg.generation.overgenerate_ratio)
+    _report_mix_space(cfg, taxonomy, strategies, attempts)
+    _report_strategy_skew(cfg, taxonomy, strategies)
     _stop_if_requested(cfg, "strategies")
     raw_path = artifact_path(cfg.output_dir, "raw")
     accepted_path = artifact_path(cfg.output_dir, "accepted")
@@ -79,11 +85,6 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
         write_jsonl(final_path, [])
         write_json(state_path, {"attempted": 0, "accepted": 0, "fingerprint": fingerprint})
 
-    # Determine the deterministic attempt queue from target size, overgeneration, and checkpoint state.
-    target = cfg.generation.target_size
-    attempts = math.ceil(target * cfg.generation.overgenerate_ratio)
-    _report_mix_space(cfg, taxonomy, strategies, attempts)
-    _report_strategy_skew(cfg, taxonomy, strategies, attempts)
     meta_rows = await _build_meta_prompts(cfg, router, taxonomy, strategies, attempts, quiet=quiet) if cfg.generation.meta_prompts else {}
     _stop_if_requested(cfg, "meta_prompts")
     completed_indexes = load_completed_attempt_indexes(raw_path) if resume else set()
@@ -96,7 +97,7 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
     checkpoint_every = max(1, cfg.generation.checkpoint_every)
     if indexes:
         phase(f"Generating {len(indexes)} attempts (target {target})")
-        # A unit is the record_batch_size attempts one record call writes: from their scenarios on the
+        # A unit is the record_batch_size attempts one record call writes: from their meta-prompts on the
         # meta-prompt path (record_batch_size 1 = one record per call), or straight from their mixes on the
         # combined path. A unit's records are then critiqued in parallel. Bounding whole units
         # (concurrency // record_batch_size of them) keeps in-flight model calls near `concurrency`, so a large
@@ -107,7 +108,7 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
         limiter = asyncio.Semaphore(max(1, cfg.generation.concurrency // size))
 
         nodes: SubjectNodes = {}
-        situations: dict[int, str] = {}  # combined path only: on the meta-prompt path the scenarios carry them
+        situations: dict[int, str] = {}  # combined path only: on the meta-prompt path the meta-prompts carry them
 
         async def _unit(unit: list[int]) -> list[dict[str, Any]]:
             async with limiter:
@@ -115,7 +116,7 @@ async def generate_dataset(cfg: Config, router: ModelRouter, *, resume: bool = T
                     return await _combined_batch(cfg, router, taxonomy, strategies, unit, situations)
                 if size == 1:
                     return [await _generate_one_safe(cfg, router, meta_rows[unit[0]])]
-                return await _scenario_batch(cfg, router, [meta_rows[index] for index in unit])
+                return await _meta_prompt_batch(cfg, router, [meta_rows[index] for index in unit])
 
         def _mix_of(index: int) -> list[dict[str, Any]]:
             if cfg.generation.meta_prompts:
@@ -272,17 +273,17 @@ def _report_mix_space(cfg: Config, taxonomy: dict[str, Any], strategies: list[di
         warn(f"only {space:,} distinct mixes for {mixes:,} samples, so mixes will repeat; widen or deepen the taxonomy for more variety.")
 
 
-SKEW_SAMPLE = 5000    # mixes drawn to measure what the strategies do to each factor's shares
+SKEW_SAMPLE = 5000     # mixes drawn to measure what the strategies do to each factor's shares
 SKEW_TOLERANCE = 0.05  # a top-level branch this far from its tree share is reported
 
 
-def _report_strategy_skew(cfg: Config, taxonomy: dict[str, Any], strategies: list[dict[str, Any]], attempts: int) -> None:
+def _report_strategy_skew(cfg: Config, taxonomy: dict[str, Any], strategies: list[dict[str, Any]]) -> None:
     # A factor's tree weights say how often each branch should appear. A strategy that restricts the factor to some
-    # branches (or a never_combine rule) overrides them, and the dataset silently gets other shares. Draw this run's
-    # own mixes and compare every code-sampled factor's top-level shares with its weights before paying for records.
-    mixes = min(math.ceil(attempts / cfg.generation.meta_prompts_per_mix), SKEW_SAMPLE)
+    # branches (or a never_combine rule) overrides them, and the dataset silently gets other shares. Draw mixes the
+    # way the run will (the same seeds, so a large run's first mixes) and compare every code-sampled factor's
+    # top-level shares with its weights. The sample size is fixed so a small design-step target still shows the skew.
     drawn: dict[str, dict[str, int]] = {}
-    for mix_id in range(mixes):
+    for mix_id in range(SKEW_SAMPLE):
         try:
             mix = _sample_lineage(cfg, taxonomy, strategies, mix_id, 1)["taxonomy_mix"]
         except Exception:  # noqa: BLE001 - an unusable mix is rejected when its attempt runs
@@ -296,12 +297,8 @@ def _report_strategy_skew(cfg: Config, taxonomy: dict[str, Any], strategies: lis
         if factor in cfg.generation.model_picked:
             continue
         total = sum(counts.values())
-        off = []
-        for option in level_options(taxonomy, factor, 1):
-            share, actual = option["share"], counts.get(option["name"], 0) / total
-            # Past the tolerance and past what sampling noise alone would give at this many mixes.
-            if abs(actual - share) > max(SKEW_TOLERANCE, 3 * math.sqrt(share * (1 - share) / total)):
-                off.append(f"{option['name']} {actual:.0%} of mixes (tree weight {share:.0%})")
+        shares = [(option["name"], counts.get(option["name"], 0) / total, option["share"]) for option in level_options(taxonomy, factor, 1)]
+        off = [f"{name} {actual:.0%} of mixes (tree weight {share:.0%})" for name, actual, share in shares if abs(actual - share) > SKEW_TOLERANCE]
         if off:
             restricted = restricting_strategies(strategies, factor)
             cause = f"strategies restricting it: {', '.join(restricted)}" if restricted else "caused by never_combine rules"
@@ -330,7 +327,7 @@ async def _build_meta_prompts(
 ) -> dict[int, dict[str, Any]]:
     """Produce one meta-prompt row per attempt index and persist them to meta_prompts.jsonl.
 
-    One call writes meta_prompts_per_mix (K) distinct scenarios for one sampled mix, and every scenario
+    One call writes meta_prompts_per_mix (K) distinct meta-prompts for one sampled mix, and every meta-prompt
     becomes its own attempt: attempts mix_id*K .. mix_id*K+K-1 share that mix's lineage. Reuse-if-present
     like taxonomy/strategies: existing indexes are kept (so hand edits survive a rerun), only missing
     ones are generated; delete lines or the file to regenerate. A failed model call is stored with an
@@ -364,33 +361,33 @@ async def _build_meta_prompts(
             row.update(strategy_id=lineage["strategy_id"], taxonomy_mix=lineage["taxonomy_mix"], complexified=harder)
         return attempt_rows
 
-    async def _attach(row: dict[str, Any], scenario: str) -> None:
-        # One attempt gets its scenario, complexified when its coin says so; a failed complexify only
+    async def _attach(row: dict[str, Any], meta_prompt: str) -> None:
+        # One attempt gets its meta-prompt, complexified when its coin says so; a failed complexify only
         # loses this attempt.
         try:
-            row["meta_prompt"] = await _complexify(cfg, router, scenario) if row["complexified"] else scenario
+            row["meta_prompt"] = await _complexify(cfg, router, meta_prompt) if row["complexified"] else meta_prompt
         except Exception as exc:  # noqa: BLE001
             row["error"] = str(exc)
 
     async def _mix_group(mix_ids: list[int]) -> list[dict[str, Any]]:
-        # One scenario call covers meta_batch_size mixes (1 = one call per mix); with a subject they share one node.
+        # One meta-prompt call covers meta_batch_size mixes (1 = one call per mix); with a subject they share one node.
         mixes = [_mix_attempts(mix_id) for mix_id in mix_ids]
         live = [attempt_rows for attempt_rows in mixes if "error" not in attempt_rows[0]]
         async with limiter:
             try:
                 specs = [(attempt_rows[0]["taxonomy_mix"], len(attempt_rows)) for attempt_rows in live]
                 spec_situations = [situations.get(attempt_rows[0]["attempt_index"]) for attempt_rows in live]
-                scenario_lists = await _make_scenarios(cfg, router, specs, spec_situations) if live else []
+                meta_prompt_lists = await _make_meta_prompts(cfg, router, specs, spec_situations) if live else []
             except Exception as exc:  # noqa: BLE001 - a failed meta prompt call should not abort the phase.
-                scenario_lists = [[] for _ in live]
+                meta_prompt_lists = [[] for _ in live]
                 for row in (row for attempt_rows in live for row in attempt_rows):
                     row["error"] = str(exc)
-            for attempt_rows, scenarios in zip(live, scenario_lists):
+            for attempt_rows, meta_prompts in zip(live, meta_prompt_lists):
                 for position, row in enumerate(attempt_rows):
-                    if position < len(scenarios):
-                        await _attach(row, scenarios[position])
+                    if position < len(meta_prompts):
+                        await _attach(row, meta_prompts[position])
                     elif "error" not in row:
-                        row["error"] = f"meta prompt call returned {len(scenarios)} of {len(attempt_rows)} scenarios"
+                        row["error"] = f"meta-prompt call returned {len(meta_prompts)} of {len(attempt_rows)} meta-prompts"
         return [row for attempt_rows in mixes for row in attempt_rows if row["attempt_index"] not in rows]
 
     # Append rows in completion order from the main task, mirroring the generation loop's IO pattern.
@@ -500,10 +497,10 @@ async def _generate_one_safe(cfg: Config, router: ModelRouter, meta_row: dict[st
         return _rejected(cfg, router, meta_row, f"Generation failed: {exc}")
 
 
-async def _scenario_batch(cfg: Config, router: ModelRouter, metas: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Meta-prompt path with record_batch_size > 1: one call writes the records for several scenarios.
+async def _meta_prompt_batch(cfg: Config, router: ModelRouter, metas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Meta-prompt path with record_batch_size > 1: one call writes the records for several meta-prompts.
 
-    Each record keeps its own meta row (lineage + scenario); a failed meta row rejects without a call.
+    Each record keeps its own meta row (lineage + meta-prompt); a failed meta row rejects without a call.
     """
     rows = [
         _rejected(cfg, router, meta_row, f"Meta prompt failed: {meta_row.get('error') or 'empty meta prompt'}")
@@ -697,14 +694,14 @@ async def _finish_row(
     return row
 
 
-async def _make_scenarios(
+async def _make_meta_prompts(
     cfg: Config, router: ModelRouter, specs: list[tuple[list[dict[str, Any]], int]], situations: list[str | None] | None = None
 ) -> list[list[str]]:
-    """Scenario lists for (mix, count) specs: one meta_prompt call for a single mix, or one batched call
-    covering every mix (meta_batch_size > 1). A mix missing from a batched reply gets no scenarios."""
+    """Meta-prompt lists for (mix, count) specs: one meta_prompt call for a single mix, or one batched call
+    covering every mix (meta_batch_size > 1). A mix missing from a batched reply gets no meta-prompts."""
 
     def clean(values: Any) -> list[str]:
-        # Every non-blank scenario is kept (each one becomes its own attempt); blanks and non-strings drop.
+        # Every non-blank meta-prompt is kept (each one becomes its own attempt); blanks and non-strings drop.
         return [text.strip() for text in values or [] if isinstance(text, str) and text.strip()]
 
     if len(specs) == 1 and not any(situations or []):

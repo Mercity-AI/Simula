@@ -2,6 +2,35 @@
 
 Completed work, newest first. Forward-looking items live in the root `TODO.md`.
 
+## 2026-11-11 — Subject and situations, strategy skew warning, pilot rule
+
+Follows a round of benchmarks on support tickets (GLM 5.3 Flash; 1,000-ticket arms, one 10,000-ticket
+run, blind re-labels and a blind critic pass).
+
+- **`generation.subject`** (a factor name or `auto`). Each node of the subject factor gets a list of
+  situations, one per record, and batches hold one node. One setting: the earlier `subject_pool` flag is
+  gone. `auto` asks the `strategic` model once and stores the pick in `taxonomy.json` (`"subject"`).
+  Artifact `situations.jsonl`, task names `subject` and `situations`, prompts `subject_prompt` and
+  `situations_prompt`. Measured: Vendi 42 → 51 at 1,000 tickets, no near-duplicates in 10,000, about 4%
+  of run cost. A failed listing call is retried once (88% → 98–100% of attempts with a situation).
+- **Removed** the cross-batch "already used" memory and the per-node lock it needed. Memory showed the
+  wrong part of each meta-prompt and bought nothing measurable; the lock serialised each node's batches.
+- **Trim in attempt order.** Once coverage is met the trim kept rows in completion order, which follows
+  the subject node when batches are grouped: 65–98% of trimmed rows came from the ten largest nodes.
+- **Strategy skew warning.** `generate` warns when strategies pull a code-sampled factor's top-level
+  shares more than 5 points from its tree weights, naming the strategies that restrict it.
+- **Prompt rules.** `CONTEXT_RULE`, `TAXONOMY_CONTEXT_RULE`, `PHRASING_RULE`, `DIVERSITY_RULE`,
+  `REVISE_RULE` in `simula/prompts.py`. A rule telling the critic to read the record as an outsider
+  first was tried and dropped: it changed nothing measurable and cost more.
+- **Wording.** "Scenario" is gone from docs and code: the thing is a meta-prompt. A situation is a
+  different thing (one factor, subject matter only); `DOCS.md` has the comparison.
+- **SKILL.md.** The pilot is a gate (5–7% of target, at least about 1,000 rows, same tree as the full
+  run), with a full checklist for what to look for in it.
+- **Known and open.** Independently sampled labels can disagree with the text written for them
+  (low-priority labels confirmed 42% of the time by a blind labeller, against 78% in a writer-labelled
+  set). The critic notices about half of these but its rewrites do not fix them. See `DOCS.md`, "A
+  sampled label can disagree with the text written for it".
+
 ## 2026-06-23 — Structural refactor (round 4)
 
 A larger sanctioned refactor landed (60 tests pass).

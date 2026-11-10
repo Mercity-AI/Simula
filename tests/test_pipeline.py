@@ -450,7 +450,7 @@ def _strategy_taxonomy() -> dict:
     }
 
 
-# --- optimizations: taxonomy call counts, critic loop, scenarios, combined batches ---
+# --- optimizations: taxonomy call counts, critic loop, meta-prompts, combined batches ---
 
 
 class _Recording(ModelRouter):
@@ -521,26 +521,26 @@ def test_critic_off_accepts_valid_records_without_critic_calls(tmp_path: Path) -
     assert "semantic_critic" not in router.tasks and "refine" not in router.tasks
 
 
-def test_every_scenario_of_a_mix_becomes_an_attempt(tmp_path: Path) -> None:
+def test_every_meta_prompt_of_a_mix_becomes_an_attempt(tmp_path: Path) -> None:
     cfg = load_config(write_config(tmp_path, _gen({"meta_prompts_per_mix": 2})))
     router = _Recording(cfg.data)
     asyncio.run(generate_dataset(cfg, router, quiet=True))
     meta = {row["attempt_index"]: row for row in read_jsonl(artifact_path(cfg.output_dir, "meta_prompts"))}
-    # 4 attempts from 2 mixes: one meta call per mix, both scenarios kept, the pair shares lineage.
+    # 4 attempts from 2 mixes: one meta call per mix, both meta-prompts kept, the pair shares lineage.
     assert router.tasks.count("meta_prompt") == 2
     assert meta[0]["taxonomy_mix"] == meta[1]["taxonomy_mix"] and meta[2]["taxonomy_mix"] == meta[3]["taxonomy_mix"]
     assert meta[0]["meta_prompt"] != meta[1]["meta_prompt"] and all(row["meta_prompt"] for row in meta.values())
 
 
-def test_blank_scenarios_are_dropped(tmp_path: Path) -> None:
-    from simula.generate import _make_scenarios
+def test_blank_meta_prompts_are_dropped(tmp_path: Path) -> None:
+    from simula.generate import _make_meta_prompts
 
     class Stub:
         async def complete_json(self, *args, **kwargs):
             return {"meta_prompts": ["  ", 7, " Keep me. "]}
 
     cfg = load_config(write_config(tmp_path))
-    assert asyncio.run(_make_scenarios(cfg, Stub(), [([], 3)])) == [["Keep me."]]
+    assert asyncio.run(_make_meta_prompts(cfg, Stub(), [([], 3)])) == [["Keep me."]]
 
 
 def test_combined_batches_write_records_straight_from_mixes(tmp_path: Path) -> None:
@@ -649,23 +649,23 @@ def test_failed_node_expansion_is_retried_once(tmp_path: Path) -> None:
     assert all(factor["children"] for factor in built["factors"])  # the first factor survived its bad response
 
 
-def test_batch_mode_a_writes_scenarios_for_several_mixes_per_call(tmp_path: Path) -> None:
+def test_batch_mode_a_writes_meta_prompts_for_several_mixes_per_call(tmp_path: Path) -> None:
     cfg = load_config(write_config(tmp_path, _gen({"meta_batch_size": 3, "target_size": 7})))
     router = _Recording(cfg.data)
     rows = asyncio.run(generate_dataset(cfg, router, quiet=True))
     meta = {row["attempt_index"]: row for row in read_jsonl(artifact_path(cfg.output_dir, "meta_prompts"))}
-    # 7 mixes in groups of 3 -> 3 scenario calls; each attempt keeps its own mix and gets its own scenario.
+    # 7 mixes in groups of 3 -> 3 meta-prompt calls; each attempt keeps its own mix and gets its own meta-prompt.
     assert router.tasks.count("meta_prompt") == 3
     assert len(rows) == 7 and all(row["accepted"] and row["taxonomy_mix"] for row in rows)
     assert len({row["meta_prompt"] for row in meta.values()}) == 7
 
 
-def test_batch_mode_b_writes_records_for_several_scenarios_per_call(tmp_path: Path) -> None:
+def test_batch_mode_b_writes_records_for_several_meta_prompts_per_call(tmp_path: Path) -> None:
     cfg = load_config(write_config(tmp_path, _gen({"record_batch_size": 3, "target_size": 7})))
     router = _Recording(cfg.data)
     rows = asyncio.run(generate_dataset(cfg, router, quiet=True))
     meta = {row["attempt_index"]: row for row in read_jsonl(artifact_path(cfg.output_dir, "meta_prompts"))}
-    # One scenario call per attempt, records in batches of 3; each row keeps its own scenario as lineage.
+    # One meta-prompt call per attempt, records in batches of 3; each row keeps its own meta-prompt as lineage.
     assert router.tasks.count("meta_prompt") == 7 and router.tasks.count("generate") == 3
     assert len(rows) == 7 and all(row["accepted"] for row in rows)
     assert all(row["meta_prompt"] == meta[row["attempt_index"]]["meta_prompt"] for row in rows)
@@ -939,7 +939,7 @@ def test_subject_auto_is_picked_once_and_kept_in_the_taxonomy(tmp_path: Path) ->
 
 
 def test_strategy_that_restricts_a_factor_is_reported(tmp_path: Path, capsys) -> None:
-    cfg = load_config(write_config(tmp_path, _gen({"target_size": 400, "stop_after": "meta_prompts"})))
+    cfg = load_config(write_config(tmp_path, _gen({"stop_after": "strategies"})))
     router = _Recording(cfg.data)
     taxonomy = asyncio.run(build_taxonomy(cfg, router))
     asyncio.run(build_strategies(cfg, router, taxonomy))
@@ -971,7 +971,6 @@ def test_built_in_prompts_carry_the_shared_rules() -> None:
         assert P.PHRASING_RULE in prompt
     # Writers that produce several records per call are told to keep them apart.
     assert all(P.DIVERSITY_RULE in prompt for prompt in batch_writers)
-    # Critics judge the record as a reader would; whoever fixes it changes the content, not the intended values.
-    assert all(P.CRITIC_RULE in prompt for prompt in (P.critique_prompt("d", schema, "mp", {"q": "x"}), P.critique_text_prompt("d", "mp", "x")))
+    # Whoever fixes a rejected record changes the content, not the intended values.
     for prompt in (P.critique_prompt("d", schema, "mp", {"q": "x"}), P.refine_record_prompt(schema, "mp", {"q": "x"}, "c"), P.refine_text_prompt("d", "mp", "x", "c")):
         assert P.REVISE_RULE in prompt

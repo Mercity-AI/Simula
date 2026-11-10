@@ -122,6 +122,15 @@ sampled mix) and reference per-node `weight`s in `taxonomy.json` — both live i
 this config, and are meant to be reviewed and hand-edited there. Every path in `taxonomy_roots` and
 `never_combine` is validated against the real tree at build time; invalid paths fail loudly.
 
+A strategy whose roots limit a factor to some of its branches changes that factor's shares: the tree
+weights say one thing and the dataset gets another. Right after strategies are built or loaded (so
+`--stop-after strategies` shows it), `generate` draws 5,000 mixes the way the run will and prints
+`strategies skew '<factor>': …` for every code-sampled factor whose
+top-level shares end up more than 5 points from its tree weights, naming the strategies that restrict
+it. In one benchmark a model-drafted "high stakes" strategy pushed one label from 25% to 40% of the
+dataset; deleting it from `strategies.json` restored the target. If the skew is intended, ignore the
+warning.
+
 ## `sampling`
 
 | Key | Default | What it does |
@@ -131,8 +140,8 @@ this config, and are meant to be reviewed and hand-edited there. Every path in `
 Decoding params resolve in three layers, last wins: built-in defaults → `models.<role>` static →
 `sampling.tasks.<task>`. Each task is handled by exactly one role, so naming the task is enough.
 Valid task names are the `TaskType` values: `factor_discovery`, `node_expansion`, `taxonomy_critic`,
-`level_plan`, `strategy`, `meta_prompt`, `complexify`, `generate`, `repair`, `semantic_critic`,
-`refine`, `complexity_score`, `node_assign`. There is no temperature-spread schedule — run the CLI
+`level_plan`, `strategy`, `subject`, `situations`, `meta_prompt`, `complexify`, `generate`, `repair`,
+`semantic_critic`, `refine`, `complexity_score`, `node_assign`. There is no temperature-spread schedule — run the CLI
 twice for a spread. Full details in README → *Sampling*.
 
 ```yaml
@@ -146,20 +155,37 @@ sampling:
 
 Volume and behavior of the generation pass (`simula generate`).
 
+Four words used below, in the order they appear in a run:
+
+- **Mix.** One sampled node per factor: the ingredients of one record. Drawn by code.
+- **Situation.** One sentence naming the concrete thing a record is about: one specific case of its
+  subject node ("a duplicate line item on a monthly invoice"). Subject matter only, nothing about tone,
+  length or who is writing. Listed per subject node before any writing, each used by exactly one record.
+  Exists only when `subject` is set; kept in `situations.jsonl`.
+- **Meta-prompt.** A short instruction (about 80 words) for one record that fuses the whole mix, and the
+  situation when there is one, into a plan: what happens, who is involved, how it is written. One model
+  call per meta-prompt (or per batch of them). Exists only when `meta_prompts` is true; kept in
+  `meta_prompts.jsonl`, where it can be read and edited before records are written.
+- **Record.** The finished row.
+
+A situation says *what* a record is about and comes from one factor. A meta-prompt is the full brief for
+the record and comes from all of them. They stack: with both on, the situation goes into the meta-prompt;
+with `meta_prompts: false` it goes straight into the writer's spec and the writer makes its own one-line
+plan in the same call that writes the record.
+
 | Key | Default | What it does |
 |---|---|---|
 | `target_size` | `50` | Desired row count. Sets the attempt budget; caps `dataset.final.jsonl` only when `trim` is true. Rejections/dedupe can leave fewer rows. |
 | `overgenerate_ratio` | `1.3` | `attempts = ceil(target_size × ratio)`. Buffer for rows the critic/schema rejects. `1.0` = no buffer. |
 | `trim` | `true` | Coverage-trim accepted rows to `target_size`: rows that add taxonomy coverage first, then the earliest attempts. Set false to skip selection and retain all accepted rows after optional dedupe, in attempt order. |
-| `meta_prompts` | `true` | Write a reviewable scenario per attempt first (`meta_prompts.jsonl`, editable via `stop_after: meta_prompts`), then generate the record from it. `false` = the **combined path**: records are written straight from their sampled mixes, `record_batch_size` per call, with no meta-prompt step or artifact. |
-| `meta_prompts_per_mix` | `1` | Scenarios one meta-prompt call writes for one sampled mix. Every scenario becomes its own attempt sharing that mix (attempts `k·K … k·K+K−1`), so `K>1` means fewer distinct mixes and fewer meta-prompt calls. Requires `meta_prompts: true`. |
-| `meta_batch_size` | `1` | **Batch mode A:** mixes per meta-prompt call (each still gets its own scenario(s) and keeps its own lineage). Requires `meta_prompts: true`. |
-| `record_batch_size` | `1` | Records written per record call. With `meta_prompts: true` this is **batch mode B** (records from several scenarios per call; set both batch sizes for A+B); with `meta_prompts: false` it is **mode C**, the combined path. Each record is still validated, repaired and critiqued on its own and keeps its own lineage. Batching amortizes the instruction prompt, not hidden reasoning — see the note below. |
+| `meta_prompts` | `true` | Write a reviewable meta-prompt per attempt first (`meta_prompts.jsonl`, editable via `stop_after: meta_prompts`), then generate the record from it. `false` = the **combined path**: records are written straight from their sampled mixes, `record_batch_size` per call, with no meta-prompt step or artifact. |
+| `meta_prompts_per_mix` | `1` | Meta-prompts one call writes for one sampled mix. Every one becomes its own attempt sharing that mix (attempts `k·K … k·K+K−1`), so `K>1` means fewer distinct mixes and fewer meta-prompt calls. Requires `meta_prompts: true`. |
+| `meta_batch_size` | `1` | **Batch mode A:** mixes per meta-prompt call (each still gets its own meta-prompt(s) and keeps its own lineage). Requires `meta_prompts: true`. |
+| `record_batch_size` | `1` | Records written per record call. With `meta_prompts: true` this is **batch mode B** (records from several meta-prompts per call; set both batch sizes for A+B); with `meta_prompts: false` it is **mode C**, the combined path. Each record is still validated, repaired and critiqued on its own and keeps its own lineage. Batching amortizes the instruction prompt, not hidden reasoning — see the note below. |
 | `model_picked` | `{}` | Combined path only. `{factor: level}`: instead of code sampling these factors, the batch prompt offers the factor's nodes at that tree level (with the share code sampling would give each) and the model picks one per record, reporting it in `"picked"`. The pick becomes the row's lineage entry for that factor, marked `"picked_by": "model"`; code-picked factors are sampled exactly as before. Strategy roots and `never_combine` do not apply to model-picked factors. Factor names are checked against the taxonomy before any strategy or record call. A pick that matches no option, or a record missing from the batch, keeps a lineage entry at the factor root (node `unpicked` or the raw pick). Experimental: in the pilot the model skewed the distribution and mislabeled its picks (`plan.md` §0). |
 | `code_level` | `{}` | `{factor: level}`: code samples that factor only down to this tree level, and the writer chooses the specifics beneath the node it is given. Shares at that level stay exact (the leaf is still drawn, then replaced by its ancestor, so `never_combine` and other factors' draws are unchanged). Use it for a factor whose deep leaves often cannot go with the other factors' values (for example attribute leaves that only suit some products): in two pilots, cutting two such factors at level 2 raised realism and coherence with no loss of diversity, while cutting at level 1 drifted toward typical records. Cut as deep as is safe. Works on both record paths; a factor cannot be in both `code_level` and `model_picked`. |
-| `subject` | `null` | The factor that says what a record is about (its topic, document type, issue). When set, every batch holds one node of that factor (meta-prompt batches with `meta_batch_size` > 1, record batches with `record_batch_size` > 1), and each batch is told its records share a subject and must be different concrete situations. Use it when many records share a node of that factor: without it, each call invents the node's most obvious instance independently and records converge. This only tells apart the records of one call; `subject_pool` does it across calls. Same calls and cost. Must be a code-sampled factor (not in `model_picked`). |
-| `subject_pool` | `false` | Requires `subject`. Before records are written, Simula lists concrete situations for each subject node (25 per call, each call shown the node's earlier ones, nodes in parallel) and gives every record its own situation, drawn without replacement, as a `situation` line in its spec; the critic sees it too. Records that share a node then start from different specific cases instead of each inventing the node's obvious one. Written to `subject_pool.jsonl` (reused on rerun). About one extra call per 25 records. |
-| `complexity_ratio` | `0.3` | Fraction of attempts (sampled per point) made harder so the set mixes easy and hard items: an extra "complexify" call that rewrites the scenario, or on the combined path a "complexify" call that takes the written record and returns a harder version of it (`complexify_record_prompt`), before validation and critique. Complexify is always its own call, so the model has something concrete to make harder. `0.0` disables it. |
+| `subject` | `null` | The factor that says what a record is about (its topic, issue, item or document type): a factor name, or `auto` to let the model pick. When set, each node of that factor gets a list of **situations**, one per record that sampled it, and every batch (meta-prompt batches and record batches) holds one node. Records that share a node are then written about different concrete things; without it, each call invents the node's most obvious instance on its own and records converge. Situations are listed 25 per call, one call after another for a node (each call is shown the node's last 120 so it does not repeat them), nodes in parallel; each is used by exactly one record, as a `situation` line in its spec, and the critic sees it. An attempt whose listing call failed twice is written from its mix alone. Cost: about one extra `bulk` call per 25 records (4% of a run in our benchmark). Use it whenever a node is shared by more than a handful of records, which is nearly always. Measured on 10,000 support tickets: no near-duplicate records, and tickets with a situation varied more within a node than those without (0.58 against 0.51 mean pairwise distance). `auto` makes one `strategic` call once the tree exists and stores the answer in `taxonomy.json` as `"subject"` (a factor name, or `null` when no factor is about content); edit it there like the rest of the tree. The subject must be code-sampled, so it cannot be in `model_picked`. |
+| `complexity_ratio` | `0.3` | Fraction of attempts (sampled per point) made harder so the set mixes easy and hard items: an extra "complexify" call that rewrites the meta-prompt, or on the combined path a "complexify" call that takes the written record and returns a harder version of it (`complexify_record_prompt`), before validation and critique. Complexify is always its own call, so the model has something concrete to make harder. `0.0` disables it. |
 | `critic` | `true` | Critique every structurally valid record. `false` accepts every schema-valid record with no critic or refine calls (repair still runs). |
 | `max_refine_attempts` | `2` | Refines per record after critic rejections; every refined record is critiqued again, so the last word is always a verdict. `0` = critique once, never refine. A critic that returns a corrected record (`"revised"`, as the built-in JSON critic does) has a schema-valid fix accepted directly, with no refine. |
 | `concurrency` | `4` | In-flight model calls (a semaphore). On the combined path a batch counts as `record_batch_size` calls (its records are critiqued in parallel), so `concurrency // record_batch_size` batches run at once. Lower it if the provider rate-limits; raise it cautiously to go faster. |
@@ -168,13 +194,13 @@ Volume and behavior of the generation pass (`simula generate`).
 
 **Resume note:** `target_size`, `overgenerate_ratio`, `trim`, `concurrency`, and `checkpoint_every` are
 excluded from the resume fingerprint, so you can grow or re-pace a run and still `--resume`. Changing
-`meta_prompts`, `meta_prompts_per_mix`, `meta_batch_size`, `record_batch_size`, `model_picked`, `code_level`, `subject`, `subject_pool`, `complexity_ratio`, `critic`, `max_refine_attempts` (or the
+`meta_prompts`, `meta_prompts_per_mix`, `meta_batch_size`, `record_batch_size`, `model_picked`, `code_level`, `subject`, `complexity_ratio`, `critic`, `max_refine_attempts` (or the
 description/schema/seed/models/prompts/sampling/taxonomy) invalidates resume and requires `--no-resume`.
 
 **Cost note (measured on DeepSeek v4 flash, reasoning effort low):** hidden reasoning is most of the
 billed output of every call, and it scales with the number of records written, not the number of calls:
 a 10-record batch reasons about as much per record as ten single calls. So `record_batch_size` mainly saves the
-repeated instruction prompt (input tokens) and, with `meta_prompts: false`, the scenario calls. Check
+repeated instruction prompt (input tokens) and, with `meta_prompts: false`, the meta-prompt calls. Check
 `reasoning_tokens` and `cost` in `llm_calls.jsonl` when tuning. A batch's reasoning plus output must fit
 `max_tokens`: give the `bulk` role room (e.g. `65536` for 10 records).
 

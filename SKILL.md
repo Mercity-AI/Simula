@@ -10,6 +10,21 @@ for the architecture and hard constraints; this file is the process and the judg
 `CONFIG.md` is the field reference and `examples/template.yaml` the copy-me skeleton, so nothing here
 repeats field tables.
 
+## Words used here
+
+- **Mix.** One sampled node per factor: the ingredients of one record. Code draws it.
+- **Subject.** The factor that says what a record is about (topic, issue, item, document type).
+- **Situation.** One sentence naming the concrete thing a record is about: one specific case of its
+  subject node. Content only, nothing about tone, length or who is writing. Listed per subject node
+  before any writing; each is used by exactly one record. Needs `generation.subject`.
+- **Meta-prompt.** A short brief for one record, written by a model from the whole mix (and the
+  situation, when there is one). Needs `generation.meta_prompts: true`.
+- **Record.** The finished row.
+
+A situation and a meta-prompt are different things. A situation fixes *what* the record is about and
+comes from one factor; a meta-prompt is the full plan for the record and comes from all of them. A run
+can use neither, either or both.
+
 ## Prime directive
 
 Ask the user only two things up front:
@@ -19,7 +34,7 @@ Ask the user only two things up front:
 2. **How much**: the target row count.
 
 Decide everything else yourself from this file, and bring the user back only at the gates below. State
-the few consequential choices you made in one line ("combined path, 5 per call, omit-absent fields,
+the few consequential choices you made in one line ("combined path, 5 per call, subject auto, omit-absent fields,
 fake smoke first") so they can veto; do not ask permission for each.
 
 ## Decision gates
@@ -31,7 +46,8 @@ fake smoke first") so they can veto; do not ask permission for each.
 | **Use-dependent representation choice** | The right answer depends on their downstream model (see "Representation decisions"). | One plain question with a recommendation. |
 | **Fixed vs per-row schema** | Decides between a strict `schema` and an open envelope plus a prompt module. | Ask only if the description is ambiguous; otherwise infer and say so. |
 | **Record critic off** | `generation.critic: false` is the cheapest setting but ships unchecked records. | Only if they ask for the cheapest possible run; tell them the trade. |
-| **Final scale-up** | A large run is real money. | Confirm once before going from pilot to full size. |
+| **Pilot size** | The pilot is the only place a bias is cheap to fix. Skipping or shrinking it is the user's call, not yours. | Say it in these terms: "Before the full run I strongly suggest a pilot on the same tree and strategies the full run will use. Ideally 5–7% of the target, and no less than 2–5%; in rows, at least about 1,000, and 3,000–5,000 for a large run. That is enough to see biases (label shares off target, repeated names and details, labels that do not match the text, near-copies) and fix them before paying for all of it. It will cost about $X. OK?" |
+| **Final scale-up** | A large run is real money. | Report what the pilot showed and what you fixed, then confirm once before going to full size. |
 
 ## Workflow
 
@@ -48,10 +64,15 @@ Run the CLI from the repo root: `validate`, `taxonomy`, `generate`, `evaluate`, 
 4. **Design, real (gate: spend + key).** Switch to real models and run
    `generate --stop-after strategies`. This builds `taxonomy.json` and `strategies.json` and stops.
    Review them as described in "Review the design before you pay", including who picks each factor.
-5. **Pilot.** Set `target_size` to 20–50 and run `generate`. Then do "Check the pilot".
-6. **Scale (gate: confirm).** Raise `target_size` and rerun in the same output directory; resume is on
-   by default. Watch it: if no model call lands for a few minutes a request has hung, so stop and
-   rerun (only the missing attempts are redone). Then `evaluate`.
+5. **Shake-out.** Set `target_size` to 20–50 and run `generate`. This only proves the prompts and the
+   schema work on the real model. Read a few rows; fix anything broken.
+6. **Pilot (gate: pilot size).** Raise `target_size` to the pilot size (see "The pilot") and rerun in the
+   same output directory. Then do "Check the pilot", all of it. A fix to the prompts, the tree or the
+   strategies changes the run's fingerprint, so rerun the pilot with `--no-resume` and check again.
+7. **Scale (gate: confirm).** Raise `target_size` and rerun in the same output directory; resume is on
+   by default and keeps the pilot's rows, so a clean pilot is not wasted money. Watch the run and report
+   progress as it goes: if no model call lands for a few minutes a request has hung, so stop and rerun
+   (only the missing attempts are redone). Then `evaluate`.
 
 ## Pick the generation path
 
@@ -59,27 +80,45 @@ Choose once, before the pilot. Switching later needs `--no-resume`.
 
 | Path | Config | Use it when |
 |---|---|---|
-| **Combined** (recommended) | `meta_prompts: false`, `record_batch_size: 5` | You want the cheapest good data. One call writes 5 records straight from their sampled mixes, each with a one-line plan; every record is still validated and critiqued on its own. In our pilot it cost about half the scenario path on the same model and its records were more faithful. |
-| **Scenario** | `meta_prompts: true` (built-in default) | The user wants to read or edit the per-record scenarios (`meta_prompts.jsonl`, `--stop-after meta_prompts`) before records are written. One extra call per record. |
+| **Combined** (recommended) | `meta_prompts: false`, `record_batch_size: 5` | You want the cheapest good data. One call writes 5 records straight from their mixes, each with a one-line plan; every record is still validated and critiqued on its own. In our pilots it cost about half the meta-prompt path with one record per call, and its records were more faithful to their mixes. |
+| **Meta-prompt** | `meta_prompts: true` (built-in default), `meta_batch_size: 10`, `record_batch_size: 5–10` | The user wants to read or edit the per-record briefs (`meta_prompts.jsonl`, `--stop-after meta_prompts`) before records are written, or stock phrasing is the main complaint: with the brief written first, records announced their ingredients less often (follow-up framing in 13% of tickets against 15%). Batched like this its cost is in the same range as the combined path. |
 
+Do you need meta-prompts? Usually not. In a 1,000-ticket benchmark with situations on, the two paths gave
+the same variety (Vendi 51.2 combined, 51.4 meta-prompt). The meta-prompt path earns its extra step when
+a human will edit the briefs, or when a record needs planning the writer cannot do in one line.
+
+- **Set the subject.** `generation.subject: auto` (or name the factor). Each node of the subject then
+  gets a list of situations, one per record, so records that share a node are about different things.
+  It is the largest variety gain we have measured (Vendi 42 → 51 on 1,000 tickets, and no near-copies in
+  10,000) for about 4% extra cost. Skip it only when no factor is about content. After the design step,
+  open `taxonomy.json` and check `"subject"` names the factor you would have picked; edit it if not.
 - **Batch size follows record length.** 5 for short records (queries, QA pairs, tickets); 1–2 for long
-  free text, because records written together come out shorter. Past about 5, records drift from the
-  shape that was sampled for them.
+  free text, because records written together come out shorter. Past about 5 on the combined path,
+  records drift from the shape that was sampled for them.
+- **Keep meta-prompt batches at 10 or under.** At 30 per call a cheap model returned briefs that only
+  restated their ingredients, and the share of records whose labels matched their mix fell from 94% to
+  88–90%.
 - **Give `bulk` room.** A batch reasons before it answers. Set `models.bulk.max_tokens` high (the
   e-commerce example uses 65536); a reply cut off at the limit loses the whole batch.
-- **Keep the critic on.** It roughly halves invented content. With it off, about one row in three in
-  our pilot had an unsupported or missing fact.
+- **Keep the critic on, and know what it does not do.** It roughly halves invented content; with it off,
+  about one row in three in our pilot had an unsupported or missing fact. It is also about half of a
+  combined-path run's cost. It does not make a label fit a text that was written against it (see "Check
+  the pilot", labels).
 - **Routing matters more than any knob.** On OpenRouter a `:nitro` model id billed about twice list
   price and reasoned about twice as much as the same model on default routing. Use the plain id for big
   runs unless speed matters; default routing is slower and sometimes hangs.
-- **Name the subject.** Set `generation.subject` to the factor that says what a record is about (topic, issue,
-  document type) whenever its nodes are shared by many records. Batches then hold one subject node and are told
-  to make each record a different situation, so the records of one call stop repeating the node's obvious
-  instance. Add `subject_pool: true` when nodes are shared by dozens of records: each record then gets its own
-  concrete situation from a list written per node, which spreads records far more than grouping alone.
-- **Complexify is its own call** for `complexity_ratio` of the records: it rewrites the scenario, or on
-  the combined path takes the written record and returns a harder one. Budget that many extra calls,
-  or set it to 0 when "harder" means nothing for the dataset.
+- **Complexify is its own call** for `complexity_ratio` of the records: it rewrites the meta-prompt, or
+  on the combined path takes the written record and returns a harder one. Budget that many extra calls
+  (12% of cost at 0.2), or set it to 0 when "harder" means nothing for the dataset.
+
+## Write the description like a spec, not a story
+
+The description (and anything a prompt module pastes in beside it) is read by every prompt. State what a
+record is, what it is for, and the rules. Leave out anecdotes, example incidents, sample IDs, named
+people and "recent events": whatever is concrete in the context gets copied. In one benchmark a feature
+name mentioned once in the brief appeared in 26% of tickets and an error code in 5%; the built-in context
+rules cut the codes to about 1%, and deleting the line from the brief took them to zero. If the model
+needs facts to stay consistent (plan names, limits, units), give those; give no incidents.
 
 ## Archetype → variation axes
 
@@ -104,7 +143,7 @@ leaves describe another factor's territory produces contradictions.
 `taxonomy.json` (with per-node `weight`) and `strategies.json` (roots, weights, `never_combine`)
 decide the whole distribution before a single record exists. A model drafted them, they look plausible
 by construction, and every error in them is executed faithfully at full scale. Reading them is the
-cheapest quality gate in the pipeline. Check four things:
+cheapest quality gate in the pipeline. Check five things:
 
 - **Weights vs. reality.** Do branch weights reflect how common each branch should be in realistic
   data, not how interesting it was to enumerate? Rare forms belong an order of magnitude below common
@@ -115,6 +154,13 @@ cheapest quality gate in the pipeline. Check four things:
   prevalence, and use a bare factor name for any factor a strategy has no opinion about.
 - **Combinations vs. coherence.** Look for two factors owning the same idea, and for pairs that are
   fine alone but impossible together. A few such pairs are what `never_combine` is for.
+- **Strategies vs. shares.** A strategy that lists only some branches of a factor overrides that
+  factor's tree weights for its share of the run. `generate` measures this as soon as strategies exist
+  (so the design step shows it) and prints `strategies skew '<factor>': …` naming the strategy. Treat every such line as a question for
+  you: is this skew wanted? In one benchmark a model-drafted "high stakes" strategy forced high or urgent
+  priority on a quarter of the tickets, so high came out at 40% against a 25% target; deleting it
+  restored the target. When the user gave target shares for a label, no strategy should restrict that
+  label's factor.
 - **Depth vs. fit.** See the next section.
 
 Two real failures, in opposite directions. A story corpus came out 57% high-artifice (22% second
@@ -205,11 +251,13 @@ per-row schemas, as `job_extraction` and `ecommerce_search_extraction` do. Atomi
 - **Taxonomy.** `depth: 2` for most datasets; 1 for a narrow one; 3 only for a broad domain. Leave
   `best_of_n: 1` and `taxonomy.critic: true`. Turning that critic off halves build cost but gave a
   much thinner tree when we tried it.
+- **Subject.** `generation.subject: auto`, checked in `taxonomy.json` after the design step.
 - **Models.** A stronger model for `strategic`, a cheap fast one for `bulk` and `critic`, `"fake"` for
   smoke tests. For reasoning models set `extra_body: {reasoning: {effort: low, exclude: true}}` per
   role; nothing is auto-detected.
-- **`overgenerate_ratio` about 1.1.** Accept rates are usually near 99% with a working prompt module;
-  raise it if the pilot says otherwise.
+- **`overgenerate_ratio` about 1.1.** Accept rates are usually near 99% with a working prompt module on
+  a strong model; cheap models drop or garble batch items (81–97% accepted in our runs), so use 1.25
+  there, and let the pilot's accept rate set the final value.
 - **`concurrency`.** It caps model calls in flight and the built-in 4 is slow. Use 40–80 for real runs
   if the provider allows, lower it on rate-limit retries. On the combined path a batch counts as
   `record_batch_size` calls.
@@ -229,42 +277,107 @@ Which functions matter:
 
 - `combined_batch_prompt`: the main lever on the combined path. It receives several records' mixes and
   says how to plan and write each one. `complexify_record_prompt` defines "harder" for a written record.
-- `meta_prompt_prompt`: the main lever on the scenario path. A scenario describes the record; one that
-  contains the finished record gets copied, invented details included.
+- `meta_prompt_prompt` / `meta_prompt_batch_prompt`: the main lever on the meta-prompt path. A
+  meta-prompt describes the record; one that contains the finished record gets copied, invented details
+  included.
+- `situations_prompt`: how the situations for a subject node are listed. Override it only to say what a
+  "situation" is for an unusual dataset; keep it about subject matter alone.
 - `critique_prompt` / `critique_text_prompt`: make the critic reject your anti-patterns. On rejection
   it may return the corrected record as `"revised"`, which is accepted directly when valid.
 
-The built-in tree and writer prompts carry two context rules from `simula/prompts.py`: `TAXONOMY_CONTEXT_RULE`
-(nodes are general kinds, with no named details or "such as" examples copied from the description) and
-`CONTEXT_RULE` (supplied context is background, not a menu; use its named details only when a record needs them,
-and vary wording widely), plus `PHRASING_RULE` for writers (show ingredients through content, not stock phrases;
-vary openings, closings and names). An override of `expand_prompt`, `refine_nodes_prompt` or a writer prompt should import
-and include them; otherwise the context's few concrete details end up in a large share of records.
+The built-in prompts share a few rules, defined as constants at the top of `simula/prompts.py`. An
+override replaces the whole prompt, so import and include the ones that apply:
+
+| Rule | Goes in | What happens without it |
+|---|---|---|
+| `TAXONOMY_CONTEXT_RULE` | `expand_prompt`, `refine_nodes_prompt` | Node descriptions copy the description's named details as "such as" examples, and those land in most records |
+| `CONTEXT_RULE` | every writer prompt | The context's few concrete details show up in a large share of records |
+| `PHRASING_RULE` | every writer prompt | Records announce their ingredients in the same stock phrases ("I'm the admin", "third time writing") |
+| `DIVERSITY_RULE` | writer prompts that produce several records per call | Records of one call converge on one template |
+| `REVISE_RULE` | `critique_prompt` (its `"revised"` record), `refine_record_prompt`, `refine_text_prompt` | The critic fixes a mismatch by changing the label instead of the text, and label shares drift |
+
+With a subject set, an override of `combined_batch_prompt` or `meta_prompt_batch_prompt` must also render
+each item's situation: add `situation_line(item)` to the item's spec and `situation_note(items)` to the
+instructions (both in `simula/prompts.py`). An override that leaves them out silently drops every
+situation. `PHRASING_RULE` and the others are worded for any dataset; add your own dataset's stock
+phrases next to them in the module.
 
 Three rules, each learned from a bad run:
 
 - **Never ask the model to vary something code already sampled.** "Vary the product across the
   candidates" produced a dataset where about 60% of rows were not about the product in their lineage.
 - **Say what wins when ingredients clash.** They are drawn independently. Give a precedence (subject
-  first) and permission to soften or drop one that does not fit.
+  first) and permission to soften or drop a texture ingredient that does not fit. Never give that
+  permission for a label or anything else stored in the record: those must hold exactly, so say which
+  ingredient decides which field (for a ticket, the facts decide priority and the wording carries mood).
 - **Tell the writer the nodes are instructions, not content,** or taxonomy names leak into records.
 
 Start from `examples/ecommerce_search_extraction_prompts.py` (every prompt for the combined path) or
 `examples/job_extraction_prompts.py` (atomic fields, omit-when-absent, strict critic).
 
+## The pilot
+
+The pilot is a small run of the real thing: same tree, same strategies, same prompts and models as the
+full run, and it is not optional. A model drafted the tree and the strategies, the mixes are drawn
+independently, and the writer has habits; each of these produces biases that are invisible in 50 rows and
+expensive in 50,000.
+
+- **Size.** 5–7% of the target is ideal; 2–5% is the floor. In rows, at least about 1,000, and
+  3,000–5,000 for a large run. Shares, repeated details and label problems do not show reliably in
+  fewer. If the whole target is only a few thousand rows, pilot about a third of it.
+- **Same output directory.** The pilot's rows are the first rows of the full run. Growing `target_size`
+  resumes from them, so a clean pilot costs nothing extra.
+- **Tell the user.** This is a gate (see "Decision gates"): say what you will run, why, and what it
+  costs, in plain terms, before you run it.
+
+What our own pilots would have caught, had they been this size: one label at 40% of the data against a
+25% target (a strategy); one name in 8% of records; a brief's example in 26% of them; and low-priority
+labels on tickets that read as high.
+
 ## Check the pilot
 
+Work through all of these. Each line says what to look at and what to do when it is off.
+
+- **Shares.** Count every label and every factor's top-level branches in `dataset.final.jsonl` and
+  compare with what the user asked for or the tree weights. A share more than about 5 points off has a
+  cause: a `strategies skew` warning you skipped, a `never_combine` rule, or the writer or critic
+  changing labels (compare each record's label with its `taxonomy_mix`). Fix `strategies.json` or the
+  prompt, not the count.
+- **Labels against the text.** For any dataset with labels, have a model label a few hundred records
+  blind (it sees the record, never the dataset's label) and compare. Break the agreement down by
+  combination of factors, not just by label: sampling is independent, so a low-priority label can be
+  rolled together with an angry tone, the writer raises the stakes to justify the anger, and the record
+  reads as high while its label says low. In our benchmark low + angry was confirmed 12% of the time and
+  low + positive 77%. Impossible pairs go in `never_combine`. For a pair that is possible but keeps
+  reading wrong, the critic will not save you (it rejects about half of them and its rewrite reads the
+  same): either exclude the pair, accept the noise and tell the user, or let the writer choose that label
+  with `model_picked` and give up exact shares for it. Bring this to the user as a choice.
 - **Lineage.** Nothing verifies that a record matches its `taxonomy_mix`. Read a dozen rows against
-  their mix: right subject, right shape or length, right label? If a factor is routinely ignored, fix
-  the prompt or the factor before scaling. `evaluation.coverage_mode: reassign` measures it with extra
-  critic calls.
+  their mix: right subject, right shape or length? If a factor is routinely ignored, fix the prompt or
+  the factor before scaling. `evaluation.coverage_mode: reassign` measures it with extra critic calls.
+- **Sameness.** Take the subject node with the most records and read ten of them side by side. They
+  should be about ten different things. If they are not, check that `situations.jsonl` has a row for
+  nearly every attempt and that a prompt override is not dropping the situation line. Turn on
+  `evaluation.diversity` for a number; compare only runs scored at the same `sample_cap`.
+- **Repeated details.** Count the names, places, numbers and product details that recur: any single
+  name in more than a few percent of records, any detail from the description in more than a handful.
+  Details from the description are removed at the source ("Write the description like a spec"). Default
+  names survive every instruction we have tried ("draw names from many cultures" moved one name from 5%
+  to 1% and left another at 8%); when names matter, make them a factor so code picks them.
+- **Stock phrases.** Read twenty openings and twenty closings in a row. Records that all start by
+  stating who is writing, or all sign off the same way, need the dataset's own stock phrases added next
+  to `PHRASING_RULE` in the prompt module.
 - **Accept rate and rejections.** Read `rejection_reason` in `dataset.raw.jsonl`. A run can finish
   below target without an error; if it did, say so and raise `overgenerate_ratio` or fix the cause. An
-  accepted row whose last critic verdict is "reject" is normal: the critic returned the fix.
+  accepted row whose last critic verdict is "reject" is normal: the critic returned the fix. If the
+  critic rewrites more than about a third of records, read what it rejects: a rule the writer keeps
+  breaking belongs in the writer prompt, and a field that follows a fixed rule from other fields is
+  better computed after generation than written by a model and judged by another.
 - **Quality.** Atomic fields, faithful content, no taxonomy names in records. `llm_calls.jsonl` has
   every prompt and response.
-- **Cost.** Sum `cost` over `llm_calls.jsonl` (the provider-billed amount when reported).
-  `cost_summary.json` covers only the last command.
+- **Cost.** Sum `cost` over `llm_calls.jsonl` (the provider-billed amount when reported), per task.
+  `cost_summary.json` covers only the last command. Multiply out to the full target and give the user
+  that number at the scale-up gate.
 
 ## Guardrails
 
@@ -272,8 +385,9 @@ Start from `examples/ecommerce_search_extraction_prompts.py` (every prompt for t
 - No real model calls without the user's go-ahead and a key in the root `.env`. Never put a key in YAML.
 - Review the design artifacts before paid generation.
 - Do not commit `runs/`, `.env` or `llm_calls.jsonl`.
-- Do not change a fingerprinted setting mid-run: the path, batch sizes, `code_level`, `model_picked`,
-  `complexity_ratio`, critic settings, models, prompts, taxonomy, strategies. `target_size`,
+- Do not skip or shrink the pilot on your own; that gate belongs to the user.
+- Do not change a fingerprinted setting mid-run: the path, batch sizes, `subject`, `code_level`,
+  `model_picked`, `complexity_ratio`, critic settings, models, prompts, taxonomy, strategies. `target_size`,
   `overgenerate_ratio` and `concurrency` are safe to change, so growing a run is fine.
 - Report real counts and real cost; when quality is off, show the offending rows.
 

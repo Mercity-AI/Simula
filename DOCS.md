@@ -13,6 +13,8 @@ the older docs disagree, the note says so.
 - [1. Quickstart mental model](#1-quickstart-mental-model)
 - [2. Core concepts](#2-core-concepts)
   - [Taxonomy](#taxonomy)
+  - [Strategies & sampling](#strategies--sampling)
+  - [Situations and meta-prompts](#situations-and-meta-prompts)
   - [Schema](#schema)
   - [The model roles (there are three, not four)](#the-model-roles-there-are-three-not-four)
 - [3. Overriding defaults ← start here](#3-overriding-defaults--start-here)
@@ -29,7 +31,9 @@ One YAML config drives everything. From a plain-English **description** (and an 
 sample that space (**strategies**), then repeatedly samples a point, turns it into a **meta-prompt**,
 generates a record, and runs a **critic → refine** loop before accepting it. (With
 `generation.meta_prompts: false` the meta-prompt step is skipped and several records are written per
-call straight from their sampled points; see [the combined path](#one-record-per-attempt-and-the-combined-path).) Everything is written
+call straight from their sampled points; see [the combined path](#one-record-per-attempt-and-the-combined-path).
+With `generation.subject` set, every record also gets a **situation**: the concrete thing it is about;
+see [situations and meta-prompts](#situations-and-meta-prompts).) Everything is written
 to human-readable JSON/JSONL artifacts as it happens.
 
 ```mermaid
@@ -40,6 +44,8 @@ flowchart TD
     tax -->|"taxonomy.json"| strat["Strategy build<br/>(strategic model)"]
     strat -->|"strategies.json (weighted roots)"| samp["Sample a point<br/>choose strategy → sample_mix"]
 
+    samp -.->|"generation.subject: one situation per record"| sit["Situations<br/>(bulk model)"]
+    sit -.-> meta
     samp -->|"taxonomy_mix (one node per factor)"| meta["Meta-prompt<br/>(bulk model)"]
     meta -->|"one meta-prompt (opt. complexified)"| gen["Generate record / text<br/>(bulk model)"]
     gen -->|"candidate record"| crit["Critic<br/>(critic model)"]
@@ -115,6 +121,33 @@ with its exact share, and the writer chooses the specifics beneath it.
 *are* the dataset's distribution — they decide what "typical" looks like at scale, before any
 generation money is spent. Both files are plain JSON, reused verbatim on rerun, and meant to be
 hand-edited: review them the way you would review the schema.
+
+### Situations and meta-prompts
+
+These are two different things, and a run can use neither, either or both.
+
+| | Situation | Meta-prompt |
+|---|---|---|
+| What it is | One sentence naming the concrete thing a record is about: one specific case of its subject node | A short brief (about 80 words) for one record: what happens, who is involved, how it is written |
+| Built from | One factor, the **subject** | The whole mix, plus the situation when there is one |
+| Says nothing about | Tone, length, format, who is writing | Nothing: it is the full plan |
+| Turned on by | `generation.subject` (a factor name, or `auto`) | `generation.meta_prompts: true` (the default) |
+| Written | Before anything else, as one list per subject node; each item is used by exactly one record | One per attempt (or several mixes per call with `meta_batch_size`) |
+| Artifact | `situations.jsonl` | `meta_prompts.jsonl`, editable via `--stop-after meta_prompts` |
+| Why | Records that share a subject node otherwise all tell that node's most obvious story | A reviewable, editable planning step between the mix and the record |
+
+**Why situations exist.** A tree with 70 leaves and 10,000 records puts about 140 records on each leaf.
+Every writer call sees its own records only, so each invents the leaf's most typical instance and the
+dataset fills with near-copies of one story per leaf. Listing a leaf's situations in one place, with the
+earlier ones in view, is the only step where the model compares them and can keep them apart. In a
+10,000-ticket benchmark this removed near-duplicates entirely and was the largest variety gain of
+everything tried, for about 4% extra cost.
+
+**How they combine.** On the meta-prompt path the situation is one line of the spec the meta-prompt is
+written from, so the meta-prompt carries it to the record. On the combined path the situation is a line of
+the record's own spec, and the writer's one-line plan takes the place of the meta-prompt. Either way the
+order of decisions is the same: code rolls the mix, the situation fixes what happened, and the writer (via a
+meta-prompt or directly) fits the two together.
 
 ### Schema
 
@@ -319,7 +352,7 @@ taxonomy:
 generation:
   target_size: 5                   # rows wanted in dataset.final.jsonl
   overgenerate_ratio: 1.4          # attempts = ceil(5 * 1.4) = 7 (buffer for rejections)
-  meta_prompts_per_mix: 2             # one meta-prompt call writes 2 scenarios per mix; BOTH become attempts
+  meta_prompts_per_mix: 2             # one call writes 2 meta-prompts per mix; BOTH become attempts
   complexity_ratio: 0.2            # ~20% of points routed through the complexify step
   max_refine_attempts: 1           # at most one refine, which is then critiqued again
   concurrency: 1                   # in-flight model calls
@@ -437,13 +470,14 @@ change it (blank sections fall back to defaults). Required fields have no defaul
 | -------------------- | ----------------------------------------------------------------- | ------- | ----------- | -------------- |
 | `target_size`        | Rows wanted in `dataset.final.jsonl`.                             | `50`    | yes         | integer > 0 |
 | `overgenerate_ratio` | `attempts = ceil(target_size * ratio)`; buffer for rejections.    | `1.3`   | yes         | float ≥ 1.0 |
-| `meta_prompts`       | Write a reviewable scenario per attempt first; `false` = combined path. | `true` | yes      | bool |
-| `meta_prompts_per_mix`  | Scenarios per meta-prompt call; **each becomes an attempt** sharing the mix. | `1` | yes      | integer > 0 (needs `meta_prompts: true` when > 1) |
+| `meta_prompts`       | Write a reviewable meta-prompt per attempt first; `false` = combined path. | `true` | yes      | bool |
+| `meta_prompts_per_mix`  | Meta-prompts per sampled mix; **each becomes an attempt** sharing the mix. | `1` | yes      | integer > 0 (needs `meta_prompts: true` when > 1) |
 | `meta_batch_size`    | Batch mode A: mixes per meta-prompt call.                         | `1`     | yes         | integer > 0 (needs `meta_prompts: true` when > 1) |
 | `record_batch_size`         | Records per record call: mode B with meta prompts, mode C without. | `1`    | yes         | integer > 0 |
 | `model_picked`       | Combined path: `{factor: level}` the model picks per record.      | `{}`    | yes         | mapping of factor name → level ≥ 1 |
 | `code_level`         | `{factor: level}`: code samples the factor down to this level; the writer picks specifics beneath. | `{}`    | yes         | mapping of factor name → level ≥ 1 |
-| `complexity_ratio`   | Fraction of points made harder by a complexify call (on the scenario, or on the record on the combined path). | `0.3` | yes         | float 0.0–1.0 |
+| `subject`            | The factor that says what a record is about; each of its nodes gets a list of situations, one per record, and batches hold one node. `auto` = the model picks once the tree is built. | `null`  | yes         | a factor name (code-sampled), `auto`, `null` |
+| `complexity_ratio`   | Fraction of points made harder by a complexify call (on the meta-prompt, or on the record on the combined path). | `0.3` | yes         | float 0.0–1.0 |
 | `critic`             | Critique records; `false` accepts every schema-valid record.      | `true`  | yes         | bool |
 | `max_refine_attempts`| Refines per record; each refined record is critiqued again (`0` = critique once, no refine).| `2` | yes | integer ≥ 0 |
 | `concurrency`        | In-flight model calls; lower if rate-limited.                     | `4`     | yes         | integer > 0 |
@@ -499,20 +533,60 @@ attempts = ceil(target_size * overgenerate_ratio)   # one record per attempt
 ```
 
 `meta_prompts_per_mix` (default `1`) does not change that count; it changes how many distinct mixes are
-drawn. One meta-prompt call writes K scenarios for one sampled point and **every one becomes its own
+drawn. One call writes K meta-prompts for one sampled point and **every one becomes its own
 attempt**, so K=3 means a third as many mixes and meta-prompt calls, three records per mix.
 
-Three batch modes cut calls: **A** `meta_batch_size` writes the scenarios for several mixes in one
-call, **B** `record_batch_size` (with meta prompts on) writes the records for several scenarios in one call,
+Three batch modes cut calls: **A** `meta_batch_size` writes the meta-prompts for several mixes in one
+call, **B** `record_batch_size` (with meta prompts on) writes the records for several meta-prompts in one call,
 and they combine. `generation.meta_prompts: false` is mode **C**, the **combined path**: no meta-prompt step and no
 `meta_prompts.jsonl`; one `bulk` call writes `record_batch_size` records straight from their sampled points,
 each with a one-line plan. Every record is then validated, repaired and critiqued on its own and keeps
-its own mix as lineage, so a bad record never sinks its batch. It is cheaper (no scenario calls, the
-instruction prompt is sent once per batch) but gives up the reviewable/editable scenario step. Hidden
+its own mix as lineage, so a bad record never sinks its batch. It is cheaper (no meta-prompt calls, the
+instruction prompt is sent once per batch) but gives up the reviewable/editable meta-prompt step. Hidden
 reasoning does not shrink with batching — a 10-record batch reasons about as much per record as ten
 single calls — so give `bulk` a `max_tokens` large enough for the whole batch. Complexify stays its own
 call on this path: a record whose coin came up (`complexity_ratio`) is handed to a `complexify` call
 that returns a harder version, which is then validated and critiqued like any other record.
+
+Keep meta-prompt batches at about 10 mixes per call. At 30 per call a cheap model started returning
+meta-prompts that only restated their ingredients, and records written from them drifted from their
+sampled labels (labels matching the sample fell from 94% to 88–90% in our benchmark).
+
+### Strategies can override the tree's weights
+
+A factor's node weights say how often each branch should appear. A strategy whose `taxonomy_roots` name
+only some branches of a factor draws that factor from those branches alone, so the dataset's shares are
+a blend of the tree and every such strategy, and nothing in the artifacts shows the result. `generate`
+therefore draws 5,000 mixes the way the run will, right after strategies are built or loaded (so
+`--stop-after strategies` shows it), and warns when a code-sampled factor's top-level shares land more
+than 5 points from its tree weights:
+
+```text
+Warning: strategies skew 'priority': low 23% of mixes (tree weight 30%); medium 26% of mixes (tree weight
+35%); high 38% of mixes (tree weight 25%) (strategies restricting it: high_stakes). Edit strategies.json
+if the tree weights are the shares you want.
+```
+
+If the tree weights are the shares you want, delete or widen the strategy. If the skew is the point of
+the strategy, leave it.
+
+### A sampled label can disagree with the text written for it
+
+Factors are sampled independently, so a record can be handed values that pull against each other: a low
+priority with an angry tone, say. Writers tend to resolve that in the text and leave the label as rolled:
+the ticket gains stakes that justify the anger and now reads as high priority, while its label still says
+low. In one benchmark a blind labeller confirmed 78% of low-priority labels in a set where the writer
+chose its own labels, but 42% where code rolled them, and 12% for the low + angry combination.
+The critic does not repair this. It notices (it rejected about half of the low + angry tickets), but the
+record it returns in place of the rejected one still reads the same way, and that rewrite is accepted
+without a second look. Telling the critic to read the record as an outsider first changed nothing
+measurable. What `REVISE_RULE` does do is keep the critic from changing the label instead: labels matching
+the sampled ones rose from 91.5% to 95.7%.
+**What to do:** in the pilot, have a model label a sample of records blind and compare with the dataset's
+labels per combination of factors, not only per label. Put impossible pairs in `never_combine`. For a
+combination that is possible but keeps reading wrong, choose knowingly: exclude it, accept the noise, or
+let the writer choose that label (`model_picked`), which gives labels that fit the text at the cost of
+exact shares (a writer-labelled set landed within 5 points of its targets).
 
 ### Deep leaves of one factor may not fit the other factors
 

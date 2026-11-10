@@ -125,7 +125,8 @@ The invariants an agent must preserve (these are not written down in the field t
   `stop_after: meta_prompts`) need `meta_prompts: true`; `model_picked` needs it false;
   `taxonomy.critic: false` needs `best_of_n: 1`. `model_picked` factor names are checked against the
   taxonomy right after it loads (`_check_picked_factors`), before strategies or records spend calls;
-  `code_level` factor names are checked there too, and a factor cannot be in both.
+  `code_level` factor names are checked there too, and a factor cannot be in both. `subject` is a
+  factor name or `auto` and cannot be a `model_picked` factor.
 - Connection lives on one `provider` block (`base_url`/`api_key_env`/`timeout_seconds`) shared by all
   roles; `api_key_env` names a variable read only from the project-root `.env`. `timeout_seconds`
   (default 180) is the per-request timeout. `load_config` prints a non-fatal stderr warning when a
@@ -189,28 +190,41 @@ When modifying this code, test that `taxonomy_mix` contains one lineage entry pe
 
 `generate_dataset`:
 
-1. Loads or builds taxonomy.
-2. Loads or builds strategies.
-3. Loads or builds meta prompts (`meta_prompts.jsonl`: one row per attempt index carrying the
-   sampled strategy/mix lineage, the meta prompt, and the complexify flag; missing indexes are
+1. Loads or builds taxonomy. With `generation.subject: auto`, `load_or_build_taxonomy` also asks the
+   `strategic` model once which factor is the subject (`_pick_subject`) and stores the answer in
+   `taxonomy.json` as `"subject"`. `subject_factor(cfg, taxonomy)` is the only place that resolves the
+   setting (a factor name, the stored pick, or `None`); use it instead of reading `cfg.generation.subject`.
+2. Loads or builds strategies, then reports the mix space and warns when strategies pull a code-sampled
+   factor's top-level shares away from its tree weights (`_report_strategy_skew`, measured on 5,000 mixes
+   drawn with the run's seeds). Both reports print before the `strategies` stop.
+3. Loads or builds meta-prompts (`meta_prompts.jsonl`: one row per attempt index carrying the
+   sampled strategy/mix lineage, the meta-prompt, and the complexify flag; missing indexes are
    generated, existing ones reused so hand edits survive). One call writes `meta_prompts_per_mix` (K)
-   scenarios for one mix and every one becomes an attempt (attempts `k·K…k·K+K−1` share the mix).
+   meta-prompts for one mix and every one becomes an attempt (attempts `k·K…k·K+K−1` share the mix).
    Skipped entirely with `generation.meta_prompts: false` (the combined path).
-4. Schedules generation attempts, `record_batch_size` records per call: from their scenarios
-   (`_generate_one_safe` at size 1, else `_scenario_batch`, batch mode B), or on the combined path straight
+4. With a subject, three helpers apply on whichever path writes from the mixes (the meta-prompt phase,
+   or the record phase on the combined path): `_subject_nodes` groups attempts by the subject node their
+   mix sampled, `_write_situations` lists one situation per attempt for every node (`situations.jsonl`,
+   25 per call, calls for one node in sequence so each sees the node's earlier ones, one retry on a
+   malformed reply), and `_batches` forms batches that hold one node. A situation is one line of an
+   item's spec (`situation_line`) and nothing else: there is no cross-batch memory and no per-node lock.
+5. Schedules generation attempts, `record_batch_size` records per call: from their meta-prompts
+   (`_generate_one_safe` at size 1, else `_meta_prompt_batch`, batch mode B), or on the combined path straight
    from their sampled mixes with a plan per record (`_combined_batch`, mode C; `model_picked` factors are
-   offered as options and the model's pick becomes lineage). `meta_batch_size` batches the scenario step
-   itself (mode A, `_make_scenarios`). Batched records are validated/repaired and critiqued one by one
+   offered as options and the model's pick becomes lineage). `meta_batch_size` batches the meta-prompt step
+   itself (mode A, `_make_meta_prompts`). Batched records are validated/repaired and critiqued one by one
    (`_send_batch` + `_finish_item`); a malformed item loses only itself (`_batch_items`). Complexify is
-   always its own call: on the scenario in the meta-prompt phase, or on the combined path on the written
+   always its own call: on the meta-prompt in the meta-prompt phase, or on the combined path on the written
    record (`_complexify_record`, record in, harder record out) before validation and critique. Batch
    prompts carry no "harder" flag. All paths end in `_finish_row`.
-5. Writes raw/accepted rows as each future completes.
-6. Updates `run_state.json`.
-7. Dedupes accepted rows if configured.
-8. Coverage-aware trims to `target_size` when `generation.trim` is true (default); otherwise keeps
-   all remaining accepted rows in their existing order. `trim` can change on resume.
-9. Writes `dataset.final.jsonl`.
+6. Writes raw/accepted rows as each future completes.
+7. Updates `run_state.json`.
+8. Dedupes accepted rows if configured.
+9. Coverage-aware trims to `target_size` when `generation.trim` is true (default); otherwise keeps
+   all remaining accepted rows. Accepted rows are put in attempt order first: once coverage is met the
+   trim keeps the earliest rows, and completion order follows the subject node when batches are grouped,
+   so trimming in completion order would cut whole nodes. `trim` can change on resume.
+10. Writes `dataset.final.jsonl`.
 
 `generation.stop_after` (or CLI `--stop-after`) halts after step 1, 2, or 3 via `SystemExit(0)` —
 the same mechanism as `write_then_edit` — so the stage's artifact can be edited before a rerun

@@ -226,7 +226,7 @@ def fake_complete(prompt: str, counter: int = 0) -> str:
         count = int(re.search(r"List (\d+) ", prompt).group(1))
         return json.dumps({"situations": [f"Situation {counter}-{i}" for i in range(count)]})
     if '"mixes"' in prompt:
-        # Batched meta-prompt prompt: three distinct scenarios per spec id ("m1 (2 meta-prompts):", ...).
+        # Batched meta-prompt prompt: three distinct meta-prompts per spec id ("m1 (2 meta-prompts):", ...).
         mixes = [{"id": m, "meta_prompts": [f"Create a {style} example {m}-{counter}." for style in ("concise", "varied", "detailed")]}
                  for m in re.findall(r"^(m\d+)\b", prompt, flags=re.MULTILINE)]
         return json.dumps({"mixes": mixes})

@@ -3,7 +3,9 @@
 > CLI-first synthetic data generator: taxonomy build → strategy build → per-point sample →
 > meta-prompt → generate record → critic/refine → dedupe/trim → JSON/JSONL artifacts. With
 > `generation.meta_prompts: false` the meta-prompt step is skipped and several records are written per
-> call straight from their sampled points (the combined path, the cheapest setup). One YAML
+> call straight from their sampled points (the combined path, the cheapest setup). With
+> `generation.subject` set, each record also gets a situation (the concrete thing it is about), listed
+> per node of the subject factor so records sharing a node differ. One YAML
 > config drives everything. There are three model roles — `strategic`, `bulk`, `critic` — not four;
 > record generation is the `bulk` role (the `generator_model` row field is the bulk model id).
 

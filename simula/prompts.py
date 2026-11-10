@@ -55,15 +55,9 @@ DIVERSITY_RULE = (
     "Never reuse a template across records."
 )
 
-# Critic rules. A critic that reads the meta-prompt first tends to accept whatever matches it, so a record can carry a
-# value (a label, a level) that its content does not support: rolled independently, written faithfully, read wrongly.
-CRITIC_RULE = (
-    "Read the record first as its eventual reader will, without the meta-prompt: what would an independent reader take "
-    "it to be, and which values would they give its fields? Reject it when that reading differs from what the record "
-    "claims or was meant to be, even if every intended ingredient is nominally present: a label, category, level or "
-    "rating that the content does not clearly support is wrong, however well it matches the meta-prompt. Do not let "
-    "the intent talk you into accepting."
-)
+# Revise rule: left alone, a critic or refiner often "fixes" a mismatch between a record's content and its intended
+# values by changing the values, which moves the dataset's shares away from what was sampled. (Measured on support
+# tickets: with the rule, labels matching the sampled ones went from 91.5% to 95.7%.)
 REVISE_RULE = (
     "Fix a record by changing its content until what was intended is the clear reading. Keep the intended values "
     "(labels, categories, levels) themselves: do not change them to match the content."
@@ -359,7 +353,7 @@ Return JSON:
 
 
 def meta_prompt_prompt(description: str, schema: dict[str, Any] | None, mix: list[dict[str, Any]], k: int) -> str:
-    # k > 1: every scenario becomes its own record sharing this mix, so they must differ for real.
+    # k > 1: every meta-prompt becomes its own record sharing this mix, so they must differ for real.
     format_instruction = "The final data point will be free-form text." if schema is None else f"Output JSON Schema:\n{schema_text(schema)}"
     several = (
         f"\nAll {k} meta-prompts become separate records built from these same ingredients, so make them genuinely distinct records — different situations, details and angles — not rewordings of one idea."
@@ -384,7 +378,7 @@ Return JSON:
 
 
 def meta_prompt_batch_prompt(description: str, schema: dict[str, Any] | None, items: list[dict[str, Any]]) -> str:
-    # Batch mode A (generation.meta_batch_size > 1): scenarios for several sampled mixes in one call.
+    # Batch mode A (generation.meta_batch_size > 1): meta-prompts for several sampled mixes in one call.
     # items = [{"id": "m1", "mix": [...], "count": k}]. Static text first, specs last (cacheable prefix).
     format_instruction = "The final data points will be free-form text." if schema is None else f"Output JSON Schema:\n{schema_text(schema)}"
     specs = "\n\n".join(f"{item['id']} ({item['count']} meta-prompt{'s' if item['count'] > 1 else ''}):\n{mix_text(item['mix'])}{situation_line(item)}" for item in items)
@@ -614,7 +608,6 @@ Generated record:
 {json.dumps(record, ensure_ascii=False)}
 
 Does the record satisfy the meta-prompt and schema intent? Explain briefly.
-{CRITIC_RULE}
 If you reject it, also return "revised": the record corrected to fix every problem you found (change only what is needed). {REVISE_RULE}
 Return JSON (omit "revised" when accepting):
 {{"verdict": "accept" | "reject", "explanation": "...", "revised": {{...}}}}
@@ -635,7 +628,6 @@ Generated output:
 ---
 
 Does the output satisfy the meta-prompt? Be strict but fair.
-{CRITIC_RULE}
 Return JSON:
 {{"verdict": "accept" | "reject", "explanation": "..."}}
 """.strip()

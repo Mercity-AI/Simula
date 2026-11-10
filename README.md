@@ -24,9 +24,11 @@ The current implementation is intentionally lean. It uses JSON/YAML files, OpenA
 - Builds taxonomies from a dataset description and optional user-provided factors.
 - Generates sampling strategies over taxonomy branches.
 - Samples taxonomy mixes and turns them into meta-prompts.
+- Optionally gives every record its own situation: the concrete thing it is about, listed per node of the subject factor so records that share a node differ (`generation.subject`).
 - Generates JSON records matching a user-defined schema, or direct free-form text when `schema: null`.
 - Validates records with a JSON Schema subset.
 - Runs a simple critic/refine loop.
+- Warns before generation when strategies pull a factor's shares away from its tree weights.
 - Optionally writes several records per call straight from their sampled mixes (the combined path), with every record still validated and critiqued on its own.
 - Writes every model response to `llm_calls.jsonl` as soon as it returns.
 - Writes raw, accepted, and final datasets as JSONL.
@@ -199,6 +201,10 @@ Return JSON with a strategies array.
 """.strip()
 ```
 
+The built-in prompts share a few rules defined as constants at the top of `simula/prompts.py`
+(`CONTEXT_RULE`, `PHRASING_RULE`, `DIVERSITY_RULE`, `REVISE_RULE`, `TAXONOMY_CONTEXT_RULE`). An override replaces the whole prompt, so import the rules that apply and
+include them; each one is there because a run went wrong without it (see `SKILL.md`, "Custom prompts").
+
 Override functions must keep the same parameter names as their built-in counterparts in `simula/prompts.py`. `simula validate` imports the module and rejects missing files, import failures, non-string system prompts, and incompatible function signatures before any model call runs.
 
 ### Strategy Guidance
@@ -277,6 +283,7 @@ Each run writes human-inspectable files under `project.output_dir`:
 ```text
 taxonomy.json
 strategies.json
+situations.jsonl
 meta_prompts.jsonl
 dataset.raw.jsonl
 dataset.accepted.jsonl
@@ -310,6 +317,13 @@ cannot delete distinct records. The index is removed when deduplication exits. I
 8 MiB, but temporary disk usage grows with indexed sequences and the input rows still reside in
 memory. Highly repetitive inputs can still produce many candidate comparisons.
 
+`situations.jsonl` exists when `generation.subject` is set: one row per attempt (`attempt_index`,
+`subject` = the node path, `situation` = one sentence naming the concrete thing that record is about).
+It is written before anything else and reused when present, so a rerun only fills attempts that have
+none. With `subject: auto` the model's pick of the subject factor is stored in `taxonomy.json` under
+`"subject"`. A situation is not a meta-prompt: it covers one factor and says only what the record is
+about, while a meta-prompt is the whole brief for the record (`DOCS.md`, "Situations and meta-prompts").
+
 `meta_prompts.jsonl` holds one row per attempt (`attempt_index`, sampled `strategy_id` +
 `taxonomy_mix`, `meta_prompt`, `complexified`). Like `taxonomy.json` and `strategies.json` it is
 reused when present — stop with `--stop-after meta_prompts`, hand-edit the prompts, and rerun to
@@ -320,7 +334,7 @@ chosen by the model per record from the offered options; their lineage entries c
 `"picked_by": "model"`. Factors listed in `generation.code_level` are sampled by code only down to
 that tree level (their lineage entry is the node at that level) and the writer chooses the specifics
 beneath it; this works on both paths. A record whose complexify coin came up is rewritten by a
-separate `complexify` call: on the scenario, or on the combined path on the written record.
+separate `complexify` call: on the meta-prompt, or on the combined path on the written record.
 
 `llm_calls.jsonl` is especially useful while a run is still active. Every successful model response is appended immediately with:
 
