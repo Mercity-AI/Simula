@@ -113,6 +113,7 @@ generation:
   target_size: 500
   overgenerate_ratio: 1.05
   meta_prompts_per_mix: 3
+  subject: query_domain        # every query gets its own situation, listed per domain node
   complexity_ratio: 0.35
   max_refine_attempts: 1
   concurrency: 8

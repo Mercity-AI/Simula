@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from simula.prompts import choices_text, mix_text
+from simula.prompts import choices_text, mix_text, situation_line, situation_note
 
 
 # A catalog of GOOD narrow, atomic e-commerce attributes spanning many verticals. Listed in the
@@ -92,7 +92,7 @@ Return JSON:
 
 def meta_prompt_batch_prompt(description: str, schema: dict[str, Any] | None, items: list[dict[str, Any]]) -> str:
     # Batch mode A: meta-prompts for several sampled mixes in one call, under the same rules as meta_prompt_prompt.
-    specs = "\n\n".join(f"{item['id']} ({item['count']} meta-prompt{'s' if item['count'] > 1 else ''}):\n{mix_text(item['mix'])}" for item in items)
+    specs = "\n\n".join(f"{item['id']} ({item['count']} meta-prompt{'s' if item['count'] > 1 else ''}):\n{mix_text(item['mix'])}{situation_line(item)}" for item in items)
     return f"""
 You are planning examples for an e-commerce search-query extraction dataset.
 
@@ -108,7 +108,7 @@ For each id, write the number of meta-prompts it asks for. A meta-prompt is a sh
 for a generator and MUST:
 {_META_PROMPT_RULES}
 Several meta-prompts for one id must be genuinely different searches (a different concrete product inside
-the vertical, buyer, context and phrasing).
+the vertical, buyer, context and phrasing).{situation_note(items)}
 
 {_BATCH_VARIETY}
 
@@ -263,7 +263,7 @@ def combined_batch_prompt(description: str, schema: dict[str, Any] | None, items
     # Batch mode C, the combined path: several examples per call straight from their sampled mixes, so
     # the planning rules of meta_prompt_prompt live here too. Static text first (cacheable prefix).
     # choices = model-picked factors (generation.model_picked): offered as options, reported in "picked".
-    specs = "\n\n".join(f"{item['id']}:\n{mix_text(item['mix'])}" for item in items)
+    specs = "\n\n".join(f"{item['id']}:\n{mix_text(item['mix'])}{situation_line(item)}" for item in items)
     picked = ""
     if choices:
         picked = (
@@ -291,7 +291,7 @@ Planning each example from its spec (the sampled taxonomy nodes):{picked}
   field count. Then write the example so it matches the plan.
 
 The spec nodes are instructions, not content: never copy a node name, path or description into the
-query or the extraction ("category" holds the shopper's own words, if anything).
+query or the extraction ("category" holds the shopper's own words, if anything).{situation_note(items)}
 
 {_BATCH_VARIETY}
 

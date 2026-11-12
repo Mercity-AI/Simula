@@ -105,6 +105,8 @@ generation:
   target_size: 20000           # full run: attempts = ceil(20000 * 1.3) = 26000 meta-prompts
   overgenerate_ratio: 1.3      # attempts = ceil(target_size * 1.3); buffer for rejected stories
   meta_prompts_per_mix: 1      # one meta-prompt per sampled mix; every meta-prompt written becomes a story
+  meta_batch_size: 10          # 10 mixes per meta-prompt call (keep at 10 or under)
+  subject: genre               # every story gets its own situation (premise), listed per genre node
   complexity_ratio: 0.3        # ~30% of points routed through the complexify step for richer constraints
   max_refine_attempts: 1       # critic -> refine at most once before rejecting
   concurrency: 48              # in-flight calls; lower if rate-limited

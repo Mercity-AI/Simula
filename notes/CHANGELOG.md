@@ -25,6 +25,12 @@ run, blind re-labels and a blind critic pass).
 - **Wording.** One name per thing in docs, config and code: a meta-prompt is the per-record instruction a
   model writes from the whole mix; a situation is one sentence of subject matter from the subject factor.
   `DOCS.md` has the comparison.
+- **Examples** (2026-11-13). New `examples/support_tickets.yaml` + `support_tickets_prompts.py`: the benchmark's
+  ticket dataset, self-contained (brief and guidelines embedded), both paths, situations rendered. The real-model
+  examples now set `subject` (product_vertical, job_family, genre, query_domain); the stories examples batch 10
+  meta-prompts per call; job_extraction drops `:nitro`. Prompt modules that override meta-prompt or batch
+  prompts render situations, and the stories and job modules gained a batched meta-prompt prompt (with a subject
+  set the meta-prompt path always calls it). Not re-run on real models; smoke-tested offline.
 - **Renamed `generation.code_level` to `generation.code_depth`** (2026-11-13). Every factor is code-picked by
   default; the setting only says how deep code goes, and the old name read as a mode next to `model_picked`.
   Old configs fail loudly at load (unknown key). A factor listed in both `code_depth` and `model_picked` is

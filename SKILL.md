@@ -398,7 +398,9 @@ override replaces the whole prompt, so import and include the ones that apply:
 With a subject set, an override of `combined_batch_prompt` or `meta_prompt_batch_prompt` must also render
 each item's situation: add `situation_line(item)` to the item's spec and `situation_note(items)` to the
 instructions (both in `simula/prompts.py`). An override that leaves them out silently drops every
-situation. `PHRASING_RULE` and the others are worded for any dataset; add your own dataset's stock
+situation. On the meta-prompt path a subject also means `meta_prompt_batch_prompt` is called even for one
+mix per call, so a module that overrides only `meta_prompt_prompt` must add the batch version too
+(`examples/stories_freetext_v2_prompts.py` shows both sharing one rule block). `PHRASING_RULE` and the others are worded for any dataset; add your own dataset's stock
 phrases next to them in the module.
 
 Three rules, each learned from a bad run:
@@ -499,6 +501,7 @@ Work through all of these. Each line says what to look at and what to do when it
 | `stories_freetext_v2.yaml` + `stories_freetext_v2_prompts.py` | long free text with rare forms kept at set rates by taxonomy weights |
 | `query_extraction_gemini.yaml` | NL query → structured JSON, fixed schema |
 | `job_extraction.yaml` + `job_extraction_prompts.py` | text → atomic JSON, omit-when-absent, strict critic |
+| `support_tickets.yaml` + `support_tickets_prompts.py` | classification with several labels at target shares; the setup from the November 2026 benchmark (combined path, 5 per call, situations, label-pinned tree levels, label-focused critic); about $0.85 per 1K tickets on GLM 5.3 Flash |
 | `ecommerce_search_extraction.yaml` + `ecommerce_search_extraction_prompts.py` | per-row varying schema; the reference for the combined path (5 per call, critic on, about $0.40 per 1K rows in our pilot) |
 
 More: concepts and pipeline in `DOCS.md`, every field in `CONFIG.md`, architecture and constraints in

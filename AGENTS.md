@@ -35,6 +35,7 @@ Examples:
 - `examples/cat_stories_freetext.yaml`: fake-model smoke test for schema-free text generation.
 - `examples/stories_freetext_v2.yaml` (+ `stories_freetext_v2_prompts.py`): long free-text stories; rare narrative forms held at set rates by taxonomy weights, short seed-style meta-prompts. `stories_freetext.yaml` is the earlier version, kept for reference.
 - `examples/job_extraction.yaml` (+ `job_extraction_prompts.py`): schema-guided `{schema, text, extraction}` envelope with a prompt-module override enforcing narrow atomic fields; DeepSeek v4 via OpenRouter.
+- `examples/support_tickets.yaml` (+ `support_tickets_prompts.py`): support-ticket triage with four labels at target shares; the November 2026 benchmark setup (combined path, 5 per call, `subject: category`, label-pinned level 1, label-focused critic); its prompt module carries both paths and renders situations.
 - `examples/ecommerce_search_extraction.yaml` (+ `ecommerce_search_extraction_prompts.py`): `{query, extraction}` envelope turning NL shopper searches into atomic DB-queryable JSON (varying schema, one-level nesting, 3..20-field spread). Depth-4 taxonomy; strategic=deepseek-v4-pro, bulk/critic=deepseek-v4-flash on default routing; combined path, record_batch_size 5. Its earlier 10K run (meta-prompt path, `:nitro`) is the cost baseline in `plan.md`.
 
 Tests:

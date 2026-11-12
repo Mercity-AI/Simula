@@ -43,22 +43,22 @@ provider:
   api_key_env: "OPENROUTER_API_KEY"
 
 models:
-  # Data generation uses deepseek-v4-flash:nitro (cheaper/faster; :nitro = throughput routing).
+  # Data generation uses deepseek-v4-flash on default routing (":nitro" billed about 2x and reasoned 2x more).
   # The taxonomy + strategies were already built with deepseek-v4-pro and are reused from disk,
   # so `strategic` is not re-invoked on a resume/regen of data rows. 16K leaves room for the
   # hidden reasoning (effort low) alongside the JSON. See testing-notes.md.
   strategic:
-    model: "deepseek/deepseek-v4-flash:nitro"
+    model: "deepseek/deepseek-v4-flash"
     temperature: 0.4
     max_tokens: 16384
     extra_body: {reasoning: {effort: low, exclude: true}}
   bulk:
-    model: "deepseek/deepseek-v4-flash:nitro"
+    model: "deepseek/deepseek-v4-flash"
     temperature: 0.9
     max_tokens: 16384
     extra_body: {reasoning: {effort: low, exclude: true}}
   critic:
-    model: "deepseek/deepseek-v4-flash:nitro"
+    model: "deepseek/deepseek-v4-flash"
     temperature: 0.1
     max_tokens: 16384
     extra_body: {reasoning: {effort: low, exclude: true}}
@@ -92,6 +92,7 @@ generation:
   target_size: 1000
   overgenerate_ratio: 1.4
   meta_prompts_per_mix: 3
+  subject: job_family          # every posting gets its own situation, listed per job-family node
   complexity_ratio: 0.25
   max_refine_attempts: 1
   concurrency: 25

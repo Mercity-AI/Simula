@@ -107,6 +107,8 @@ generation:
   overgenerate_ratio: 1.05
   meta_prompts: false
   record_batch_size: 5
+  subject: product_vertical    # every search gets its own situation, listed per product node (added after the
+                               # $0.40 per 1K pilot; about +4% cost on other datasets, not re-measured here)
   complexity_ratio: 0.3
   max_refine_attempts: 1
   concurrency: 80
