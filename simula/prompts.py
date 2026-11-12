@@ -297,9 +297,9 @@ def situation_note(items: list[dict[str, Any]]) -> str:
     of one batch share a node of the subject factor."""
     if not any(item.get("situation") for item in items):
         return ""
-    return ("\n\nAll records below share the same subject (the same node of the subject factor). A spec's situation line "
-            "is the concrete thing its record is about, taken from a list written for that subject: build the record "
-            "around it, adapting it to the other ingredients. A spec without one invents its own, unlike the others.")
+    return ("\n\nAll records below share the same subject (the same node of the subject factor). A record's situation "
+            "is the concrete thing it is about, taken from a list written for that subject: build the record around it, "
+            "adapting it to the other ingredients. A record without one invents its own, unlike the others.")
 
 
 def subject_prompt(description: str, factors: list[dict[str, Any]]) -> str:
@@ -477,11 +477,12 @@ def combined_table_batch_prompt(description: str, schema: dict[str, Any] | None,
         "Write one record per row of the table below. NODES describes each sampled node once under a short id; each "
         "row lists the node ids that are the ingredients for its record (not a strict checklist)."
     )
-    return _combined_prompt(description, schema, intro, nodes_table(items), choices)
+    return _combined_prompt(description, schema, intro + situation_note(items), nodes_table(items), choices)
 
 
 def nodes_table(items: list[dict[str, Any]]) -> str:
-    """NODES glossary (each distinct node once, id = factor initial(s) + number) + one row of ids per record."""
+    """NODES glossary (each distinct node once, id = factor initial(s) + number), one row of ids per record, and each
+    record's situation when it has one (generation.subject)."""
     factors = list(dict.fromkeys(entry["factor"] for item in items for entry in item["mix"]))
     prefixes: dict[str, str] = {}
     for position, factor in enumerate(factors):
@@ -500,7 +501,8 @@ def nodes_table(items: list[dict[str, Any]]) -> str:
     for item in items:
         cells = {entry["factor"]: ids[(entry["factor"], *(entry.get("path") or [entry["node"]]))] for entry in item["mix"]}
         rows.append(" | ".join([item["id"], *(cells.get(factor, "-") for factor in factors)]))
-    return "NODES:\n" + "\n".join(glossary) + "\n\nRECORDS:\n" + "\n".join(rows)
+    situations = [f"{item['id']}: {item['situation']}" for item in items if item.get("situation")]
+    return "NODES:\n" + "\n".join(glossary) + "\n\nRECORDS:\n" + "\n".join(rows) + ("\n\nSITUATIONS:\n" + "\n".join(situations) if situations else "")
 
 
 def _combined_prompt(description: str, schema: dict[str, Any] | None, intro: str, specs: str, choices: list[dict[str, Any]]) -> str:

@@ -207,7 +207,7 @@ of a 10K run; cheaper routing for the strategic role is the next untested lever.
 |---|---|---|
 | 1 | `taxonomy.critic` switch (off = 1 call/node; only with `best_of_n: 1`) | done; default stays on |
 | 2 | Readability refactors in `generate.py` (`_mix_group`, batch writer) | done, behaviour unchanged |
-| 3 | Compact NODES/ID-table batch prompt + offline token measurement | written (`combined_table_batch_prompt`), measured, **not adopted** (0–7% larger here); no switch |
+| 3 | Compact NODES/ID-table batch prompt + offline token measurement | written (`combined_table_batch_prompt`), measured, **not adopted** (0–7% larger here); no switch. Re-tested 2026-11-13 on 2,000 support tickets (GLM 5.3 Flash): 9% less input but twice the reasoning, so 13% more cost, and 2.4× as many records dropped from batch replies; still not adopted |
 | 4 | Model-picked: factor names checked before any call; lineage kept on rejected rows | done |
 | 4 | Model-picked: proper algorithm | **proposal in item 7 (§3), needs sign-off before building** |
 | 5 | Reject `stop_after: meta_prompts` with `meta_prompts: false` (config and CLI flag) | done |
