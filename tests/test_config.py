@@ -393,9 +393,13 @@ def test_stop_after_meta_prompts_needs_the_meta_prompt_step(tmp_path: Path) -> N
     assert main(["generate", str(path), "--stop-after", "meta_prompts", "--quiet"]) == 1
 
 
-def test_code_level_is_validated(tmp_path: Path) -> None:
-    assert load_config(_write_config(tmp_path, {"generation": {"code_level": {"topic": 1}}})).generation.code_level == {"topic": 1}
-    with pytest.raises(ValueError, match="code_level levels must be"):
-        load_config(_write_config(tmp_path, {"generation": {"code_level": {"topic": 0}}}))
-    with pytest.raises(ValueError, match="picked by one or the other"):
-        load_config(_write_config(tmp_path, {"generation": {"meta_prompts": False, "code_level": {"topic": 1}, "model_picked": {"topic": 1}}}))
+def test_code_depth_is_validated(tmp_path: Path) -> None:
+    assert load_config(_write_config(tmp_path, {"generation": {"code_depth": {"topic": 1}}})).generation.code_depth == {"topic": 1}
+    with pytest.raises(ValueError, match="code_depth levels must be"):
+        load_config(_write_config(tmp_path, {"generation": {"code_depth": {"topic": 0}}}))
+    # One factor is picked by code or by the model, never both, whatever the levels; other factors can mix freely.
+    for code, model in (({"topic": 1}, {"topic": 1}), ({"topic": 2, "difficulty": 1}, {"topic": 1})):
+        with pytest.raises(ValueError, match=r"both name \['topic'\]; a factor is picked by one or the other"):
+            load_config(_write_config(tmp_path, {"generation": {"meta_prompts": False, "code_depth": code, "model_picked": model}}))
+    both = load_config(_write_config(tmp_path, {"generation": {"meta_prompts": False, "code_depth": {"topic": 2}, "model_picked": {"difficulty": 1}}}))
+    assert both.generation.code_depth == {"topic": 2} and both.generation.model_picked == {"difficulty": 1}

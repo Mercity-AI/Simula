@@ -71,7 +71,7 @@ generation:
   meta_batch_size: 1           # mixes per meta-prompt call (keep at 10 or under: larger batches copy their inputs)
   record_batch_size: 1         # records per record call (5 suits short records, 1-2 long free text)
   model_picked: {}             # combined path: {factor: level} the model picks per record instead of code
-  code_level: {}               # {factor: level}: code samples that factor only down to this level (exact shares
+  code_depth: {}               # {factor: level}: code samples that factor only down to this level (exact shares
                                # there); the writer chooses the specifics beneath. Use where deep leaves clash.
   # The factor that says what a record is about (topic, issue, item, document type): a factor name, or "auto"
   # to let the model pick once the tree is built (the pick is stored in taxonomy.json as "subject"). Each node

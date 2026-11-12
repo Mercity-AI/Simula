@@ -177,7 +177,7 @@ earlier rounds; it bills ~$2.5 per 1K rows on this route, 87% of output is reaso
   runs: 2 of 3 agree with these, so use a majority of several runs on either model. It never chose
   model-pick. It also flags real taxonomy problems unprompted (stories `length` and `medium` leaves name
   other factors' values).
-- **Done since:** `generation.code_level` is the pipeline setting for "code to a level".
+- **Done since:** `generation.code_depth` (named `code_level` until 2026-11-13) is the pipeline setting for "code to a level".
 - **Open:** turning the prompt's exclusions into `never_combine` rules; wiring the prompt in as a step.
 
 ### Complexify is its own call again on the combined path (user decision, 2026-11-10)
@@ -213,7 +213,7 @@ of a 10K run; cheaper routing for the strategic role is the next untested lever.
 | 5 | Reject `stop_after: meta_prompts` with `meta_prompts: false` (config and CLI flag) | done |
 | 6 | Stale text sweep (docstrings, docs, this file) | done |
 | 7 | Pilot analysis scripts in the repo (`analysis/`) | done |
-| — | Update `SKILL.md` for batching, the combined path, the critic switches and routing | done 2026-11-10 (also `code_level`, complexify, lineage check; README/DOCS/llms.txt stale spots fixed) |
+| — | Update `SKILL.md` for batching, the combined path, the critic switches and routing | done 2026-11-10 (also `code_depth`, complexify, lineage check; README/DOCS/llms.txt stale spots fixed) |
 
 ### Open
 

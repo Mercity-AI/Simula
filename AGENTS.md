@@ -125,7 +125,7 @@ The invariants an agent must preserve (these are not written down in the field t
   `stop_after: meta_prompts`) need `meta_prompts: true`; `model_picked` needs it false;
   `taxonomy.critic: false` needs `best_of_n: 1`. `model_picked` factor names are checked against the
   taxonomy right after it loads (`_check_picked_factors`), before strategies or records spend calls;
-  `code_level` factor names are checked there too, and a factor cannot be in both. `subject` is a
+  `code_depth` factor names are checked there too, and a factor cannot be in both. `subject` is a
   factor name or `auto` and cannot be a `model_picked` factor.
 - Connection lives on one `provider` block (`base_url`/`api_key_env`/`timeout_seconds`) shared by all
   roles; `api_key_env` names a variable read only from the project-root `.env`. `timeout_seconds`
@@ -182,9 +182,9 @@ Strategies may name full roots like `query_domain` or deeper paths like `query_d
 
 Sampling descends the tree level by level, choosing among siblings by their per-node `weight` (default `1.0`, `0` disables), and always returns a leaf — a branch's probability must come from weights, never from how many nodes it contains. A strategy's `never_combine` path pairs are enforced by redrawing the mix (bounded; unsatisfiable rules raise). Strategy paths are validated against the real tree in `build_strategies`; invalid paths are a hard error after one retry.
 
-`generation.code_level` (`{factor: level}`) is the one exception to "always a leaf": the leaf is still drawn (same rng sequence, `never_combine` checked on it) and then replaced by its ancestor at that level (`_at_level`), so shares at the level are exact and the writer chooses the specifics beneath.
+`generation.code_depth` (`{factor: level}`) is the one exception to "always a leaf": the leaf is still drawn (same rng sequence, `never_combine` checked on it) and then replaced by its ancestor at that level (`_at_level`), so shares at the level are exact and the writer chooses the specifics beneath.
 
-When modifying this code, test that `taxonomy_mix` contains one lineage entry per factor, that only leaves are sampled (or the `code_level` ancestor), and that weights and `never_combine` are honored (`tests/test_taxonomy_sampling.py`).
+When modifying this code, test that `taxonomy_mix` contains one lineage entry per factor, that only leaves are sampled (or the `code_depth` ancestor), and that weights and `never_combine` are honored (`tests/test_taxonomy_sampling.py`).
 
 ### Generation
 

@@ -152,7 +152,7 @@ def test_level_options_carry_the_weighted_walk_share() -> None:
         level_options(taxonomy, "missing", 1)
 
 
-def test_code_level_stops_at_the_ancestor_with_exact_shares() -> None:
+def test_code_depth_stops_at_the_ancestor_with_exact_shares() -> None:
     from simula.taxonomy import mix_space
 
     taxonomy = _lopsided_taxonomy()

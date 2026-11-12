@@ -25,6 +25,10 @@ run, blind re-labels and a blind critic pass).
 - **Wording.** One name per thing in docs, config and code: a meta-prompt is the per-record instruction a
   model writes from the whole mix; a situation is one sentence of subject matter from the subject factor.
   `DOCS.md` has the comparison.
+- **Renamed `generation.code_level` to `generation.code_depth`** (2026-11-13). Every factor is code-picked by
+  default; the setting only says how deep code goes, and the old name read as a mode next to `model_picked`.
+  Old configs fail loudly at load (unknown key). A factor listed in both `code_depth` and `model_picked` is
+  rejected at load.
 - **SKILL.md.** The pilot is a gate (5–7% of target, at least about 1,000 rows, same tree as the full
   run), with a full checklist for what to look for in it.
 - **Known and open.** Independently sampled labels can disagree with the text written for them

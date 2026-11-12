@@ -113,7 +113,7 @@ the real tree when strategies are built — an invalid path is a loud error, not
 included — they sample their full tree) walk the tree level by level, choosing among siblings by
 their per-node `weight` (default `1.0`, `0` disables a branch), down to a leaf. A mix that violates a
 `never_combine` pair is redrawn. Because the walk is level-wise, a branch's probability comes from
-its *weight*, never from how finely the builder happened to subdivide it. `generation.code_level:
+its *weight*, never from how finely the builder happened to subdivide it. `generation.code_depth:
 {factor: level}` stops code at a level for that factor: the node there is what the record is built from,
 with its exact share, and the writer chooses the specifics beneath it.
 
@@ -475,7 +475,7 @@ change it (blank sections fall back to defaults). Required fields have no defaul
 | `meta_batch_size`    | Batch mode A: mixes per meta-prompt call.                         | `1`     | yes         | integer > 0 (needs `meta_prompts: true` when > 1) |
 | `record_batch_size`         | Records per record call: mode B with meta-prompts, mode C without. | `1`    | yes         | integer > 0 |
 | `model_picked`       | Combined path: `{factor: level}` the model picks per record.      | `{}`    | yes         | mapping of factor name → level ≥ 1 |
-| `code_level`         | `{factor: level}`: code samples the factor down to this level; the writer picks specifics beneath. | `{}`    | yes         | mapping of factor name → level ≥ 1 |
+| `code_depth`         | `{factor: level}`: code samples the factor down to this level; the writer picks specifics beneath. | `{}`    | yes         | mapping of factor name → level ≥ 1 |
 | `subject`            | The factor that says what a record is about; each of its nodes gets a list of situations, one per record, and batches hold one node. `auto` = the model picks once the tree is built. | `null`  | yes         | a factor name (code-sampled), `auto`, `null` |
 | `complexity_ratio`   | Fraction of points made harder by a complexify call (on the meta-prompt, or on the record on the combined path). | `0.3` | yes         | float 0.0–1.0 |
 | `critic`             | Critique records; `false` accepts every schema-valid record.      | `true`  | yes         | bool |
@@ -595,7 +595,7 @@ of another factor it cannot go with (an attribute like "screen width in pixels" 
 screen), or can fix something another factor is supposed to decide. The writer is told to soften an
 ingredient that fits badly, but a factor that clashes often makes records read as forced.
 **Workarounds:** for a few specific pairs, add `never_combine` rules to `strategies.json`. For a factor
-whose deep leaves clash often, set `generation.code_level: {factor: 2}` so code picks a broader node
+whose deep leaves clash often, set `generation.code_depth: {factor: 2}` so code picks a broader node
 and the writer fits the specifics to the record. In two pilots this raised realism and coherence with
 no loss of diversity at level 2, while level 1 was too broad and records drifted toward the typical —
 cut as deep as is safe. Unusual-but-possible combinations are not a reason to cut; they are the variety

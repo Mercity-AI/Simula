@@ -747,19 +747,19 @@ def test_unknown_model_picked_factor_fails_before_any_strategy_or_record_call(tm
     assert "strategy" not in router.tasks and "generate" not in router.tasks
 
 
-def test_code_level_cuts_lineage_on_both_record_paths(tmp_path: Path) -> None:
-    # depth 2 gives each fake factor leaves at level 2; code_level stops "topic" at level 1.
+def test_code_depth_cuts_lineage_on_both_record_paths(tmp_path: Path) -> None:
+    # depth 2 gives each fake factor leaves at level 2; code_depth stops "topic" at level 1.
     taxonomy = {"depth": 2, "best_of_n": 1, "review_mode": "auto_accept", "children_per_node": 2}
     for name, extra in (("combined", {"meta_prompts": False, "record_batch_size": 2}), ("meta", {})):
         (tmp_path / name).mkdir()
-        cfg = load_config(write_config(tmp_path / name, {"taxonomy": taxonomy, **_gen({"code_level": {"topic": 1}, **extra})}))
+        cfg = load_config(write_config(tmp_path / name, {"taxonomy": taxonomy, **_gen({"code_depth": {"topic": 1}, **extra})}))
         rows = asyncio.run(generate_dataset(cfg, ModelRouter(cfg.data), quiet=True))
         levels = [{entry["factor"]: entry["level"] for entry in row["taxonomy_mix"]} for row in rows]
         assert rows and all(level == {"topic": 1, "difficulty": 2} for level in levels)
 
-    cfg = load_config(write_config(tmp_path, {"taxonomy": taxonomy, **_gen({"code_level": {"topicc": 1}})}))
+    cfg = load_config(write_config(tmp_path, {"taxonomy": taxonomy, **_gen({"code_depth": {"topicc": 1}})}))
     router = _Recording(cfg.data)
-    with pytest.raises(ValueError, match="code_level names factor 'topicc'"):
+    with pytest.raises(ValueError, match="code_depth names factor 'topicc'"):
         asyncio.run(generate_dataset(cfg, router, quiet=True))
     assert "strategy" not in router.tasks and "generate" not in router.tasks
 

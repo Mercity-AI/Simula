@@ -184,7 +184,7 @@ class GenerationCfg(_Section):
     Batching: meta_batch_size mixes per meta-prompt call (mode A), record_batch_size records per record call
     (mode B, or mode C when meta_prompts=False: records straight from their sampled mixes, no meta-prompt
     step). model_picked {factor: level} lets the model choose those factors per record on the combined
-    path instead of code sampling them. code_level {factor: level} stops code at that level of the
+    path instead of code sampling them. code_depth {factor: level} stops code at that level of the
     factor's tree (exact shares there); the writer chooses the specifics beneath. subject names the factor
     that says what a record is about ("auto" lets the model pick it once the tree is built): each of its nodes gets
     a list of situations, one per record, and batches hold one node, so records sharing a node are about different
@@ -201,7 +201,7 @@ class GenerationCfg(_Section):
     meta_batch_size: int = Field(1, gt=0)
     record_batch_size: int = Field(1, gt=0)
     model_picked: dict[str, int] = Field(default_factory=dict)
-    code_level: dict[str, int] = Field(default_factory=dict)
+    code_depth: dict[str, int] = Field(default_factory=dict)
     subject: str | None = None
     complexity_ratio: float = Field(0.3, ge=0.0, le=1.0)
     critic: bool = True
@@ -231,11 +231,11 @@ class GenerationCfg(_Section):
             raise ValueError("generation.model_picked requires generation.meta_prompts: false (the combined path).")
         if any(level < 1 for level in self.model_picked.values()):
             raise ValueError("generation.model_picked levels must be >= 1 (the tree level whose nodes are offered).")
-        # code_level stops code sampling at a level; a factor cannot be both cut and handed to the model.
-        if any(level < 1 for level in self.code_level.values()):
-            raise ValueError("generation.code_level levels must be >= 1 (the deepest tree level code samples).")
-        if both := sorted(set(self.code_level) & set(self.model_picked)):
-            raise ValueError(f"generation.code_level and generation.model_picked both name {both}; a factor is picked by one or the other.")
+        # code_depth stops code sampling at a level; a factor cannot be both cut and handed to the model.
+        if any(level < 1 for level in self.code_depth.values()):
+            raise ValueError("generation.code_depth levels must be >= 1 (the deepest tree level code samples).")
+        if both := sorted(set(self.code_depth) & set(self.model_picked)):
+            raise ValueError(f"generation.code_depth and generation.model_picked both name {both}; a factor is picked by one or the other.")
         # Situations are listed per code-sampled subject node, so the subject cannot be model-picked.
         if self.subject is not None and self.subject in self.model_picked:
             raise ValueError(f"generation.subject {self.subject!r} is also in generation.model_picked; the subject must be code-sampled.")

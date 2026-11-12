@@ -205,7 +205,7 @@ produce against how many the run draws.
 
 By default code samples every factor down to a leaf. Two settings change that:
 
-- `code_level: {factor: level}`: code picks the node at that level, with its exact share, and the
+- `code_depth: {factor: level}`: code picks the node at that level, with its exact share, and the
   writer chooses the specifics beneath it to suit the record.
 - `model_picked: {factor: level}` (combined path only): code picks nothing; the writer chooses from a
   menu and reports its choice.
@@ -248,7 +248,7 @@ a first opinion and check its work before you apply it:
   taxonomy problem: fix the factor's description and rebuild, do not cut around it.
 - **Turn its `exclusions` into `never_combine` pairs** in `strategies.json`, using exact tree paths.
 
-Then set `generation.code_level` before the pilot (it is part of the resume fingerprint). If you
+Then set `generation.code_depth` before the pilot (it is part of the resume fingerprint). If you
 cannot run the script, answer the two questions yourself from `taxonomy.json`; it is the same
 reasoning.
 
@@ -484,7 +484,7 @@ Work through all of these. Each line says what to look at and what to do when it
 - Review the design artifacts before paid generation.
 - Do not commit `runs/`, `.env` or `llm_calls.jsonl`.
 - Do not skip or shrink the pilot on your own; that gate belongs to the user.
-- Do not change a fingerprinted setting mid-run: the path, batch sizes, `subject`, `code_level`,
+- Do not change a fingerprinted setting mid-run: the path, batch sizes, `subject`, `code_depth`,
   `model_picked`, `complexity_ratio`, critic settings, models, prompts, taxonomy, strategies. `target_size`,
   `overgenerate_ratio` and `concurrency` are safe to change, so growing a run is fine.
 - Report real counts and real cost; when quality is off, show the offending rows.

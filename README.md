@@ -331,7 +331,7 @@ generate from the edited versions. With `generation.meta_prompts: false` (the co
 no meta-prompt step and no `meta_prompts.jsonl`: records are written straight from their sampled
 mixes, `generation.record_batch_size` per call. On that path, factors listed in `generation.model_picked` are
 chosen by the model per record from the offered options; their lineage entries carry
-`"picked_by": "model"`. Factors listed in `generation.code_level` are sampled by code only down to
+`"picked_by": "model"`. Factors listed in `generation.code_depth` are sampled by code only down to
 that tree level (their lineage entry is the node at that level) and the writer chooses the specifics
 beneath it; this works on both paths. A record whose complexify coin came up is rewritten by a
 separate `complexify` call: on the meta-prompt, or on the combined path on the written record.
