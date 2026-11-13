@@ -67,6 +67,18 @@ Generated artifacts:
 - Preserve lineage on generated items. `taxonomy_mix` must be non-empty when a taxonomy exists.
 - Preserve live LLM logging. Every successful model response should be appended to `llm_calls.jsonl`.
 - Keep evaluation separate from generation. `generate` must not create `eval_report.json`.
+- No real model calls (pilots, experiments, re-labels) without the user's go-ahead; they spend real money.
+
+## Words Used in This Repo
+
+Use one name per thing, in code, docs, config comments and replies:
+
+- **Mix**: one sampled node per factor, the ingredients of one record (`taxonomy_mix`).
+- **Subject**: the factor that says what a record is about (`generation.subject`).
+- **Situation**: one sentence of subject matter for one record, listed per subject node (`situations.jsonl`).
+- **Meta-prompt**: the short per-record instruction a model writes from the whole mix (`meta_prompts.jsonl`).
+  Never call it a "scenario" or a "brief"; the dataset description is "the description".
+- **Combined path**: `generation.meta_prompts: false`, records written straight from their mixes.
 
 ## Development Style
 
@@ -81,6 +93,9 @@ Generated artifacts:
 - When adding network/model behavior, ensure tests still pass offline.
 
 ## Running Commands
+
+The default `python3` may lack the dependencies; if imports fail, use the interpreter `pytest` runs under
+(`head -1 "$(which pytest)"`).
 
 Use these from the repository root:
 
@@ -326,6 +341,15 @@ Use `"model": "fake"` for tests. Do not require network access in tests.
   (`test_point_failure_becomes_rejected_row` injects a router exposing only that method, with no
   `.config`) — do not inline it.
 - Add a command to tail/summarize `llm_calls.jsonl`.
+- `combined_table_batch_prompt` / `nodes_table` (a NODES/ID-table form of the combined batch prompt) are unused:
+  measured twice and not adopted (on support tickets: 9% less input but twice the reasoning, 13% more cost, more
+  dropped records). Delete them if nobody needs them.
+- "Model-assigned" factors (code draws a batch's values, the model decides which record gets which): designed in
+  `plan.md` (item 7), not built, needs the user's sign-off.
+- Situation listing shows each call the node's last 120 situations; past about 250 per node, repeats of older
+  ones start to appear (2% beyond position 250 in a 10,000-ticket run). Matters only at very large scale.
+- Priority-style labels that follow from the facts of a record clash with independently sampled mood, tier
+  and style factors. The proposed fix (list situations per subject node and per rolled label value) is open.
 - Add multi-turn generation modes (see `TODO.md`). Batched generation exists: modes A (`meta_batch_size`),
   B (`record_batch_size` with meta-prompts) and C (the combined path).
 
@@ -343,3 +367,14 @@ Do not paste real API keys into configs. Use `api_key_env`.
 - If JSON parsing fails often, inspect `SYSTEM_JSON` and `generate_record_prompt`.
 - If the model is slow, reduce taxonomy depth or increase `generation.concurrency` carefully.
 - If the provider rate-limits, lower `generation.concurrency` (the 429 retry/backoff still handles bursts).
+- For any long or background run, print progress every 5-10% and treat three minutes with no new call or row
+  as a stall: kill the process and rerun the same command, which resumes and redoes only the missing attempts.
+  Default routing occasionally hangs one request near the end of a run.
+- Many `Record missing from the batch response` rejections: cheap models drop or garble items in batch replies
+  (2-5% of attempts on GLM 5.3 Flash). Raise `overgenerate_ratio`; do not raise the batch size.
+- A `strategies skew` warning means a strategy overrides a factor's tree weights; read it before paying for
+  records (see `CONFIG.md`, strategy section).
+- Labels that disagree with the record text, concentrated in a few factor combinations: see `SKILL.md`,
+  "Combinations that pull against a label". The critic does not fix these.
+- Provider `402 Insufficient credits` while the key still has budget: the account behind the key is empty.
+  Stop and tell the user; do not retry.
