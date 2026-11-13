@@ -109,3 +109,74 @@ def test_child_nodes_carry_prevalence_weight() -> None:
     assert _child({"name": "x", "weight": 0.05}, 1, ["f"])["weight"] == 0.05
     assert _child({"name": "x"}, 1, ["f"])["weight"] == 1.0
     assert _child({"name": "x", "weight": "junk"}, 1, ["f"])["weight"] == 1.0
+
+
+def test_node_names_cannot_carry_the_path_separator() -> None:
+    from simula.taxonomy import _child
+
+    child = _child({"name": "A/V Receivers", "description": "d"}, 1, ["electronics"])
+    assert child["name"] == "A-V Receivers"
+    assert child["path"] == ["electronics", "A-V Receivers"]
+
+
+def test_dotted_names_inside_slash_paths_stay_one_segment() -> None:
+    taxonomy = {"factors": [_node("audio", ["audio"], [_node("5.1-Channel Systems", ["audio", "5.1-Channel Systems"])])]}
+    paths = taxonomy_path_strings(taxonomy)
+    assert "audio/5.1-Channel Systems" in paths
+    assert _invalid_strategy_paths([{"taxonomy_roots": paths}], taxonomy) == []
+    # Dot-only paths still work when there is no slash at all.
+    assert _invalid_strategy_paths([{"taxonomy_roots": ["audio"]}], taxonomy) == []
+
+
+def test_mix_space_counts_reachable_leaves() -> None:
+    from simula.taxonomy import mix_space
+
+    taxonomy = _lopsided_taxonomy()
+    assert mix_space(taxonomy, {"taxonomy_roots": ["pov"]}) == 12
+    assert mix_space(taxonomy, {"taxonomy_roots": ["pov/small"]}) == 2
+    taxonomy["factors"][0]["children"][0]["weight"] = 0  # disable "big"
+    assert mix_space(taxonomy, {"taxonomy_roots": []}) == 2
+
+
+def test_level_options_carry_the_weighted_walk_share() -> None:
+    from simula.taxonomy import level_options
+
+    taxonomy = _lopsided_taxonomy()
+    options = level_options(taxonomy, "pov", 1)
+    assert [(o["name"], o["share"]) for o in options] == [("big", 0.5), ("small", 0.5)]
+    taxonomy["factors"][0]["children"][0]["weight"] = 3.0  # "big" three times as likely as "small"
+    leaves = level_options(taxonomy, "pov", 2)
+    assert len(leaves) == 12 and abs(sum(o["share"] for o in leaves) - 1) < 1e-9
+    assert abs(leaves[0]["share"] - 0.075) < 1e-9 and abs(leaves[-1]["share"] - 0.125) < 1e-9
+    with pytest.raises(ValueError, match="unknown factor"):
+        level_options(taxonomy, "missing", 1)
+
+
+def test_code_depth_stops_at_the_ancestor_with_exact_shares() -> None:
+    from simula.taxonomy import mix_space
+
+    taxonomy = _lopsided_taxonomy()
+    taxonomy["factors"].append(_node("tone", ["tone"], [_node("warm", ["tone", "warm"]), _node("dry", ["tone", "dry"])]))
+    strategy = {"taxonomy_roots": []}
+    full = [sample_mix(taxonomy, strategy, random.Random(seed)) for seed in range(2000)]
+    cut = [sample_mix(taxonomy, strategy, random.Random(seed), {"pov": 1}) for seed in range(2000)]
+    for leaf_mix, cut_mix in zip(full, cut):
+        # The cut entry is the drawn leaf's own level-1 ancestor, and the other factor's draw is unchanged.
+        assert cut_mix[0]["path"] == leaf_mix[0]["path"][:2] and cut_mix[0]["level"] == 1
+        assert cut_mix[0]["node"] in {"big", "small"} and cut_mix[0]["description"] == f"{cut_mix[0]['node']} node"
+        assert cut_mix[1] == leaf_mix[1]
+    big = sum(1 for mix in cut if mix[0]["node"] == "big")
+    assert 0.45 < big / len(cut) < 0.55
+    # A level at or below the leaves changes nothing; the mix space counts nodes at the cut level.
+    assert sample_mix(taxonomy, strategy, random.Random(3), {"pov": 5}) == sample_mix(taxonomy, strategy, random.Random(3))
+    assert mix_space(taxonomy, strategy) == 24 and mix_space(taxonomy, strategy, {"pov": 1}) == 4
+
+
+def test_never_combine_is_checked_on_the_leaf_before_the_cut() -> None:
+    taxonomy = _lopsided_taxonomy()
+    taxonomy["factors"].append(_node("tone", ["tone"], [_node("warm", ["tone", "warm"]), _node("dry", ["tone", "dry"])]))
+    strategy = {"taxonomy_roots": [], "never_combine": [["pov/small/small_leaf_0", "tone/dry"]]}
+    full = [sample_mix(taxonomy, strategy, random.Random(seed)) for seed in range(500)]
+    cut = [sample_mix(taxonomy, strategy, random.Random(seed), {"pov": 1}) for seed in range(500)]
+    assert not any(mix[0]["node"] == "small_leaf_0" and mix[1]["node"] == "dry" for mix in full)
+    assert [mix[1] for mix in cut] == [mix[1] for mix in full]  # same redraws, so the rule held on the leaf

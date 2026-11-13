@@ -33,6 +33,8 @@ class TaskType(StrEnum):
     REFINE = "refine"
     COMPLEXITY_SCORE = "complexity_score"
     NODE_ASSIGN = "node_assign"
+    SUBJECT = "subject"
+    SITUATIONS = "situations"
 
 
 # Decoding params known to numeric validation (unknown params still pass through to extra_body).
@@ -46,7 +48,14 @@ _NUMERIC_SAMPLING_PARAMS = {
 }
 
 
-class ProjectCfg(BaseModel):
+class _Section(BaseModel):
+    """Base for config sections: an unknown key (a typo, or a knob that was renamed) is an
+    error at load instead of being silently ignored."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ProjectCfg(_Section):
     """Run identity + output location. output_dir holds every artifact; seed makes runs reproducible.
     Consumed via Config.output_dir / Config.seed and by ModelRouter (for the llm_calls.jsonl path)."""
 
@@ -55,7 +64,7 @@ class ProjectCfg(BaseModel):
     seed: int = 42
 
 
-class ProviderCfg(BaseModel):
+class ProviderCfg(_Section):
     """Single OpenAI-compatible endpoint shared by every role. Consumed by ModelRouter._get_client
     (base_url + timeout) and resolve_api_key (reads api_key_env from the project-root .env). The
     per-call model id lives on each role in ModelsCfg, not here."""
@@ -77,7 +86,7 @@ class ModelCfg(BaseModel):
     extra_body: dict[str, Any] | None = None
 
 
-class ModelsCfg(BaseModel):
+class ModelsCfg(_Section):
     """The three call roles. strategic = taxonomy/strategy, bulk = generation/refine, critic = critique."""
 
     strategic: ModelCfg = Field(default_factory=ModelCfg)
@@ -85,13 +94,14 @@ class ModelsCfg(BaseModel):
     critic: ModelCfg = Field(default_factory=ModelCfg)
 
 
-class TaxonomyCfg(BaseModel):
+class TaxonomyCfg(_Section):
     """Taxonomy build knobs (consumed by taxonomy.build_taxonomy). factors=None lets the model
     discover them; review_mode gates whether the run halts for manual edits."""
 
     depth: int = Field(2, ge=0)
     factors: list[dict[str, Any]] | None = None
-    best_of_n: int = Field(2, gt=0)
+    best_of_n: int = Field(1, gt=0)  # proposals per node, then one critic refine call when critic is on
+    critic: bool = True  # False: use the single proposal as is (1 call per node; coarser, more duplicates)
     review_mode: str = "auto_accept"
     children_per_node: int = Field(4, gt=0)
     log_style: str = "light"  # how the build is surfaced: flat per-node breadcrumbs, or a live tree
@@ -110,8 +120,15 @@ class TaxonomyCfg(BaseModel):
             raise ValueError("taxonomy.log_style must be tree or light.")
         return value
 
+    @model_validator(mode="after")
+    def _critic_merges_proposals(self) -> "TaxonomyCfg":
+        # Several proposals need the critic to merge them into one child list.
+        if not self.critic and self.best_of_n > 1:
+            raise ValueError("taxonomy.critic: false requires taxonomy.best_of_n: 1 (several proposals need the critic to merge them).")
+        return self
 
-class DiversityCfg(BaseModel):
+
+class DiversityCfg(_Section):
     """Embedding-diversity settings (consumed by evaluate.run_evaluation -> diversity.embedding_diversity).
     Off by default; needs the [diversity] extra. text_field is a dotted path into the record to embed."""
 
@@ -122,7 +139,7 @@ class DiversityCfg(BaseModel):
     text_field: str | None = None
 
 
-class EvaluationCfg(BaseModel):
+class EvaluationCfg(_Section):
     """What `evaluate`/`run` compute (consumed by evaluate.run_evaluation). coverage/complexity in
     reassign/complexity modes make extra model calls; dedupe + lineage coverage are call-free."""
 
@@ -143,7 +160,7 @@ class EvaluationCfg(BaseModel):
         return value
 
 
-class StrategyCfg(BaseModel):
+class StrategyCfg(_Section):
     """Optional steering for the strategy build (consumed by taxonomy.build_strategies): free-text
     guidance woven into the prompt, and an exact strategy count (None keeps the model's 2-5 choice)."""
 
@@ -159,17 +176,35 @@ class StrategyCfg(BaseModel):
         return value
 
 
-class GenerationCfg(BaseModel):
+class GenerationCfg(_Section):
     """Generation volume + behavior knobs (consumed by generate.generate_dataset). attempts =
     ceil(target_size * overgenerate_ratio); trim controls whether accepted rows are capped at target.
     stop_after halts generate/run once that stage's artifact is written, so it can be inspected or
-    hand-edited before the next stage spends model calls (the CLI --stop-after flag overrides it)."""
+    hand-edited before the next stage spends model calls (the CLI --stop-after flag overrides it).
+    Batching: meta_batch_size mixes per meta-prompt call (mode A), record_batch_size records per record call
+    (mode B, or mode C when meta_prompts=False: records straight from their sampled mixes, no meta-prompt
+    step). model_picked {factor: level} lets the model choose those factors per record on the combined
+    path instead of code sampling them. code_depth {factor: level} stops code at that level of the
+    factor's tree (exact shares there); the writer chooses the specifics beneath. subject names the factor
+    that says what a record is about ("auto" lets the model pick it once the tree is built): each of its nodes gets
+    a list of situations, one per record, and batches hold one node, so records sharing a node are about different
+    concrete things. critic=False accepts every schema-valid record."""
+
+    # validate_assignment: the CLI's --stop-after is set after load and must hit the same checks.
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     target_size: int = Field(50, gt=0)
     overgenerate_ratio: float = Field(1.3, ge=1.0)
     trim: bool = True
-    scenarios_per_mix: int = Field(3, gt=0)
+    meta_prompts: bool = True
+    meta_prompts_per_mix: int = Field(1, gt=0)
+    meta_batch_size: int = Field(1, gt=0)
+    record_batch_size: int = Field(1, gt=0)
+    model_picked: dict[str, int] = Field(default_factory=dict)
+    code_depth: dict[str, int] = Field(default_factory=dict)
+    subject: str | None = None
     complexity_ratio: float = Field(0.3, ge=0.0, le=1.0)
+    critic: bool = True
     max_refine_attempts: int = Field(2, ge=0)
     concurrency: int = Field(4, gt=0)
     checkpoint_every: int = Field(50, gt=0)
@@ -182,8 +217,32 @@ class GenerationCfg(BaseModel):
             raise ValueError("generation.stop_after must be taxonomy, strategies, or meta_prompts.")
         return value
 
+    @model_validator(mode="after")
+    def _mode_knobs_match(self) -> "GenerationCfg":
+        # meta_prompts_per_mix and meta_batch_size shape the meta-prompt step, which the combined path skips.
+        for knob in ("meta_prompts_per_mix", "meta_batch_size"):
+            if not self.meta_prompts and getattr(self, knob) > 1:
+                raise ValueError(f"generation.{knob} > 1 requires generation.meta_prompts: true.")
+        # The combined path writes no meta-prompt artifact, so there is nothing to stop after and edit.
+        if not self.meta_prompts and self.stop_after == "meta_prompts":
+            raise ValueError("generation.stop_after: meta_prompts requires generation.meta_prompts: true (the combined path writes no meta_prompts.jsonl).")
+        # Model-picked factors are offered as options inside the combined batch prompt.
+        if self.model_picked and self.meta_prompts:
+            raise ValueError("generation.model_picked requires generation.meta_prompts: false (the combined path).")
+        if any(level < 1 for level in self.model_picked.values()):
+            raise ValueError("generation.model_picked levels must be >= 1 (the tree level whose nodes are offered).")
+        # code_depth stops code sampling at a level; a factor cannot be both cut and handed to the model.
+        if any(level < 1 for level in self.code_depth.values()):
+            raise ValueError("generation.code_depth levels must be >= 1 (the deepest tree level code samples).")
+        if both := sorted(set(self.code_depth) & set(self.model_picked)):
+            raise ValueError(f"generation.code_depth and generation.model_picked both name {both}; a factor is picked by one or the other.")
+        # Situations are listed per code-sampled subject node, so the subject cannot be model-picked.
+        if self.subject is not None and self.subject in self.model_picked:
+            raise ValueError(f"generation.subject {self.subject!r} is also in generation.model_picked; the subject must be code-sampled.")
+        return self
 
-class SamplingCfg(BaseModel):
+
+class SamplingCfg(_Section):
     """Per-task decoding overrides: tasks[<TaskType value>] -> {param: value}. Consumed by
     resolve_sampling, which layers these on top of role-static params. Param names stay open so
     unknown provider knobs pass through to extra_body; known numerics are type-checked here."""
@@ -218,6 +277,7 @@ class Config(BaseModel):
     # protected_namespaces=() lets a field be named `model`; ignored_types keeps cached_property
     # out of Pydantic's field machinery so `validator` can memoize the compiled schema.
     model_config = ConfigDict(
+        extra="forbid",  # an unknown top-level section is an error, like an unknown key in a section
         protected_namespaces=(),
         populate_by_name=True,
         arbitrary_types_allowed=True,

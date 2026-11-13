@@ -25,6 +25,8 @@ Every current model call is a fresh chat with one system message and one user me
 generation workflows need a different conversation shape. Consider explicit modes for:
 
 - batched generation, where one model reply returns multiple records for the same meta-prompt
+  (done for different mixes: batch modes A `meta_batch_size`, B `record_batch_size`, and C the combined path;
+  every batched record is critiqued on its own)
 - repeated generation from the same meta-prompt under different sampling policies
 - multi-turn continuation, where the model sees prior outputs and gets follow-ups like "generate
   more, but make them distinct from the previous examples"

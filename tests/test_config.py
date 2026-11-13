@@ -339,3 +339,67 @@ def test_strategy_count_bounds(tmp_path: Path) -> None:
         load_config(_write_config(tmp_path, {"strategy": {"count": 0}}))
     with pytest.raises(ValueError):
         load_config(_write_config(tmp_path, {"strategy": {"count": 13}}))
+
+
+def test_optimization_defaults(tmp_path: Path) -> None:
+    cfg = load_config(_write_config(tmp_path))
+    assert cfg.taxonomy.best_of_n == 1
+    assert cfg.generation.meta_prompts_per_mix == 1
+    assert cfg.generation.meta_prompts is True and cfg.generation.record_batch_size == 1 and cfg.generation.meta_batch_size == 1
+    assert cfg.generation.critic is True
+
+
+def test_meta_prompt_knobs_require_the_meta_prompt_step(tmp_path: Path) -> None:
+    for knob in ("meta_prompts_per_mix", "meta_batch_size"):
+        with pytest.raises(ValueError, match=knob):
+            load_config(_write_config(tmp_path, {"generation": {"meta_prompts": False, knob: 2}}))
+    # record_batch_size batches the record step on either path (mode B with meta-prompts, mode C without).
+    assert load_config(_write_config(tmp_path, {"generation": {"record_batch_size": 4}})).generation.record_batch_size == 4
+    assert load_config(_write_config(tmp_path, {"generation": {"meta_prompts": False, "record_batch_size": 4}})).generation.record_batch_size == 4
+
+
+def test_model_picked_needs_the_combined_path(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="model_picked requires"):
+        load_config(_write_config(tmp_path, {"generation": {"model_picked": {"topic": 1}}}))
+    with pytest.raises(ValueError, match="levels must be"):
+        load_config(_write_config(tmp_path, {"generation": {"meta_prompts": False, "model_picked": {"topic": 0}}}))
+    cfg = load_config(_write_config(tmp_path, {"generation": {"meta_prompts": False, "model_picked": {"topic": 2}}}))
+    assert cfg.generation.model_picked == {"topic": 2}
+
+
+def test_unknown_or_renamed_keys_are_errors(tmp_path: Path) -> None:
+    # A typo or an old knob name must not be silently ignored.
+    for extra in ({"generation": {"prompts_per_mix": 3}}, {"generation": {"batch_size": 5}}, {"taxonomy": {"depht": 3}}, {"genration": {}}):
+        with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+            load_config(_write_config(tmp_path, extra))
+    # Role-level decoding params stay open (they pass through to the provider).
+    models = {**_fake_models(), "bulk": {"model": "fake", "min_p": 0.05}}
+    assert load_config(_write_config(tmp_path, {"models": models})).models.bulk.model == "fake"
+
+
+def test_taxonomy_critic_off_needs_a_single_proposal(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="taxonomy.critic: false requires"):
+        load_config(_write_config(tmp_path, {"taxonomy": {"critic": False, "best_of_n": 2}}))
+    assert load_config(_write_config(tmp_path, {"taxonomy": {"critic": False}})).taxonomy.critic is False
+
+
+def test_stop_after_meta_prompts_needs_the_meta_prompt_step(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="stop_after: meta_prompts requires"):
+        load_config(_write_config(tmp_path, {"generation": {"meta_prompts": False, "stop_after": "meta_prompts"}}))
+    # The CLI flag is applied after load and must be rejected the same way.
+    from simula.cli import main
+
+    path = _write_config(tmp_path, {"generation": {"meta_prompts": False, "record_batch_size": 2}})
+    assert main(["generate", str(path), "--stop-after", "meta_prompts", "--quiet"]) == 1
+
+
+def test_code_depth_is_validated(tmp_path: Path) -> None:
+    assert load_config(_write_config(tmp_path, {"generation": {"code_depth": {"topic": 1}}})).generation.code_depth == {"topic": 1}
+    with pytest.raises(ValueError, match="code_depth levels must be"):
+        load_config(_write_config(tmp_path, {"generation": {"code_depth": {"topic": 0}}}))
+    # One factor is picked by code or by the model, never both, whatever the levels; other factors can mix freely.
+    for code, model in (({"topic": 1}, {"topic": 1}), ({"topic": 2, "difficulty": 1}, {"topic": 1})):
+        with pytest.raises(ValueError, match=r"both name \['topic'\]; a factor is picked by one or the other"):
+            load_config(_write_config(tmp_path, {"generation": {"meta_prompts": False, "code_depth": code, "model_picked": model}}))
+    both = load_config(_write_config(tmp_path, {"generation": {"meta_prompts": False, "code_depth": {"topic": 2}, "model_picked": {"difficulty": 1}}}))
+    assert both.generation.code_depth == {"topic": 2} and both.generation.model_picked == {"difficulty": 1}

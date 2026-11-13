@@ -14,13 +14,16 @@ from .utils import artifact_path, read_json, write_json
 async def build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, Any]:
     """Breadth-first expand each factor into a depth-bounded taxonomy tree, then write + review it.
 
-    Per level: expand every node concurrently (best_of_n proposals + a critic refine), then ask for one
-    global plan that guides the next level. The review step may halt the run so the user can edit.
+    Per level: expand every node concurrently (best_of_n proposals, then a critic refine call unless
+    taxonomy.critic is off), then ask for one global plan that guides the next level. The review step may halt
+    the run so the user can edit.
     """
     depth = cfg.taxonomy.depth
     taxonomy = {"description": cfg.description, "factors": []}
 
     phase("Building taxonomy")
+    # Nodes within a level expand concurrently; bound in-flight expansion calls like generation does.
+    limiter = asyncio.Semaphore(cfg.generation.concurrency)
     # Surface nodes as they are generated, in the configured style (tree/light). The logger is driven
     # with the JSON node dicts; a tree logger's live display closes before the review prompt below
     # (only one rich live display at a time).
@@ -41,7 +44,7 @@ async def build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, Any]:
                 async with asyncio.TaskGroup() as tg:
                     for node in queue:
                         siblings = [s["name"] for s in queue if s is not node]
-                        task = tg.create_task(_expand_one_node(cfg, router, factor, node, siblings, plan, level))
+                        task = tg.create_task(_expand_one_node(cfg, router, factor, node, siblings, plan, level, limiter))
                         tasks.append((node, task))
 
                 # Attach successful child lists (failed nodes already degraded into leaves) and log
@@ -68,14 +71,42 @@ async def build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, Any]:
     return taxonomy
 
 
+AUTO_SUBJECT = "auto"  # generation.subject value that lets the model pick the subject factor
+
+
 async def load_or_build_taxonomy(cfg: Config, router: ModelRouter) -> dict[str, Any]:
-    """Reuse taxonomy.json if present (so a resumed run keeps an edited tree), else build it."""
+    """Reuse taxonomy.json if present (so a resumed run keeps an edited tree), else build it. With
+    generation.subject: auto, the model's pick of the subject factor is made once and kept in the artifact
+    ("subject": a factor name or null), so reruns reuse it and it can be edited like the tree."""
     path = artifact_path(cfg.output_dir, "taxonomy")
-    existing = read_json(path)
-    if existing:
-        info(f"[dim]Reusing taxonomy.json ({len(existing.get('factors', []))} factors)[/dim]")
-        return existing
-    return await build_taxonomy(cfg, router)
+    taxonomy = read_json(path)
+    if taxonomy:
+        info(f"[dim]Reusing taxonomy.json ({len(taxonomy.get('factors', []))} factors)[/dim]")
+    else:
+        taxonomy = await build_taxonomy(cfg, router)
+    if cfg.generation.subject == AUTO_SUBJECT and "subject" not in taxonomy:
+        taxonomy["subject"] = await _pick_subject(cfg, router, taxonomy)
+        write_json(path, taxonomy)
+    return taxonomy
+
+
+def subject_factor(cfg: Config, taxonomy: dict[str, Any]) -> str | None:
+    """The factor whose nodes get situations (generation.subject): the named factor, or with "auto" the pick kept
+    in taxonomy.json. None = no subject."""
+    subject = cfg.generation.subject
+    return taxonomy.get("subject") if subject == AUTO_SUBJECT else subject
+
+
+async def _pick_subject(cfg: Config, router: ModelRouter, taxonomy: dict[str, Any]) -> str | None:
+    # Model-picked factors are not code-sampled, so they cannot be the subject.
+    eligible = [factor for factor in taxonomy["factors"] if factor["name"] not in cfg.generation.model_picked]
+    with spinner("Picking the subject factor"):
+        prompt = cfg.prompts.subject_prompt(cfg.description, eligible)
+        response = await router.complete_json("strategic", prompt, system=cfg.prompts.SYSTEM_JSON, task=TaskType.SUBJECT)
+    picked = response.get("subject")
+    subject = next((f["name"] for f in eligible if isinstance(picked, str) and _norm_segment(f["name"]) == _norm_segment(picked)), None)
+    info(f'[dim]Subject factor: {subject or "none"} (the model\'s pick; edit "subject" in taxonomy.json to change it)[/dim]')
+    return subject
 
 
 async def build_strategies(cfg: Config, router: ModelRouter, taxonomy: dict[str, Any]) -> list[dict[str, Any]]:
@@ -151,27 +182,104 @@ def _warn_uncovered_factors(strategies: list[dict[str, Any]], taxonomy: dict[str
 _MAX_MIX_REDRAWS = 100
 
 
-def sample_mix(taxonomy: dict[str, Any], strategy: dict[str, Any], rng: random.Random) -> list[dict[str, Any]]:
+def sample_mix(
+    taxonomy: dict[str, Any],
+    strategy: dict[str, Any],
+    rng: random.Random,
+    code_depth: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
     """Sample one taxonomy leaf per factor under the strategy's roots; one lineage entry per factor.
 
     Every factor always appears in the mix: factors the strategy leaves out (or whose roots match
     nothing) sample their full tree rather than being dropped. The strategy's never_combine path
     pairs are enforced by redrawing the whole mix; a ruleset the roots cannot satisfy raises after a
     bounded number of redraws instead of spinning.
+
+    code_depth {factor: level} stops code at that level for those factors: the leaf is still drawn
+    (same rng sequence, and never_combine is checked on it), then replaced by its ancestor at the
+    level, so every node there keeps its exact share and the writer chooses the specifics beneath it.
     """
     roots = strategy.get("taxonomy_roots") or []
     rules = _never_combine_rules(strategy)
+    levels = code_depth or {}
     for _ in range(_MAX_MIX_REDRAWS):
-        mix = []
-        for factor in taxonomy["factors"]:
-            node = _strategy_node_for_factor(factor, roots, rng) or _sample_descendant(factor, rng)
-            mix.append({"factor": factor["name"], "node": node["name"], "level": node.get("level", 0), "path": node.get("path", [node["name"]]), "description": node.get("description", "")})
-        if not _mix_violates(mix, rules):
-            return mix
+        nodes = [_strategy_node_for_factor(factor, roots, rng) or _sample_descendant(factor, rng) for factor in taxonomy["factors"]]
+        if not _mix_violates([_mix_entry(factor, node) for factor, node in zip(taxonomy["factors"], nodes)], rules):
+            return [_mix_entry(factor, _at_level(factor, node, levels.get(factor["name"]))) for factor, node in zip(taxonomy["factors"], nodes)]
     raise ValueError(
         f"never_combine rules for strategy {strategy.get('id', '?')!r} still violated after "
         f"{_MAX_MIX_REDRAWS} redraws; loosen the rules or widen the strategy's roots."
     )
+
+
+def _mix_entry(factor: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
+    return {"factor": factor["name"], "node": node["name"], "level": node.get("level", 0), "path": node.get("path", [node["name"]]), "description": node.get("description", "")}
+
+
+def _at_level(factor: dict[str, Any], node: dict[str, Any], level: int | None) -> dict[str, Any]:
+    # The node's ancestor at `level` (the node itself when it is already at or above that level).
+    if level is None or node.get("level", 0) <= level:
+        return node
+    current = factor
+    for name in node["path"][1 : level + 1]:
+        current = next(child for child in current["children"] if child["name"] == name)
+    return current
+
+
+def mix_space(taxonomy: dict[str, Any], strategy: dict[str, Any], code_depth: dict[str, int] | None = None) -> int:
+    """Upper bound on the distinct mixes a strategy can draw: reachable leaves per factor (under its
+    roots, else the full tree; zero-weight branches excluded), multiplied. A factor in code_depth counts
+    its nodes at that level instead of its leaves. never_combine is ignored."""
+    roots = {_root_key(str(root)) for root in strategy.get("taxonomy_roots") or []}
+    total = 1
+    for factor in taxonomy["factors"]:
+        stop = (code_depth or {}).get(factor["name"])
+        matched = [node for node in walk_nodes(factor) if _path_key(node.get("path", [node["name"]])) in roots]
+        total *= sum(_leaf_count(node, stop) for node in matched) or _leaf_count(factor, stop)
+    return total
+
+
+def restricting_strategies(strategies: list[dict[str, Any]], factor_name: str) -> list[str]:
+    """Ids of the strategies whose taxonomy_roots limit this factor to some of its branches."""
+    factor_key = _norm_segment(factor_name)
+    return [
+        strategy.get("id", "general")
+        for strategy in strategies
+        if any(len(key := _root_key(str(root))) > 1 and key[0] == factor_key for root in strategy.get("taxonomy_roots") or [])
+    ]
+
+
+def _leaf_count(node: dict[str, Any], stop: int | None = None) -> int:
+    if node.get("children") and (stop is None or node.get("level", 0) < stop):
+        return sum(_leaf_count(child, stop) for child in node["children"] if _node_weight(child) > 0)
+    return 1
+
+
+def level_options(taxonomy: dict[str, Any], factor_name: str, level: int) -> list[dict[str, Any]]:
+    """A factor's nodes at `level` (or leaves above it), each with the share the weighted level-wise walk
+    would give it (shares sum to 1). These are the options offered when the model picks the factor."""
+    factor = next((f for f in taxonomy["factors"] if f["name"] == factor_name), None)
+    if factor is None:
+        raise ValueError(f"generation.model_picked names unknown factor {factor_name!r}.")
+    options: list[dict[str, Any]] = []
+
+    def descend(node: dict[str, Any], share: float) -> None:
+        children = [child for child in node.get("children", []) if _node_weight(child) > 0]
+        if node is not factor and (node.get("level", 0) >= level or not children):
+            options.append({"name": node["name"], "description": node.get("description", ""), "level": node.get("level", level),
+                            "path": node.get("path", [factor["name"], node["name"]]), "share": share})
+            return
+        total = sum(_node_weight(child) for child in children)
+        for child in children:
+            descend(child, share * _node_weight(child) / total)
+
+    descend(factor, 1.0)
+    return options
+
+
+def find_option(options: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
+    """The option a model named, matched like strategy paths (case and punctuation ignored)."""
+    return next((option for option in options if _norm_segment(option["name"]) == _norm_segment(name)), None)
 
 
 def choose_strategy(strategies: list[dict[str, Any]], rng: random.Random) -> dict[str, Any]:
@@ -224,42 +332,44 @@ async def _expand_one_node(
     siblings: list[str],
     plan: str,
     level: int,
+    limiter: asyncio.Semaphore,
 ) -> list[dict[str, Any]]:
-    try:
-        raw_children: list[dict[str, Any]] = []
+    async def ask(prompt: str, task: TaskType) -> Any:
+        async with limiter:
+            return await router.complete_json("strategic", prompt, system=cfg.prompts.SYSTEM_JSON, task=task)
 
-        # Best-of-N asks for several candidate child lists before the critic refines them.
-        for _ in range(cfg.taxonomy.best_of_n):
-            response = await router.complete_json(
-                "strategic",
-                cfg.prompts.expand_prompt(cfg.description, factor, node, siblings, plan, cfg.taxonomy.children_per_node),
-                system=cfg.prompts.SYSTEM_JSON,
-                task=TaskType.NODE_EXPANSION,
-            )
-            raw_children.extend(response.get("children", []))
-
-        # A separate refinement call keeps child categories coherent and low-duplication.
-        refined = await router.complete_json(
-            "strategic",
-            cfg.prompts.refine_nodes_prompt(cfg.description, node, raw_children),
-            system=cfg.prompts.SYSTEM_JSON,
-            task=TaskType.TAXONOMY_CRITIC,
-        )
-        return [_child(child, level, node.get("path", [node["name"]])) for child in refined.get("children", [])]
-    except Exception as exc:  # noqa: BLE001 - malformed provider output should only prune one branch.
-        warn(f"node expansion failed for {node.get('name')}: {exc}")
-        return []
+    # Best-of-N candidate child lists, requested concurrently, then (taxonomy.critic, default on) one
+    # critic call that refines them for completeness and low duplication. The critic is not just a merge:
+    # even with a single proposal it fills in children the node's description implies and drops
+    # duplicates (measured: without it a depth-4 tree kept 3 of 21 described verticals and 5x the repeated
+    # names). critic: false (only with best_of_n 1) uses the proposal as is, 1 call per node. Malformed
+    # output (~6% of expansions on DeepSeek v4 pro) gets one retry; a second failure prunes only this branch.
+    expand = cfg.prompts.expand_prompt(cfg.description, factor, node, siblings, plan, cfg.taxonomy.children_per_node)
+    for attempt in range(2):
+        try:
+            proposals = await asyncio.gather(*(ask(expand, TaskType.NODE_EXPANSION) for _ in range(cfg.taxonomy.best_of_n)))
+            children = [child for response in proposals for child in response.get("children", [])]
+            if cfg.taxonomy.critic:
+                refined = await ask(cfg.prompts.refine_nodes_prompt(cfg.description, node, children), TaskType.TAXONOMY_CRITIC)
+                children = refined.get("children", [])
+            return [_child(child, level, node.get("path", [node["name"]])) for child in children]
+        except Exception as exc:  # noqa: BLE001 - malformed provider output should only prune one branch.
+            if attempt:
+                warn(f"node expansion failed for {node.get('name')}: {exc}")
+    return []
 
 
 def _child(child: dict[str, Any], level: int, parent_path: list[str]) -> dict[str, Any]:
+    # "/" is the path separator strategies use (taxonomy_path_strings), so it cannot live inside a name.
+    name = str(child["name"]).replace("/", "-")
     return {
-        "name": child["name"],
+        "name": name,
         "description": child.get("description", ""),
         # Prevalence weight, consumed by _sample_descendant; kept explicit so it is hand-tunable in
         # the reviewed taxonomy.json.
         "weight": _node_weight(child),
         "level": level,
-        "path": [*parent_path, child["name"]],
+        "path": [*parent_path, name],
         "children": [],
     }
 
@@ -344,8 +454,10 @@ def _strategy_node_for_factor(factor: dict[str, Any], roots: list[str], rng: ran
 
 
 def _root_key(root: str) -> tuple[str, ...]:
-    # Accept "/" as well as "." so model-authored paths match regardless of separator choice.
-    parts = str(root).replace("/", ".").split(".")
+    # "/" is the canonical separator (the valid-path list uses it); "." is accepted only for paths
+    # with no "/" at all, so a name like "5.1-Channel Systems" inside a slash path stays one segment.
+    root = str(root)
+    parts = root.split("/") if "/" in root else root.split(".")
     return tuple(segment for segment in (_norm_segment(part) for part in parts) if segment)
 
 

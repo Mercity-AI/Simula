@@ -108,9 +108,10 @@ async def _main(argv: list[str] | None = None) -> int:
             summary = summarize_cost(router.cost, time.time() - router.started)
             write_json(artifact_path(cfg.output_dir, "cost"), summary)
             if summary["total_calls"]:
+                billed = f" cost=${summary['total_cost']:.4f}" if summary["total_cost"] else ""
                 info(
-                    f"Cost summary: calls={summary['total_calls']} "
-                    f"in_tokens={summary['total_input_tokens']} out_tokens={summary['total_output_tokens']}"
+                    f"Cost summary: calls={summary['total_calls']} in_tokens={summary['total_input_tokens']} "
+                    f"out_tokens={summary['total_output_tokens']} (reasoning={summary['total_reasoning_tokens']}){billed}"
                 )
 
     return 1

@@ -22,6 +22,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from simula.prompts import choices_text, mix_text, situation_line, situation_note
+
 
 # A catalog of GOOD narrow, atomic e-commerce attributes spanning many verticals. Listed in the
 # prompts to anchor the model toward canonical, DB-queryable keys and away from compound junk like
@@ -59,38 +61,67 @@ _TYPE_SPECS = (
 
 
 def meta_prompt_prompt(description: str, schema: dict[str, Any] | None, mix: list[dict[str, Any]], k: int) -> str:
-    # Each meta-prompt nails one concrete shopping search: a product context, how the shopper phrases
-    # it, and HOW MANY atomic constraints (which sets both the JSON size and the query length).
+    # Each meta-prompt is a short instruction for ONE search inside the sampled mix: the product, how the
+    # shopper phrases it, and HOW MANY atomic constraints (which sets both the JSON size and the query
+    # length). It describes the search; the generator writes the query and picks the exact values.
+    several = (
+        f"\nAll {k} meta-prompts become separate examples built from these same requirements, so make them "
+        "genuinely different searches (a different concrete product inside the vertical, buyer, context and "
+        "phrasing), every one true to the sampled requirements."
+        if k > 1
+        else ""
+    )
     return f"""
 You are planning examples for an e-commerce search-query extraction dataset.
 
 Dataset description:
 {description}
 
-Sampled taxonomy requirements (reflect the product vertical, the shopper's intent, which attribute
-families dominate, and the linguistic complexity / number of constraints):
-{json.dumps(mix, ensure_ascii=False)}
+Sampled taxonomy requirements (the product vertical, the shopper's intent, which attribute families
+dominate, and the linguistic complexity / number of constraints):
+{mix_text(mix)}
 
-Write {k} diverse meta-prompts. Each meta-prompt is an instruction to a generator and MUST specify:
-- the concrete product the shopper is searching for and a realistic buying context;
-- the phrasing style (terse keyword string, a normal sentence, or a chatty multi-sentence request);
-- the TARGET NUMBER OF CONSTRAINTS to encode, chosen to match the query_complexity node above:
-  small = 3-5 fields (short query), medium = 6-11 fields, large = 12-20 fields (long, detailed query).
-  The query's length MUST scale with this count;
-- which atomic attributes to feature (size, color, material, brand, a price budget, rating, shipping,
-  technical specs, etc.), favoring the sampled attribute_focus;
-- optionally a negation/exclusion (e.g. "not red", "no Nike") and/or a mild ambiguity.
+{_CONFLICT_RULE}
 
-Vary the vertical, intent, phrasing, and constraint count across the {k} meta-prompts. Make queries
-sound like how real people type or talk into a search box or shopping assistant.
+Write {k} meta-prompt{"s" if k > 1 else ""}. A meta-prompt is a short instruction (at most 70 words) for a generator and MUST:
+{_META_PROMPT_RULES}{several}
 Return JSON:
-{{"meta_prompts": ["...", "..."]}}
+{{"meta_prompts": ["..."]}}
+""".strip()
+
+
+def meta_prompt_batch_prompt(description: str, schema: dict[str, Any] | None, items: list[dict[str, Any]]) -> str:
+    # Batch mode A: meta-prompts for several sampled mixes in one call, under the same rules as meta_prompt_prompt.
+    specs = "\n\n".join(f"{item['id']} ({item['count']} meta-prompt{'s' if item['count'] > 1 else ''}):\n{mix_text(item['mix'])}{situation_line(item)}" for item in items)
+    return f"""
+You are planning examples for an e-commerce search-query extraction dataset.
+
+Dataset description:
+{description}
+
+Below are sets of sampled taxonomy requirements, one per id (the product vertical, the shopper's intent,
+which attribute families dominate, and the linguistic complexity / number of constraints).
+
+{_CONFLICT_RULE}
+
+For each id, write the number of meta-prompts it asks for. A meta-prompt is a short instruction (at most 70 words)
+for a generator and MUST:
+{_META_PROMPT_RULES}
+Several meta-prompts for one id must be genuinely different searches (a different concrete product inside
+the vertical, buyer, context and phrasing).{situation_note(items)}
+
+{_BATCH_VARIETY}
+
+{specs}
+
+Return JSON:
+{{"mixes": [{{"id": "m1", "meta_prompts": ["..."]}}]}}
 """.strip()
 
 
 def complexify_prompt(description: str, meta_prompt: str) -> str:
-    # "More complex" here means a LONGER, more natural query carrying MORE atomic constraints, pushing
-    # toward the large (12-20 field) end so the dataset spans the full size range.
+    # "Harder" means harder to PARSE, not bigger: the constraint count is owned by the sampled
+    # query_complexity node, so complexify must not inflate it.
     return f"""
 Dataset description:
 {description}
@@ -98,31 +129,41 @@ Dataset description:
 Meta-prompt:
 {meta_prompt}
 
-Rewrite this meta-prompt so the shopper's search is longer and more natural and carries MORE atomic
-constraints (aim toward 12-20 extractable fields): add extra attributes such as a price budget
-(min/max), color or material, brand preferences or exclusions, size, rating or review thresholds,
-shipping/availability, and a sorting preference. Keep every added constraint atomic and realistic for
-the product; do NOT introduce compound or contradictory requirements. Preserve the original intent.
+Rewrite this meta-prompt so the shopper's search is harder to parse correctly while keeping its product,
+intent, phrasing style and TARGET NUMBER OF CONSTRAINTS. {_HARDER_RULE} Do not write the query itself.
 Return JSON:
 {{"meta_prompt": "..."}}
 """.strip()
 
 
-def generate_record_prompt(description: str, schema: dict[str, Any], meta_prompt: str) -> str:
-    # The envelope `schema` arg is intentionally loose; the real content rules live here.
+def complexify_record_prompt(description: str, schema: dict[str, Any] | None, meta_prompt: str, record: Any) -> str:
+    # Combined path: complexify rewrites the finished example. Same meaning of "harder" as above
+    # (harder to parse, not bigger), and the extraction must be rebuilt to match the rewritten query.
     return f"""
-Create ONE example for an e-commerce search-query extraction dataset.
-
 Dataset description:
 {description}
 
-Build a single JSON object with EXACTLY these two top-level keys:
+Example (query + extraction):
+{json.dumps(record, ensure_ascii=False)}
+
+Rewrite the query so it is harder to parse correctly while keeping the same product, intent, phrasing
+style and number of constraints. {_HARDER_RULE}
+Then rebuild the extraction from the rewritten query: every field must be stated or clearly implied by
+the new query, no stated constraint may be dropped, and every field stays atomic (split ranges into
+min/max, put exclusions in *_excluded fields).
+Return ONLY the JSON object with keys "query" and "extraction".
+""".strip()
+
+
+# The record contract shared by the one-record and the batch generate prompts.
+_RECORD_RULES = f"""
+Each example is a JSON object with EXACTLY these two top-level keys:
 
 1. "query" — a realistic, natural English search a shopper would type or speak when looking for a
-   product. Follow the meta-prompt's phrasing style and length. It may be a terse keyword string
-   ("mens running shoes size 11 under $80") or a chatty request ("I'm looking for a birthday gift for
-   my mom, something like a cozy wool cardigan, navy or grey, medium, ideally under 60 dollars").
-   Write it the way a person actually searches, NOT like a filled form or JSON.
+   product. It may be a terse keyword string ("mens running shoes size 11 under $80") or a chatty
+   request ("I'm looking for a birthday gift for my mom, something like a cozy wool cardigan, navy or
+   grey, medium, ideally under 60 dollars"). Write it the way a person actually searches, NOT like a
+   filled form or JSON.
 
 2. "extraction" — the structured query parsed from "query", ready to drive a database lookup. Rules:
    - Use NARROW, ATOMIC fields: each field holds exactly ONE fact. Snake_case canonical keys.
@@ -142,7 +183,51 @@ Build a single JSON object with EXACTLY these two top-level keys:
    - Encode ONLY constraints stated or unambiguously implied in "query". Normalize obvious cues
      ("cheap"/"budget" alone is NOT a number — do not invent one; "under $80" -> price_max 80;
      "highly rated" -> rating_min ~4; "on sale" -> on_sale true). Never invent attributes the shopper
-     did not express.
+     did not express — no default gender, size_system, currency, in_stock or condition unless the query
+     says so.
+""".strip()
+
+_BATCH_VARIETY = """These are independent searches by different shoppers: they must not read like a batch. Vary openers,
+sentence shapes, brands, price points, sizes and circumstances; never reuse a template or the same numbers."""
+
+_SIZE_RULE = """- set the TARGET NUMBER OF CONSTRAINTS: small = 3-5 fields, medium = 6-11, large = 12-20. Use the
+  size the query_complexity node names; when it names none, pick the size its phrasing implies (a terse
+  fragment is small, a chatty multi-sentence request medium or large). The query's length scales with it;"""
+
+# The four factors are sampled independently, so their leaves often conflict (a spec-heavy intent with a
+# soft-attributes-only query shape, a packaging attribute on fresh meat). A fixed precedence lets the
+# model resolve that in a sentence instead of deliberating, and keeps every record coherent.
+_CONFLICT_RULE = """The sampled nodes are ingredients, not a checklist: they were drawn independently and often conflict.
+Resolve conflicts with this precedence and do not deliberate: product_vertical (what is searched for) >
+query_complexity (phrasing shape and field count) > shopper_intent > attribute_focus. Use a lower-priority
+node only where it fits naturally; soften or drop it otherwise. A coherent, realistic search beats full
+coverage."""
+
+_HARDER_RULE = (
+    "Add one or two parsing challenges: an exclusion/negation, a comparative (\"cheaper than my last one\"), "
+    "a mild ambiguity, colloquial wording or a typo, or a range that must be split into min/max. Do not raise "
+    "the number of constraints."
+)
+
+_META_PROMPT_RULES = f"""- name the concrete product being searched for, inside the sampled product vertical, and a realistic
+  buying context that fits the sampled intent;
+- set the phrasing style (terse keyword string, a normal sentence, or a chatty multi-sentence request);
+{_SIZE_RULE}
+- say which kinds of atomic attributes to feature, favoring the sampled attribute_focus;
+- optionally a negation/exclusion or a mild ambiguity (required when query_complexity calls for one).
+Describe the search; do NOT write the query or the extraction, and leave exact values (brand names,
+prices, sizes) to the generator."""
+
+
+def generate_record_prompt(description: str, schema: dict[str, Any], meta_prompt: str) -> str:
+    # The envelope `schema` arg is intentionally loose; the real content rules live in _RECORD_RULES.
+    return f"""
+Create ONE example for an e-commerce search-query extraction dataset.
+
+Dataset description:
+{description}
+
+{_RECORD_RULES}
    - The number of fields MUST match the meta-prompt's target (roughly 3-20), so size varies by row.
 
 Meta-prompt (the specific instance to build):
@@ -152,13 +237,77 @@ Return ONLY the JSON object with keys "query" and "extraction". No commentary.
 """.strip()
 
 
+def generate_record_batch_prompt(description: str, schema: dict[str, Any] | None, items: list[dict[str, Any]]) -> str:
+    # Batch mode B: several examples per call, each from its own meta-prompt (same rules as one-by-one).
+    specs = "\n\n".join(f"{item['id']}:\n{item['meta_prompt']}" for item in items)
+    return f"""
+Create examples for an e-commerce search-query extraction dataset, one per meta-prompt below.
+
+Dataset description:
+{description}
+
+{_RECORD_RULES}
+   - The number of fields MUST match each meta-prompt's target (roughly 3-20), so size varies by row.
+
+{_BATCH_VARIETY}
+
+Meta-prompts (each is the specific instance to build):
+{specs}
+
+Return JSON:
+{{"records": [{{"id": "r1", "record": {{"query": "...", "extraction": {{...}}}}}}]}}
+""".strip()
+
+
+def combined_batch_prompt(description: str, schema: dict[str, Any] | None, items: list[dict[str, Any]], choices: list[dict[str, Any]]) -> str:
+    # Batch mode C, the combined path: several examples per call straight from their sampled mixes, so
+    # the planning rules of meta_prompt_prompt live here too. Static text first (cacheable prefix).
+    # choices = model-picked factors (generation.model_picked): offered as options, reported in "picked".
+    specs = "\n\n".join(f"{item['id']}:\n{mix_text(item['mix'])}{situation_line(item)}" for item in items)
+    picked = ""
+    if choices:
+        picked = (
+            "\n\nChoose these factors yourself for every search (they are not in the specs): pick the option that "
+            "fits that product and shopper best, spread your picks across the searches roughly in the shares shown, "
+            'and report them in "picked" by exact option name.\n' + choices_text(choices) + "\n"
+        )
+    pick_field = ', "picked": {' + ", ".join(f'"{choice["factor"]}": "..."' for choice in choices) + "}" if choices else ""
+    return f"""
+Create examples for an e-commerce search-query extraction dataset, one per spec below.
+
+Dataset description:
+{description}
+
+{_RECORD_RULES}
+
+Planning each example from its spec (the sampled taxonomy nodes):{picked}
+{_CONFLICT_RULE}
+- Pick a concrete product inside the sampled product_vertical and a buying context that fits the
+  shopper_intent; feature attributes from the sampled attribute_focus.
+{_SIZE_RULE.replace("- set the", "- Set the", 1)}
+- Phrasing style follows query_complexity too: terse keyword string, a normal sentence, or a chatty
+  multi-sentence request.
+- First write a one-sentence "plan": the product, the buying context, the phrasing style and the target
+  field count. Then write the example so it matches the plan.
+
+The spec nodes are instructions, not content: never copy a node name, path or description into the
+query or the extraction ("category" holds the shopper's own words, if anything).{situation_note(items)}
+
+{_BATCH_VARIETY}
+
+{specs}
+
+Return JSON:
+{{"records": [{{"id": "r1", "plan": "..."{pick_field}, "record": {{"query": "...", "extraction": {{...}}}}}}]}}
+""".strip()
+
+
 def critique_prompt(description: str, schema: dict[str, Any], meta_prompt: str, record: dict[str, Any]) -> str:
     # Strict gate: this is where compound fields, hallucinated constraints, and unnatural queries die.
+    # On reject it also returns the corrected example, which saves the refine call and a re-critique.
+    # The rules come first and the example last so the instruction block is a cacheable prefix.
     return f"""
 Validate ONE example for an e-commerce search-query extraction dataset.
-
-Example:
-{json.dumps(record, ensure_ascii=False)}
 
 Return verdict "reject" if ANY check fails:
 1. Top-level keys are not exactly "query" and "extraction".
@@ -175,5 +324,13 @@ Return verdict "reject" if ANY check fails:
    range was not split into atomic min/max fields.
 
 Otherwise return "accept". Be strict but fair; natural normalization (under $80 -> price_max 80) is good.
-Return JSON: {{"verdict": "accept" | "reject", "explanation": "..."}}
+If you reject, also return "revised": the example corrected so every check passes. Keep the query unless
+the query itself is the problem, and change only what is needed (usually removing an unsupported field
+or adding a missed one).
+
+Example:
+{json.dumps(record, ensure_ascii=False)}
+
+Return JSON (omit "revised" when accepting):
+{{"verdict": "accept" | "reject", "explanation": "...", "revised": {{"query": "...", "extraction": {{...}}}}}}
 """.strip()

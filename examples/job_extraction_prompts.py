@@ -21,6 +21,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from simula.prompts import DIVERSITY_RULE, situation_line, situation_note
+
 
 # Catalog of good NARROW, atomic fields. Listed in the prompt to anchor the model away
 # from compound junk like "salary_range" or "location". Not every row uses every field.
@@ -43,6 +45,13 @@ _TYPE_SPECS = (
 )
 
 
+_META_PROMPT_RULES = """- the kind of job and company context to write a realistic posting about;
+- a NARROW target schema of 4-9 atomic fields to request (choose a DIFFERENT subset for each
+  meta-prompt; never request a field that bundles multiple facts);
+- a deliberate gap: at least one requested field that the posting will NOT state (so the
+  extraction must omit it) and optionally one fact in the posting that is NOT requested."""
+
+
 def meta_prompt_prompt(description: str, schema: dict[str, Any] | None, mix: list[dict[str, Any]], k: int) -> str:
     # Each meta-prompt nails down one concrete extraction instance: a job context, a
     # DISTINCT narrow target schema, and which requested fields the text will/won't state.
@@ -57,15 +66,36 @@ writing style, and which facts are present/absent):
 {json.dumps(mix, ensure_ascii=False)}
 
 Write {k} diverse meta-prompts. Each meta-prompt is an instruction to a generator and MUST specify:
-- the kind of job and company context to write a realistic posting about;
-- a NARROW target schema of 4-9 atomic fields to request (choose a DIFFERENT subset for each
-  meta-prompt; never request a field that bundles multiple facts);
-- a deliberate gap: at least one requested field that the posting will NOT state (so the
-  extraction must omit it) and optionally one fact in the posting that is NOT requested.
+{_META_PROMPT_RULES}
 
 Vary seniority, domain, region, currency, and posting style across the {k} meta-prompts.
 Return JSON:
 {{"meta_prompts": ["...", "..."]}}
+""".strip()
+
+
+def meta_prompt_batch_prompt(description: str, schema: dict[str, Any] | None, items: list[dict[str, Any]]) -> str:
+    # The same rules for several mixes per call (generation.meta_batch_size); with generation.subject set this version
+    # is always used, and it renders each posting's situation.
+    specs = "\n\n".join(f"{item['id']} ({item['count']} meta-prompt{'s' if item['count'] > 1 else ''}):\n{json.dumps(item['mix'], ensure_ascii=False)}{situation_line(item)}"
+                         for item in items)
+    return f"""
+You are planning examples for a schema-guided job-posting extraction dataset.
+
+Dataset description:
+{description}
+
+Below are sampled taxonomy requirements, one set per id (reflect them in the job posting's domain, seniority,
+writing style, and which facts are present/absent). For each id, write the number of meta-prompts it asks for.
+Each meta-prompt is an instruction to a generator and MUST specify:
+{_META_PROMPT_RULES}
+
+{DIVERSITY_RULE} Vary seniority, domain, region, currency, and posting style.{situation_note(items)}
+
+{specs}
+
+Return JSON:
+{{"mixes": [{{"id": "m1", "meta_prompts": ["..."]}}]}}
 """.strip()
 
 

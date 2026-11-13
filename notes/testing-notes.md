@@ -187,14 +187,14 @@ input is a search query and the envelope is `{query, extraction}` (no per-row `s
   atomic-attribute menu spanning many verticals.
 
 ## Fingerprint discipline (smoke -> full resume)
-Resume fingerprints description/schema/seed/model-ids/scenarios_per_mix/complexity_ratio/
+Resume fingerprints description/schema/seed/model-ids/meta_prompts_per_mix/complexity_ratio/
 max_refine_attempts/prompts/taxonomy/strategies — these MUST stay constant smoke->full. target_size,
 overgenerate_ratio, concurrency, checkpoint_every are NOT fingerprinted -> safe to change. So the full
 run = edit those four only + `generate --resume` in the same output_dir (reuses taxonomy/strategies/
-smoke rows). Locked-constant: scenarios_per_mix=3, complexity_ratio=0.3, max_refine_attempts=1.
+smoke rows). Locked-constant: meta_prompts_per_mix=3, complexity_ratio=0.3, max_refine_attempts=1.
 
 ## Per-attempt call flow (from generate.py)
-meta_prompt(1, bulk; produces scenarios_per_mix options, one is picked — does NOT multiply calls)
+meta_prompt(1, bulk; produces meta_prompts_per_mix options, one is picked — does NOT multiply calls)
 -> maybe complexify (~30%) -> generate(1, bulk) -> maybe repair(rare) -> critic loop: critique(1,
 critic) + up to max_refine_attempts refine(+critique). Accept-first-try ~3.3 calls/attempt.
 10K @ overgen 1.3 = 13K attempts ~= 45K flash calls. Rough est: data gen ~$10-20, taxonomy ~$1-3,
@@ -229,7 +229,7 @@ critic) + up to max_refine_attempts refine(+critique). Accept-first-try ~3.3 cal
 - Field-count spread 5..25 (median 13); 24/24 distinct key-sets; nesting in 10/24, arrays in 19/24;
   budget->price_min/max, "no polyester"->material_excluded, "not an HP"->brand_excluded, size+size_system.
 - LATENCY profile (cost_summary by-task): meta_prompt is the hog at ~73s/call (46% of compute) because
-  scenarios_per_mix=3 writes 3 elaborate prompts and uses 1; generate ~26s, critic ~30s, refine ~22s.
+  meta_prompts_per_mix=3 writes 3 elaborate prompts and uses 1; generate ~26s, critic ~30s, refine ~22s.
   Per attempt ~157 compute-seconds. deepseek v4 reasoning is the latency driver (~38s/call avg).
 - KEY-NAMING: open schema -> same concept gets synonym keys across rows (free_shipping vs shipping_free,
   reviews_min vs review_count_min, weight_max_lb vs weight_kg_max, sort_by "rating" vs "rating_desc").
@@ -240,14 +240,14 @@ critic) + up to max_refine_attempts refine(+critique). Accept-first-try ~3.3 cal
 ### 2026-06-24 — FULL 10K RUN: LAUNCHED
 - Pricing (OpenRouter, web-checked): flash $0.09/M in, $0.18/M out; pro $0.435/M in, $0.87/M out.
 - SPEND so far (sunk): taxonomy ~$4.79 (1877 pro calls, 3.28M in/3.87M out) + smoke ~$0.16 = ~$5.
-- 10K estimate: scale smoke per-attempt (3752 in / 5265 out, incl. reasoning + 3-scenario meta) x 13000
+- 10K estimate: scale smoke per-attempt (3752 in / 5265 out, incl. reasoning + 3-meta-prompt meta) x 13000
   attempts (10K/0.97 accept, overgen 1.3) -> ~48.8M in + ~68.4M out -> ~$16.7; with nitro/variance margin
   ~$17-25. Total project ~$22-30.
-- USER DECISIONS: nitro on (bulk+critic = deepseek-v4-flash:nitro), scenarios_per_mix=3 kept (max
+- USER DECISIONS: nitro on (bulk+critic = deepseek-v4-flash:nitro), meta_prompts_per_mix=3 kept (max
   variety, spend/time not a constraint), concurrency 48, keys as-is. strategic stays pro but is NOT
   re-called (strategies.json reused). Launched `generate --no-resume` (model id change invalidated the
   smoke-row fingerprint; taxonomy.json + strategies.json reused from disk).
-- Config block now: target_size 10000, overgenerate 1.3, scenarios_per_mix 3, complexity_ratio 0.3,
+- Config block now: target_size 10000, overgenerate 1.3, meta_prompts_per_mix 3, complexity_ratio 0.3,
   max_refine_attempts 1, concurrency 48, checkpoint_every 50.
 - Early health (90s in): 48 raw / 47 accepted (98%), generator_model=flash:nitro, no errors. Throughput
   ~32 attempts/min @ conc 48 -> ETA ~5-7 h. Background task bvoqgvq6q notifies on exit (success or crash).

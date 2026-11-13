@@ -22,6 +22,48 @@ SYSTEM_TEXT = (
 )
 
 
+# Context rules: supplied context (the description, product notes, examples) is background, not a menu. Without
+# them a model anchors on the context's few concrete details: they end up in node descriptions as "such as"
+# examples and then in a large share of records. Prompt modules can import and include them in their overrides.
+TAXONOMY_CONTEXT_RULE = (
+    "Write each node as a general kind, in your own words. Do not anchor node names or descriptions on specific named "
+    "details from the description or any context given with it (named features, products, people, error codes, numbers, "
+    "dates), and do not list 'such as' / 'e.g.' examples: records invent their own specifics, and an example named here "
+    "gets copied into most of them. Cover the space widely, beyond what the description happens to mention."
+)
+CONTEXT_RULE = (
+    "The dataset description and any context supplied with it are background, not a menu. Do not over-rely on their "
+    "specific named details (named features, products, people, error codes, numbers, dates): use one only when a record "
+    "genuinely needs it, and most records should not. Go wide: vary topics, names, wording and vocabulary across records "
+    "instead of reusing the same salient details."
+)
+
+# Phrasing rule: sampled ingredients (writer, tone, shape) tend to be written out as the same stock phrases in every
+# record ("I'm the workspace admin", "third time writing", one default name), which makes records read alike.
+# Kept general here; a prompt module can add the stock phrases of its own dataset.
+PHRASING_RULE = (
+    "Let the sampled ingredients show through what each record says and does, not through stock phrases that "
+    "announce them: a record should not state who is behind it, its tone or its backstory outright unless it "
+    "naturally would. Vary openings, closings and any names widely: draw names from many cultures and avoid the "
+    "first common name that comes to mind."
+)
+
+# Diversity rule: records written in one call drift toward one template unless told otherwise.
+DIVERSITY_RULE = (
+    "The records are independent examples of one dataset. Make them substantially different from each other, each "
+    "one unique and the set diverse: different people and names, places, numbers, details, openings and phrasing. "
+    "Never reuse a template across records."
+)
+
+# Revise rule: left alone, a critic or refiner often "fixes" a mismatch between a record's content and its intended
+# values by changing the values, which moves the dataset's shares away from what was sampled. (Measured on support
+# tickets: with the rule, labels matching the sampled ones went from 91.5% to 95.7%.)
+REVISE_RULE = (
+    "Fix a record by changing its content until what was intended is the clear reading. Keep the intended values "
+    "(labels, categories, levels) themselves: do not change them to match the content."
+)
+
+
 class PromptSet:
     def __init__(self, module: ModuleType | None = None, module_path: Path | None = None):
         self.module = module
@@ -143,6 +185,7 @@ Expansion plan:
 {plan}
 
 Propose {count} useful, non-overlapping child nodes for the current node.
+{TAXONOMY_CONTEXT_RULE}
 Give each child a "weight": its expected prevalence in realistic data for this dataset (dominant ~1.0, common ~0.5, uncommon ~0.15, rare ~0.03). Weight is prevalence, not how interesting the category is to enumerate; rare forms sit an order of magnitude below common ones.
 Return JSON:
 {{"children": [{{"name": "...", "description": "...", "weight": 1.0}}]}}
@@ -161,6 +204,7 @@ Raw proposed children:
 {json.dumps(raw_children, ensure_ascii=False)}
 
 Refine this list for completeness, soundness, specificity, and low duplication.
+{TAXONOMY_CONTEXT_RULE}
 Keep each child's "weight" (its expected prevalence in realistic data, not its interestingness): preserve incoming weights unless a merge or split makes an adjustment necessary, and give any new child a weight on the same scale (dominant ~1.0, common ~0.5, uncommon ~0.15, rare ~0.03).
 Return JSON:
 {{"children": [{{"name": "...", "description": "...", "weight": 1.0}}]}}
@@ -221,8 +265,101 @@ Return JSON:
 """.strip()
 
 
+def mix_text(mix: list[dict[str, Any]]) -> str:
+    """One line per sampled node: `- factor: branch > ... > leaf — description` (path minus the factor root)."""
+    lines = []
+    for entry in mix:
+        path = entry.get("path") or [entry["node"]]
+        description = f" — {entry['description']}" if entry.get("description") else ""
+        lines.append(f"- {entry['factor']}: {' > '.join(path[1:] or path)}{description}")
+    return "\n".join(lines)
+
+
+def choices_text(choices: list[dict[str, Any]]) -> str:
+    """Model-picked factors for a batch prompt: per factor, its options with target shares."""
+    blocks = []
+    for choice in choices:
+        lines = [f"{choice['factor']}:"]
+        for option in choice["options"]:
+            description = f" — {option['description']}" if option.get("description") else ""
+            lines.append(f"- {option['name']} ({option['share']:.0%}){description}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def situation_line(item: dict[str, Any]) -> str:
+    """generation.subject: the spec line carrying an item's situation (empty when it has none)."""
+    return f"\n- situation: {item['situation']}" if item.get("situation") else ""
+
+
+def situation_note(items: list[dict[str, Any]]) -> str:
+    """generation.subject: how a batch whose specs carry situations should use them (empty when none does). The specs
+    of one batch share a node of the subject factor."""
+    if not any(item.get("situation") for item in items):
+        return ""
+    return ("\n\nAll records below share the same subject (the same node of the subject factor). A record's situation "
+            "is the concrete thing it is about, taken from a list written for that subject: build the record around it, "
+            "adapting it to the other ingredients. A record without one invents its own, unlike the others.")
+
+
+def subject_prompt(description: str, factors: list[dict[str, Any]]) -> str:
+    # generation.subject: auto. One call, after the tree is built, names the factor whose nodes get situations.
+    def line(factor: dict[str, Any]) -> str:
+        children = ", ".join(child["name"] for child in factor.get("children", []))
+        return f"- {factor['name']}: {factor.get('description', '')}" + (f" (branches: {children})" if children else "")
+
+    return f"""
+Dataset description:
+{description}
+
+Every record is built from one sampled node of each of these factors:
+{chr(10).join(line(factor) for factor in factors)}
+
+Which one factor is the subject: the factor that says what a record is about (its topic, issue, item or document
+type), as opposed to how it is written, by whom, in what tone, at what length or how hard it is?
+Each node of the subject gets a list of concrete situations, one per record, so that records sharing a node are about
+different things. Choose the factor whose nodes are kinds of content that many different concrete cases fall under.
+Answer null when no factor is about content.
+Return JSON:
+{{"subject": "<factor name>" | null, "reason": "..."}}
+""".strip()
+
+
+def situations_prompt(description: str, node: dict[str, Any], count: int, existing: list[str]) -> str:
+    # generation.subject: situations for one node of the subject factor, listed together so they differ; each one
+    # becomes the subject matter of exactly one record.
+    path = " > ".join(node.get("path") or [node.get("node", "")])
+    listed = ("\nAlready listed for this subject (do not repeat these or close variants):\n" + "\n".join(f"- {s}" for s in existing)) if existing else ""
+    return f"""
+Dataset description:
+{description}
+
+Subject: {path}{f" — {node['description']}" if node.get("description") else ""}
+
+List {count} distinct situations that a record about this subject could be about, one sentence each.
+- A situation is one specific case of the subject, clear enough that two writers given it would write about the same
+  thing: what it is or what happened, to what, in what circumstances. It is neither a category of cases nor a
+  finished record.
+- Make them substantially different from each other (different objects, causes, circumstances and scales), not
+  rewordings, and cover the subject widely, beyond what the description happens to mention.
+- Describe only the subject matter. Leave out whatever the record's other ingredients decide (such as tone, urgency,
+  who is writing, length and format): those are chosen separately for each record.
+- Invent the specifics yourself. Do not anchor on named details from the description or any context given with it
+  (named features, products, people, error codes, numbers, dates).{listed}
+
+Return JSON:
+{{"situations": ["..."]}}
+""".strip()
+
+
 def meta_prompt_prompt(description: str, schema: dict[str, Any] | None, mix: list[dict[str, Any]], k: int) -> str:
+    # k > 1: every meta-prompt becomes its own record sharing this mix, so they must differ for real.
     format_instruction = "The final data point will be free-form text." if schema is None else f"Output JSON Schema:\n{schema_text(schema)}"
+    several = (
+        f"\nAll {k} meta-prompts become separate records built from these same ingredients, so make them genuinely distinct records — different content, details and angles — not rewordings of one idea."
+        if k > 1
+        else ""
+    )
     return f"""
 Dataset description:
 {description}
@@ -232,10 +369,37 @@ Dataset description:
 Sampled ingredients for this record (not a strict checklist):
 {json.dumps(mix, ensure_ascii=False)}
 
-Generate {k} diverse meta-prompts. Each meta-prompt should tell a generator exactly what record to create.
+Write {k} meta-prompt{"s" if k > 1 else ""}. A meta-prompt tells a generator what record to create: what it is about and the content it must carry, in at most 80 words. Describe the record; do not write it.{several}
+{CONTEXT_RULE}
 Think about what this combination of ingredients implies for the finished record. Full coverage of the ingredients, although important, is not the goal by itself — coherence, and being smart about what the combination should produce, is just as important, if not more. If ingredients conflict or their sum would be incoherent, build the meta-prompt around the load-bearing ones and soften or drop the rest.
 Return JSON:
-{{"meta_prompts": ["...", "..."]}}
+{{"meta_prompts": ["..."]}}
+""".strip()
+
+
+def meta_prompt_batch_prompt(description: str, schema: dict[str, Any] | None, items: list[dict[str, Any]]) -> str:
+    # Batch mode A (generation.meta_batch_size > 1): meta-prompts for several sampled mixes in one call.
+    # items = [{"id": "m1", "mix": [...], "count": k}]. Static text first, specs last (cacheable prefix).
+    format_instruction = "The final data points will be free-form text." if schema is None else f"Output JSON Schema:\n{schema_text(schema)}"
+    specs = "\n\n".join(f"{item['id']} ({item['count']} meta-prompt{'s' if item['count'] > 1 else ''}):\n{mix_text(item['mix'])}{situation_line(item)}" for item in items)
+    return f"""
+Dataset description:
+{description}
+
+{format_instruction}
+
+Below are sets of sampled ingredients (not strict checklists), one per id. For each id, write the number of
+meta-prompts it asks for. A meta-prompt tells a generator what record to create: what it is about and the
+content it must carry, in at most 80 words. Describe the record; do not write it.
+- Think about what each combination of ingredients implies for the finished record. Full coverage of the ingredients, although important, is not the goal by itself — coherence, and being smart about what the combination should produce, is just as important, if not more. If ingredients conflict or their sum would be incoherent, build around the load-bearing ones and soften or drop the rest.
+- {DIVERSITY_RULE} This holds across ids and between several meta-prompts for one id.
+- {CONTEXT_RULE}
+- {PHRASING_RULE}{situation_note(items)}
+
+{specs}
+
+Return JSON:
+{{"mixes": [{{"id": "m1", "meta_prompts": ["..."]}}]}}
 """.strip()
 
 
@@ -264,7 +428,140 @@ Output JSON Schema:
 Meta-prompt:
 {meta_prompt}
 
-Generate exactly one synthetic data record matching the schema. Return the record as JSON only.
+Generate exactly one synthetic data record matching the schema. {CONTEXT_RULE} {PHRASING_RULE}
+Return the record as JSON only.
+""".strip()
+
+
+def generate_record_batch_prompt(description: str, schema: dict[str, Any] | None, items: list[dict[str, Any]]) -> str:
+    # Batch mode B (generation.record_batch_size > 1 with meta-prompts on): records for several meta-prompts in
+    # one call. items = [{"id": "r1", "meta_prompt": "..."}]. Static text first, specs last.
+    record_format = (
+        "Each record is free-form text, given as a JSON string."
+        if schema is None
+        else f"Each record is a JSON object matching this JSON Schema:\n{schema_text(schema)}"
+    )
+    specs = "\n\n".join(f"{item['id']}:\n{item['meta_prompt']}" for item in items)
+    return f"""
+Dataset description:
+{description}
+
+{record_format}
+
+Write one record per meta-prompt below; each meta-prompt says what its record must be.
+- Keep each record true to its own meta-prompt. {DIVERSITY_RULE}
+- {CONTEXT_RULE}
+- {PHRASING_RULE}
+- Give every record the length and depth it would have if it were written on its own.
+
+{specs}
+
+Return JSON:
+{{"records": [{{"id": "r1", "record": ...}}]}}
+""".strip()
+
+
+def combined_batch_prompt(description: str, schema: dict[str, Any] | None, items: list[dict[str, Any]], choices: list[dict[str, Any]]) -> str:
+    # Batch mode C, the combined path (generation.meta_prompts: false): several records per call, straight from their
+    # sampled mixes. items = [{"id": "r1", "mix": [...]}]. Every spec lists its nodes inline.
+    specs = "\n\n".join(f"{item['id']}:\n{mix_text(item['mix'])}{situation_line(item)}" for item in items)
+    intro = "Write one record per spec below. Each spec lists the sampled ingredients for its record (taxonomy nodes; not a strict checklist)."
+    return _combined_prompt(description, schema, intro + situation_note(items), specs, choices)
+
+
+def combined_table_batch_prompt(description: str, schema: dict[str, Any] | None, items: list[dict[str, Any]], choices: list[dict[str, Any]]) -> str:
+    # The compact form of combined_batch_prompt (plan.md item 6, "prompt shape"): each distinct node is
+    # described once in a NODES glossary under a short id, then one table row of ids per record. Not wired
+    # into generation yet; measured offline against the inline form (plan.md §0).
+    intro = (
+        "Write one record per row of the table below. NODES describes each sampled node once under a short id; each "
+        "row lists the node ids that are the ingredients for its record (not a strict checklist)."
+    )
+    return _combined_prompt(description, schema, intro + situation_note(items), nodes_table(items), choices)
+
+
+def nodes_table(items: list[dict[str, Any]]) -> str:
+    """NODES glossary (each distinct node once, id = factor initial(s) + number), one row of ids per record, and each
+    record's situation when it has one (generation.subject)."""
+    factors = list(dict.fromkeys(entry["factor"] for item in items for entry in item["mix"]))
+    prefixes: dict[str, str] = {}
+    for position, factor in enumerate(factors):
+        # First letter, else first two letters, else a positional "F3_" so ids stay unambiguous.
+        prefix = next((p for p in (factor[:1].upper(), factor[:2].upper()) if p not in prefixes.values()), f"F{position + 1}_")
+        prefixes[factor] = prefix
+    ids: dict[tuple[str, ...], str] = {}
+    glossary = []
+    for item in items:
+        for entry in item["mix"]:
+            key = (entry["factor"], *(entry.get("path") or [entry["node"]]))
+            if key not in ids:
+                ids[key] = f"{prefixes[entry['factor']]}{sum(1 for k in ids if k[0] == entry['factor']) + 1}"
+                glossary.append(f"{ids[key]}  {mix_text([entry])[2:]}")
+    rows = [" | ".join(["id", *factors])]
+    for item in items:
+        cells = {entry["factor"]: ids[(entry["factor"], *(entry.get("path") or [entry["node"]]))] for entry in item["mix"]}
+        rows.append(" | ".join([item["id"], *(cells.get(factor, "-") for factor in factors)]))
+    situations = [f"{item['id']}: {item['situation']}" for item in items if item.get("situation")]
+    return "NODES:\n" + "\n".join(glossary) + "\n\nRECORDS:\n" + "\n".join(rows) + ("\n\nSITUATIONS:\n" + "\n".join(situations) if situations else "")
+
+
+def _combined_prompt(description: str, schema: dict[str, Any] | None, intro: str, specs: str, choices: list[dict[str, Any]]) -> str:
+    # Shared body of the combined batch prompts. Static text first, specs last, so providers that cache
+    # prompt prefixes can reuse the instruction block across calls.
+    record_format = (
+        "Each record is free-form text, given as a JSON string."
+        if schema is None
+        else f"Each record is a JSON object matching this JSON Schema:\n{schema_text(schema)}"
+    )
+    picked = ""
+    if choices:  # generation.model_picked: these factors are chosen by the model per record
+        picked = (
+            "\n\nChoose these factors yourself for every record (they are not in the specs): pick the option that "
+            "fits that record best, spread your picks across records roughly in the shares shown, and report them "
+            'in "picked" by exact option name.\n' + choices_text(choices)
+        )
+    pick_field = ', "picked": {' + ", ".join(f'"{choice["factor"]}": "..."' for choice in choices) + "}" if choices else ""
+    return f"""
+Dataset description:
+{description}
+
+{record_format}{picked}
+
+{intro}
+- First write a one-sentence "plan": what the record will be, given what its ingredients imply together. Coverage of the ingredients matters, but coherence matters as much: if ingredients conflict or their sum would be incoherent, build around the load-bearing ones and soften or drop the rest.
+- {DIVERSITY_RULE}
+- Give every record the length and depth it would have if it were written on its own.
+- The ingredients are instructions to you, not content: never copy their names, paths or descriptions into a record.
+- {CONTEXT_RULE}
+- {PHRASING_RULE}
+
+{specs}
+
+Return JSON:
+{{"records": [{{"id": "r1", "plan": "..."{pick_field}, "record": ...}}]}}
+""".strip()
+
+
+def complexify_record_prompt(description: str, schema: dict[str, Any] | None, meta_prompt: str, record: Any) -> str:
+    # Combined path (generation.meta_prompts: false): complexify works on the written record. meta_prompt is
+    # the record's plan + sampled ingredients. schema None = a free-text record.
+    if schema is None:
+        shown, reply = str(record), "Return only the rewritten text. No JSON wrapping. No preamble."
+    else:
+        shown = json.dumps(record, ensure_ascii=False)
+        reply = f"Return the rewritten record as JSON only, matching this JSON Schema:\n{schema_text(schema)}"
+    return f"""
+Dataset description:
+{description}
+
+What this record was built from:
+{meta_prompt}
+
+Record:
+{shown}
+
+Rewrite this record so it is more complex or challenging than it is now. It must stay the same record: keep what it is about and what it was built from, keep it realistic, and change only what the added difficulty needs.
+{reply}
 """.strip()
 
 
@@ -276,7 +573,7 @@ Dataset description:
 Meta-prompt:
 {meta_prompt}
 
-Generate exactly one synthetic data point matching the meta-prompt.
+Generate exactly one synthetic data point matching the meta-prompt. {CONTEXT_RULE} {PHRASING_RULE}
 Return only the data point itself. No JSON wrapping. No preamble.
 """.strip()
 
@@ -313,8 +610,9 @@ Generated record:
 {json.dumps(record, ensure_ascii=False)}
 
 Does the record satisfy the meta-prompt and schema intent? Explain briefly.
-Return JSON:
-{{"verdict": "accept" | "reject", "explanation": "..."}}
+If you reject it, also return "revised": the record corrected to fix every problem you found (change only what is needed). {REVISE_RULE}
+Return JSON (omit "revised" when accepting):
+{{"verdict": "accept" | "reject", "explanation": "...", "revised": {{...}}}}
 """.strip()
 
 
@@ -351,7 +649,7 @@ Rejected record:
 Critique:
 {critique}
 
-Revise the record to satisfy the meta-prompt and schema. Return JSON only.
+Revise the record to satisfy the meta-prompt and schema. {REVISE_RULE} Return JSON only.
 """.strip()
 
 
@@ -371,7 +669,7 @@ Rejected output:
 Critique:
 {critique}
 
-Produce a new, better version that addresses the critique.
+Produce a new, better version that addresses the critique. {REVISE_RULE}
 Return only the data point itself. No JSON wrapping. No preamble.
 """.strip()
 

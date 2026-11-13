@@ -33,8 +33,10 @@ Examples:
 - `examples/basic_qa.yaml`: fake-model smoke test.
 - `examples/query_extraction_gemini.yaml`: real query-extraction pilot config using Gemini via OpenRouter.
 - `examples/cat_stories_freetext.yaml`: fake-model smoke test for schema-free text generation.
+- `examples/stories_freetext_v2.yaml` (+ `stories_freetext_v2_prompts.py`): long free-text stories; rare narrative forms held at set rates by taxonomy weights, short seed-style meta-prompts. `stories_freetext.yaml` is the earlier version, kept for reference.
 - `examples/job_extraction.yaml` (+ `job_extraction_prompts.py`): schema-guided `{schema, text, extraction}` envelope with a prompt-module override enforcing narrow atomic fields; DeepSeek v4 via OpenRouter.
-- `examples/ecommerce_search_extraction.yaml` (+ `ecommerce_search_extraction_prompts.py`): `{query, extraction}` envelope turning NL shopper searches into atomic DB-queryable JSON (varying schema, one-level nesting, 3..20-field spread). Depth-4 taxonomy; strategic=deepseek-v4-pro, bulk/critic=deepseek-v4-flash:nitro. Used to generate a 10K dataset that validated the post-refactor pipeline end-to-end.
+- `examples/support_tickets.yaml` (+ `support_tickets_prompts.py`): support-ticket triage with four labels at target shares; the November 2026 benchmark setup (combined path, 5 per call, `subject: category`, label-pinned level 1, label-focused critic); its prompt module carries both paths and renders situations.
+- `examples/ecommerce_search_extraction.yaml` (+ `ecommerce_search_extraction_prompts.py`): `{query, extraction}` envelope turning NL shopper searches into atomic DB-queryable JSON (varying schema, one-level nesting, 3..20-field spread). Depth-4 taxonomy; strategic=deepseek-v4-pro, bulk/critic=deepseek-v4-flash on default routing; combined path, record_batch_size 5. Its earlier 10K run (meta-prompt path, `:nitro`) is the cost baseline in `plan.md`.
 
 Tests:
 
@@ -43,6 +45,12 @@ Tests:
 - `tests/test_evaluate.py`
 - `tests/test_pipeline.py`
 - `tests/test_models.py`
+- `tests/test_taxonomy_sampling.py`
+- `tests/test_diversity.py`
+
+Pilot tooling (not part of the package): `analysis/` holds the scripts behind the cost/quality tables in
+`plan.md` (arm configs, stall watcher, cost/shape/diversity analysis, the blind judge) and the experimental
+factor-roles prompt (`factor_roles.py`). They make real model calls only when run by hand.
 
 Generated artifacts:
 
@@ -59,6 +67,18 @@ Generated artifacts:
 - Preserve lineage on generated items. `taxonomy_mix` must be non-empty when a taxonomy exists.
 - Preserve live LLM logging. Every successful model response should be appended to `llm_calls.jsonl`.
 - Keep evaluation separate from generation. `generate` must not create `eval_report.json`.
+- No real model calls (pilots, experiments, re-labels) without the user's go-ahead; they spend real money.
+
+## Words Used in This Repo
+
+Use one name per thing, in code, docs, config comments and replies:
+
+- **Mix**: one sampled node per factor, the ingredients of one record (`taxonomy_mix`).
+- **Subject**: the factor that says what a record is about (`generation.subject`).
+- **Situation**: one sentence of subject matter for one record, listed per subject node (`situations.jsonl`).
+- **Meta-prompt**: the short per-record instruction a model writes from the whole mix (`meta_prompts.jsonl`).
+  Never call it a "scenario" or a "brief"; the dataset description is "the description".
+- **Combined path**: `generation.meta_prompts: false`, records written straight from their mixes.
 
 ## Development Style
 
@@ -73,6 +93,9 @@ Generated artifacts:
 - When adding network/model behavior, ensure tests still pass offline.
 
 ## Running Commands
+
+The default `python3` may lack the dependencies; if imports fail, use the interpreter `pytest` runs under
+(`head -1 "$(which pytest)"`).
 
 Use these from the repository root:
 
@@ -97,20 +120,29 @@ Do not run real model calls unless the user explicitly asks. They cost money and
 ## Config Contract
 
 **Source of truth:** the Pydantic models in `simula/data_models.py` (defaults are field defaults).
-`examples/template.yaml` is the copy-me skeleton; `CONFIG.md` is the full per-field human reference;
-`README.md` carries the prose for prompt overrides, strategy guidance, sampling layering, and the
-schema subset. Do not re-list fields here — change them in `data_models.py` and update
-`template.yaml` + `CONFIG.md` to match.
+`examples/template.yaml` is the copy-me skeleton; `docs/reference/configuration.md` is the full per-field
+human reference; the guides and concepts pages in `docs/` carry the prose (prompt overrides, strategy
+guidance, sampling layering, batching). Do not re-list fields here — change them in `data_models.py` and
+update `template.yaml` + `docs/reference/configuration.md` to match.
 
 The invariants an agent must preserve (these are not written down in the field tables):
 
 - Read typed fields off the validated model (`cfg.generation.target_size`, `cfg.provider.base_url`,
   `cfg.schema`, …). `cfg.data` is a derived dict view (`model_dump`) kept only for the few dict
   consumers (`ModelRouter`, `resolve_sampling`, the resume fingerprint) — do not hand-merge config.
+- Unknown keys are errors (`extra="forbid"` via the `_Section` base and on `Config`); only
+  `models.<role>` stays open for provider decoding params. Renaming a knob therefore breaks old configs
+  loudly, which is intended.
 - Pydantic enforces non-empty description, a `model` per role, valid `review_mode`/`coverage_mode`,
   and positive/in-range generation + taxonomy knobs, so a bad
   `target_size`/`overgenerate_ratio`/`concurrency` fails at load with a `ValueError`, not as a silent
-  zero-row run. Keep validation in the models, not scattered through call sites.
+  zero-row run. Keep validation in the models, not scattered through call sites. Cross-knob rules live
+  in model validators too: meta-prompt knobs (`meta_prompts_per_mix`, `meta_batch_size`,
+  `stop_after: meta_prompts`) need `meta_prompts: true`; `model_picked` needs it false;
+  `taxonomy.critic: false` needs `best_of_n: 1`. `model_picked` factor names are checked against the
+  taxonomy right after it loads (`_check_picked_factors`), before strategies or records spend calls;
+  `code_depth` factor names are checked there too, and a factor cannot be in both. `subject` is a
+  factor name or `auto` and cannot be a `model_picked` factor.
 - Connection lives on one `provider` block (`base_url`/`api_key_env`/`timeout_seconds`) shared by all
   roles; `api_key_env` names a variable read only from the project-root `.env`. `timeout_seconds`
   (default 180) is the per-request timeout. `load_config` prints a non-fatal stderr warning when a
@@ -123,19 +155,20 @@ The invariants an agent must preserve (these are not written down in the field t
   way so it is safe under concurrent workers. Named policies / attempt schedules were intentionally
   not built; run the CLI twice for a temperature spread.
 
-The supported JSON Schema subset is documented in `README.md` (§Schema Support) and enforced in
-`simula/config.py`. If you extend it, update `simula/config.py`, the tests, and `README.md`.
+The supported JSON Schema subset is documented in `docs/reference/configuration.md` (§`schema`) and
+enforced in `simula/config.py`. If you extend it, update `simula/config.py`, the tests, and that page.
 
 ## Artifact Contract
 
-Artifact filenames are defined in `simula/utils.py` and explained for users in `README.md`
-(§Artifacts) — that is the canonical list; do not duplicate it here. The generated dataset row shape
-is also documented in `README.md` (§Artifacts) and written by the generator in `simula/generate.py`.
+Artifact filenames are defined in `simula/utils.py` and explained for users in
+`docs/reference/artifacts.md` — that is the canonical list; do not duplicate it here. The generated
+dataset row shape is documented on the same page and written by the generator in `simula/generate.py`.
 
 The invariant: the row shape (`id`, `attempt_index`, `record`, `output_format`, `taxonomy_mix`,
 `strategy_id`, `meta_prompt`, `complexified`, `generator_model`, `critic_verdicts`, `schema_valid`,
 `accepted`, `rejection_reason`, `created_at`) and the artifact filenames are a contract. If you
-change either, update the tests, `README.md`, and any downstream code that reads the JSONL artifacts.
+change either, update the tests, `docs/reference/artifacts.md`, and any downstream code that reads the
+JSONL artifacts.
 
 ## Important Behaviors
 
@@ -143,10 +176,16 @@ change either, update the tests, `README.md`, and any downstream code that reads
 
 Taxonomy generation is breadth-first. For each factor:
 
-1. Expand current-level nodes.
-2. Use `best_of_n` raw proposals.
-3. Refine children with a critic-style model call.
+1. Expand current-level nodes concurrently (bounded by `generation.concurrency`).
+2. Use `best_of_n` raw proposals (default 1, requested in parallel).
+3. Refine children with a critic-style model call (`taxonomy.critic`, default on, even for one proposal:
+   it adds children the node's description implies and removes duplicates). `critic: false` (only with
+   `best_of_n: 1`) skips it: 1 call per node, but measured to keep 3 of 21 described verticals and to
+   raise repeated node names from 4% to 21%.
 4. Generate a next-level plan when more depth remains.
+
+Node names never contain `/` (the strategy path separator; `_child` replaces it). Strategy paths split
+on `/`, and on `.` only when the path has no `/`, so names like `5.1-Channel Systems` round-trip.
 
 Review modes:
 
@@ -160,28 +199,55 @@ Strategies may name full roots like `query_domain` or deeper paths like `query_d
 
 Sampling descends the tree level by level, choosing among siblings by their per-node `weight` (default `1.0`, `0` disables), and always returns a leaf — a branch's probability must come from weights, never from how many nodes it contains. A strategy's `never_combine` path pairs are enforced by redrawing the mix (bounded; unsatisfiable rules raise). Strategy paths are validated against the real tree in `build_strategies`; invalid paths are a hard error after one retry.
 
-When modifying this code, test that `taxonomy_mix` contains one lineage entry per factor, that only leaves are sampled, and that weights and `never_combine` are honored (`tests/test_taxonomy_sampling.py`).
+`generation.code_depth` (`{factor: level}`) is the one exception to "always a leaf": the leaf is still drawn (same rng sequence, `never_combine` checked on it) and then replaced by its ancestor at that level (`_at_level`), so shares at the level are exact and the writer chooses the specifics beneath.
+
+When modifying this code, test that `taxonomy_mix` contains one lineage entry per factor, that only leaves are sampled (or the `code_depth` ancestor), and that weights and `never_combine` are honored (`tests/test_taxonomy_sampling.py`).
 
 ### Generation
 
 `generate_dataset`:
 
-1. Loads or builds taxonomy.
-2. Loads or builds strategies.
-3. Loads or builds meta prompts (`meta_prompts.jsonl`: one row per attempt index carrying the
-   sampled strategy/mix lineage, the chosen meta prompt, and the complexify flag; missing indexes
-   are generated, existing ones reused so hand edits survive).
-4. Schedules generation attempts, each consuming its meta-prompt row.
-5. Writes raw/accepted rows as each future completes.
-6. Updates `run_state.json`.
-7. Dedupes accepted rows if configured.
-8. Coverage-aware trims to `target_size` when `generation.trim` is true (default); otherwise keeps
-   all remaining accepted rows in their existing order. `trim` can change on resume.
-9. Writes `dataset.final.jsonl`.
+1. Loads or builds taxonomy. With `generation.subject: auto`, `load_or_build_taxonomy` also asks the
+   `strategic` model once which factor is the subject (`_pick_subject`) and stores the answer in
+   `taxonomy.json` as `"subject"`. `subject_factor(cfg, taxonomy)` is the only place that resolves the
+   setting (a factor name, the stored pick, or `None`); use it instead of reading `cfg.generation.subject`.
+2. Loads or builds strategies, then reports the mix space and warns when strategies pull a code-sampled
+   factor's top-level shares away from its tree weights (`_report_strategy_skew`, measured on 5,000 mixes
+   drawn with the run's seeds). Both reports print before the `strategies` stop.
+3. Loads or builds meta-prompts (`meta_prompts.jsonl`: one row per attempt index carrying the
+   sampled strategy/mix lineage, the meta-prompt, and the complexify flag; missing indexes are
+   generated, existing ones reused so hand edits survive). One call writes `meta_prompts_per_mix` (K)
+   meta-prompts for one mix and every one becomes an attempt (attempts `k·K…k·K+K−1` share the mix).
+   Skipped entirely with `generation.meta_prompts: false` (the combined path).
+4. With a subject, three helpers apply on whichever path writes from the mixes (the meta-prompt phase,
+   or the record phase on the combined path): `_subject_nodes` groups attempts by the subject node their
+   mix sampled, `_write_situations` lists one situation per attempt for every node (`situations.jsonl`,
+   25 per call, calls for one node in sequence so each sees the node's earlier ones, one retry on a
+   malformed reply), and `_batches` forms batches that hold one node. A situation is one line of an
+   item's spec (`situation_line`) and nothing else: there is no cross-batch memory and no per-node lock.
+5. Schedules generation attempts, `record_batch_size` records per call: from their meta-prompts
+   (`_generate_one_safe` at size 1, else `_meta_prompt_batch`, batch mode B), or on the combined path straight
+   from their sampled mixes with a plan per record (`_combined_batch`, mode C; `model_picked` factors are
+   offered as options and the model's pick becomes lineage). `meta_batch_size` batches the meta-prompt step
+   itself (mode A, `_make_meta_prompts`). Batched records are validated/repaired and critiqued one by one
+   (`_send_batch` + `_finish_item`); a malformed item loses only itself (`_batch_items`). Complexify is
+   always its own call: on the meta-prompt in the meta-prompt phase, or on the combined path on the written
+   record (`_complexify_record`, record in, harder record out) before validation and critique. Batch
+   prompts carry no "harder" flag. All paths end in `_finish_row`.
+6. Writes raw/accepted rows as each future completes.
+7. Updates `run_state.json`.
+8. Dedupes accepted rows if configured.
+9. Coverage-aware trims to `target_size` when `generation.trim` is true (default); otherwise keeps
+   all remaining accepted rows. Accepted rows are put in attempt order first: once coverage is met the
+   trim keeps the earliest rows, and completion order follows the subject node when batches are grouped,
+   so trimming in completion order would cut whole nodes. `trim` can change on resume.
+10. Writes `dataset.final.jsonl`.
 
 `generation.stop_after` (or CLI `--stop-after`) halts after step 1, 2, or 3 via `SystemExit(0)` —
 the same mechanism as `write_then_edit` — so the stage's artifact can be edited before a rerun
 continues from it. Steps 1–3 are all reuse-if-present; delete an artifact to regenerate it.
+`stop_after: meta_prompts` is rejected with `meta_prompts: false` (no artifact to stop at); the CLI flag
+is checked too, because the generation section validates on assignment.
 
 Resume (`--resume`, the default) skips attempt indexes already in `dataset.raw.jsonl` and reuses
 accepted rows. `run_state.json` stores a fingerprint of the resume-invalidating inputs (description,
@@ -195,8 +261,9 @@ Generation is concurrent with `asyncio.TaskGroup`. Be careful with shared state:
 
 - `ModelRouter` schedules async log writes and flushes before CLI exit.
 - Raw/accepted/final and meta-prompt writes happen in the main task, in completion order.
-- All randomness lives in the meta-prompt phase: each attempt gets its own `random.Random(seed +
-  attempt_index)` there; the record/critic workers are rng-free.
+- All randomness lives in `_sample_lineage`, seeded per mix (`random.Random(seed + mix_id)`, where
+  `mix_id` is the attempt index when K=1 and on the combined path, so both paths draw identical mixes
+  per attempt); the record/critic workers are rng-free.
 
 ### Model Calls
 
@@ -219,6 +286,7 @@ Retry behavior (classified, not retry-everything):
 - Honors `Retry-After` on 429s; otherwise backs off exponentially (capped).
 - Fails fast on other 4xx (auth/bad-request) instead of burning the retry budget.
 - Re-raises the provider exception when retries are exhausted.
+- The OpenAI SDK's own retries are off (`max_retries=0`), so this loop is the only one (they used to stack).
 
 Each real call has a per-request timeout (default 180s, `provider.timeout_seconds`) so a hung connection fails fast and the point checkpoints as a rejected row instead of stalling the worker.
 
@@ -240,6 +308,21 @@ keys before tokenization, so keys and values both contribute. Preserve these sem
 against exhaustive deduplication when optimizing further (`tests/test_evaluate.py`).
 
 Complexity scoring is optional and makes extra model calls.
+
+## Documentation
+
+User docs live in `docs/`: Markdown pages (MyST) built by Sphinx with the Furo theme, published by Read the
+Docs from `.readthedocs.yaml`. `README.md` is the short front page and links into them. When behavior,
+config or artifacts change, update the page that describes it (the reference pages are the field and
+artifact lists) and build with warnings as errors, which catches broken links:
+
+```bash
+pip install -r docs/requirements.txt
+sphinx-build -W -b html docs docs/_build/html
+```
+
+Example configs are pulled into `docs/examples.md` and the template into the configuration page with
+`literalinclude`, so they never need copying by hand.
 
 ## Testing Expectations
 
@@ -274,7 +357,17 @@ Use `"model": "fake"` for tests. Do not require network access in tests.
   (`test_point_failure_becomes_rejected_row` injects a router exposing only that method, with no
   `.config`) — do not inline it.
 - Add a command to tail/summarize `llm_calls.jsonl`.
-- Add batched and multi-turn generation modes (see `TODO.md`).
+- `combined_table_batch_prompt` / `nodes_table` (a NODES/ID-table form of the combined batch prompt) are unused:
+  measured twice and not adopted (on support tickets: 9% less input but twice the reasoning, 13% more cost, more
+  dropped records). Delete them if nobody needs them.
+- "Model-assigned" factors (code draws a batch's values, the model decides which record gets which): designed in
+  `plan.md` (item 7), not built, needs the user's sign-off.
+- Situation listing shows each call the node's last 120 situations; past about 250 per node, repeats of older
+  ones start to appear (2% beyond position 250 in a 10,000-ticket run). Matters only at very large scale.
+- Priority-style labels that follow from the facts of a record clash with independently sampled mood, tier
+  and style factors. The proposed fix (list situations per subject node and per rolled label value) is open.
+- Add multi-turn generation modes (see `TODO.md`). Batched generation exists: modes A (`meta_batch_size`),
+  B (`record_batch_size` with meta-prompts) and C (the combined path).
 
 ## Safety and Privacy
 
@@ -290,3 +383,14 @@ Do not paste real API keys into configs. Use `api_key_env`.
 - If JSON parsing fails often, inspect `SYSTEM_JSON` and `generate_record_prompt`.
 - If the model is slow, reduce taxonomy depth or increase `generation.concurrency` carefully.
 - If the provider rate-limits, lower `generation.concurrency` (the 429 retry/backoff still handles bursts).
+- For any long or background run, print progress every 5-10% and treat three minutes with no new call or row
+  as a stall: kill the process and rerun the same command, which resumes and redoes only the missing attempts.
+  Default routing occasionally hangs one request near the end of a run.
+- Many `Record missing from the batch response` rejections: cheap models drop or garble items in batch replies
+  (2-5% of attempts on GLM 5.3 Flash). Raise `overgenerate_ratio`; do not raise the batch size.
+- A `strategies skew` warning means a strategy overrides a factor's tree weights; read it before paying for
+  records (see `docs/concepts/sampling.md`, "The skew warning").
+- Labels that disagree with the record text, concentrated in a few factor combinations: see `SKILL.md`,
+  "Combinations that pull against a label". The critic does not fix these.
+- Provider `402 Insufficient credits` while the key still has budget: the account behind the key is empty.
+  Stop and tell the user; do not retry.

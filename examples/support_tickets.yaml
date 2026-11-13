@@ -1,0 +1,185 @@
+# Support-ticket triage dataset: one customer ticket per record plus its triage labels (category, priority,
+# sentiment, escalate), for Pulseboard, a fictional B2B project-management SaaS. Prompts: support_tickets_prompts.py.
+#
+# The setup measured in the November 2026 benchmark (GLM 5.3 Flash, default OpenRouter routing):
+#   - combined path, 5 tickets per call, critic on: about $0.85 per 1,000 tickets, 95-97% of attempts accepted;
+#   - subject: category, so every ticket gets its own situation: no near-duplicates in 10,000 tickets, variety
+#     level with a list-then-write baseline (Vendi 54 vs 57 on 1,000 tickets);
+#   - label agreement with a blind relabeller: category 76%, sentiment 83%, priority 58% (65% once the
+#     contradictory priority combinations below are excluded). See SKILL.md, "Combinations that pull against a label".
+#
+# Before a full run: `generate --stop-after strategies`, read the `strategies skew` warnings, check taxonomy.json,
+# then run the pilot (5-7% of the target, at least ~1,000 tickets) and check its labels. SKILL.md walks through it.
+
+project:
+  name: "support_tickets"
+  output_dir: "runs/support_tickets"
+  seed: 7
+
+description: "A support-ticket triage dataset for Pulseboard, a fictional B2B project-management and delivery-analytics SaaS. Each\
+  \ example is one inbound customer support ticket (subject and body, the channel it arrived on, the customer's plan tier)\
+  \ with its correct triage labels: category (the one dominant issue), priority, customer sentiment, and an escalate flag\
+  \ that follows a fixed rule. Tickets must read like real messages customers send: varied length (one line to ~250 words),\
+  \ tone, writing quality, specificity and structure, including messy, ambiguous and multi-issue tickets. Labels must\
+  \ be inferable from the ticket text plus tier/channel and never stated in it. The dataset trains and evaluates a ticket-triage\
+  \ classifier, so it must cover every category, priority and sentiment, from easy to hard-to-triage tickets. All text\
+  \ is English."
+
+provider:
+  base_url: "https://openrouter.ai/api/v1"
+  api_key_env: "OPENROUTER_API_KEY"
+  timeout_seconds: 600
+
+models:
+  strategic:
+    model: "z-ai/glm-5.3-flash"
+    max_tokens: 32768
+    extra_body: {reasoning: {effort: medium, exclude: true}, usage: {include: true}}
+  bulk:
+    model: "z-ai/glm-5.3-flash"
+    max_tokens: 32768          # a batch of 5 reasons before it answers; a reply cut off loses the whole batch
+    extra_body: {reasoning: {effort: low, exclude: true}, usage: {include: true}}
+  critic:
+    model: "z-ai/glm-5.3-flash"
+    max_tokens: 8192
+    extra_body: {reasoning: {effort: low, exclude: true}, usage: {include: true}}
+
+prompts:
+  module: "support_tickets_prompts.py"
+
+taxonomy:
+  depth: 3
+  best_of_n: 1
+  critic: true
+  children_per_node: 3
+  review_mode: "auto_accept"
+  log_style: "light"
+  # Level 1 of category, priority, sentiment and customer_context is pinned to the label names at the target
+  # shares by the prompt module; deeper levels are written by the model.
+  factors:
+    - description: The ticket's one dominant issue. Level 1 is exactly the 8 triage categories (billing, account_access,
+        bug_report, outage_performance, how_to, feature_request, integrations_api, security_privacy); deeper levels
+        are concrete issue types within the category (e.g. billing -> seat changes -> charged for removed seats).
+      name: category
+    - description: Business impact and urgency. Level 1 is exactly low, medium, high, urgent as defined in the triage
+        guidelines; deeper levels are concrete impact situations that justify that priority (e.g. high -> a team blocked
+        before a client deadline).
+      name: priority
+    - description: The customer's tone (not severity). Level 1 is exactly positive, neutral, frustrated, angry; deeper
+        levels are how that tone shows up in writing (e.g. frustrated -> second follow-up on an unanswered ticket).
+      name: sentiment
+    - description: 'Who is writing and from what account. Level 1 is exactly the plan tier free, pro, enterprise; deeper
+        levels describe the writer only: their role (e.g. IT admin, project manager, finance contact, agency owner,
+        individual contributor), the kind and size of their team or company, and how experienced they are with Pulseboard.
+        Never the problem they are writing about: the issue, its impact and its tone belong to the category, priority
+        and sentiment factors.'
+      name: customer_context
+    - description: The overall shape of the ticket, as one kind of message. Level 1 is the kind of ticket (for example
+        a standard single-issue message, a terse chat fragment, an error- or log-heavy report, a multi-issue list or
+        forwarded thread, a long rambling or non-native message), never a single aspect such as channel, length or spelling
+        on its own. Deeper levels are concrete variants of that kind, each fixing its length, structure, writing quality
+        (typos, non-native English, jargon), how much detail or error text it includes, and the channel conventions
+        (email, in-app chat, web form) that go with it.
+      name: ticket_style
+
+strategy:
+  count: 2
+  # No strategy may restrict a labelled factor (category, priority, sentiment, customer_context): that overrides the
+  # target shares. An earlier "high stakes" lane pushed high priority from 25% to 40% of the dataset.
+  guidance: >-
+    Create exactly these two strategies. (1) id 'general', weight 0.75: every factor samples its full tree (use bare
+    factor names). (2) id 'long_messy_tickets', weight 0.25: ticket_style roots are the level-1 or level-2 ticket_style
+    nodes about long, rambling, multi-issue or forwarded-thread tickets; every other factor samples its full tree. Never
+    restrict category, priority, sentiment or customer_context. In both strategies add never_combine pairs for label
+    combinations the guidelines make impossible: category/feature_request with priority/urgent, category/how_to with
+    priority/urgent.
+
+generation:
+  target_size: 1000            # a pilot; raise it in the same output_dir once the pilot is clean (resume keeps these rows)
+  overgenerate_ratio: 1.25     # GLM drops or garbles a few items per batch reply; 95-97% of attempts were accepted
+  meta_prompts: false          # combined path: the writer plans and writes 5 tickets per call
+  record_batch_size: 5
+  subject: category            # every ticket gets its own situation, listed per category node (or "auto")
+  code_depth:                  # code picks these down to level 2; the writer picks the specifics beneath
+    customer_context: 2
+    priority: 2
+  complexity_ratio: 0.2
+  critic: true
+  max_refine_attempts: 1
+  concurrency: 128             # OpenRouter handled 640 in the benchmark; lower it if you see rate-limit retries
+  checkpoint_every: 100
+
+evaluation:
+  dedupe: true
+  coverage: true
+  coverage_mode: "lineage"
+  complexity: false
+
+schema:
+  additionalProperties: false
+  properties:
+    labels:
+      additionalProperties: false
+      properties:
+        category:
+          enum:
+          - billing
+          - account_access
+          - bug_report
+          - outage_performance
+          - how_to
+          - feature_request
+          - integrations_api
+          - security_privacy
+          type: string
+        escalate:
+          type: boolean
+        priority:
+          enum:
+          - low
+          - medium
+          - high
+          - urgent
+          type: string
+        sentiment:
+          enum:
+          - positive
+          - neutral
+          - frustrated
+          - angry
+          type: string
+      required:
+      - category
+      - priority
+      - sentiment
+      - escalate
+      type: object
+    ticket:
+      additionalProperties: false
+      properties:
+        body:
+          type: string
+        channel:
+          enum:
+          - email
+          - chat
+          - web_form
+          type: string
+        customer_tier:
+          enum:
+          - free
+          - pro
+          - enterprise
+          type: string
+        subject:
+          type: string
+      required:
+      - subject
+      - body
+      - channel
+      - customer_tier
+      type: object
+  required:
+  - ticket
+  - labels
+  type: object

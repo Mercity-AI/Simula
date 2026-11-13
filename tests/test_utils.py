@@ -29,3 +29,18 @@ def test_record_to_text_dotted_field() -> None:
 
 def test_ngrams_for_short_text() -> None:
     assert ngrams_for_text("Hello   world") == {("hello", "world")}
+
+
+def test_summarize_cost_rolls_up_usage_extras() -> None:
+    from simula.utils import summarize_cost
+
+    cost = {
+        ("bulk", "generate", "m"): [2, 100, 50, 1.5, 30, 10, 0.002],
+        ("critic", "semantic_critic", "m"): [1, 40, 20, 0.5, 15, 0, 0.0005],
+    }
+    summary = summarize_cost(cost, 3.0)
+    assert summary["total_calls"] == 3
+    assert summary["total_input_tokens"] == 140 and summary["total_output_tokens"] == 70
+    assert summary["total_reasoning_tokens"] == 45 and summary["total_cached_tokens"] == 10
+    assert summary["total_cost"] == 0.0025
+    assert summary["by_role_task_model"][0]["reasoning_tokens"] == 30

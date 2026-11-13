@@ -35,9 +35,9 @@ def embedding_diversity(
     sample_cap: int = 1000,
     k_local: int = 10,
 ) -> dict[str, float | int | str]:
-    """Score global and local diversity over `texts` using cosine distance between embeddings."""
+    """Score global/local diversity (cosine distance) and the Vendi score over `texts`' embeddings."""
     if len(texts) < 2:
-        return {"global_diversity": 0.0, "local_diversity": 0.0, "sample_size": len(texts), "cache_path": str(cache_path)}
+        return {"global_diversity": 0.0, "local_diversity": 0.0, "vendi": float(len(texts)), "sample_size": len(texts), "cache_path": str(cache_path)}
 
     # Diversity is O(n^2); sample deterministically past the cap. The metric is then an estimate
     # from this subset (reported via sample_size/sample_cap).
@@ -60,11 +60,23 @@ def embedding_diversity(
     return {
         "global_diversity": global_div,
         "local_diversity": local_div,
+        "vendi": _vendi(embeddings),
         "sample_size": n,
         "sample_cap": sample_cap,
         "k_local": local_k,
         "cache_path": str(cache_path),
     }
+
+
+def _vendi(embeddings: Any) -> float:
+    # Vendi score = exp(entropy of the eigenvalues of K/n), K the cosine-similarity matrix: the
+    # "effective number of distinct items" (1 = all identical, n = all unrelated). With unit rows X,
+    # K = XXᵀ, and the d×d XᵀX/n has the same nonzero eigenvalues as the n×n K/n, so this stays cheap.
+    unit = embeddings.astype("float64")
+    unit /= np.linalg.norm(unit, axis=1, keepdims=True)
+    eigenvalues = np.linalg.eigvalsh(unit.T @ unit / len(unit))
+    eigenvalues = eigenvalues[eigenvalues > 1e-12]
+    return float(np.exp(-(eigenvalues * np.log(eigenvalues)).sum()))
 
 
 def _load_embeddings(texts: list[str], model_name: str, cache_path: Path) -> Any:

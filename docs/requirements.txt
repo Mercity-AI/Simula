@@ -1,0 +1,5 @@
+# Docs build only; Read the Docs installs these. simula itself is not needed to build the docs.
+sphinx~=9.1
+myst-parser~=5.2
+furo==2025.12.19
+sphinxcontrib-mermaid~=2.1
