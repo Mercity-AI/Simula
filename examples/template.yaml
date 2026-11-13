@@ -52,6 +52,7 @@ taxonomy:
 
 strategy:
   guidance: null               # optional free-text steering for which roots combine and weights
+  count: null                  # exact number of strategies to request (1-12); null = the model picks 2-5
 
 # Optional per-task decoding overrides: sampling.tasks.<task> -> {param: value}. Task names are the
 # TaskType values (generate, meta_prompt, complexify, refine, ...). Run the CLI twice for a spread.
