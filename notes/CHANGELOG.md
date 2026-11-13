@@ -24,9 +24,9 @@ run, blind re-labels and a blind critic pass).
   first was tried and dropped: it changed nothing measurable and cost more.
 - **Wording.** One name per thing in docs, config and code: a meta-prompt is the per-record instruction a
   model writes from the whole mix; a situation is one sentence of subject matter from the subject factor.
-  `DOCS.md` has the comparison.
+  The docs page "Situations and meta-prompts" has the comparison.
 - **Examples** (2026-11-13). New `examples/support_tickets.yaml` + `support_tickets_prompts.py`: the benchmark's
-  ticket dataset, self-contained (brief and guidelines embedded), both paths, situations rendered. The real-model
+  ticket dataset, self-contained (product description and guidelines embedded), both paths, situations rendered. The real-model
   examples now set `subject` (product_vertical, job_family, genre, query_domain); the stories examples batch 10
   meta-prompts per call; job_extraction drops `:nitro`. Prompt modules that override meta-prompt or batch
   prompts render situations, and the stories and job modules gained a batched meta-prompt prompt (with a subject
@@ -39,8 +39,8 @@ run, blind re-labels and a blind critic pass).
   run), with a full checklist for what to look for in it.
 - **Known and open.** Independently sampled labels can disagree with the text written for them
   (low-priority labels confirmed 42% of the time by a blind labeller, against 78% in a writer-labelled
-  set). The critic notices about half of these but its rewrites do not fix them. See `DOCS.md`, "A
-  sampled label can disagree with the text written for it".
+  set). The critic notices about half of these but its rewrites do not fix them. See the docs,
+  "Running a pilot", section "Combinations that pull against a label".
 
 ## 2026-06-23 — Structural refactor (round 4)
 

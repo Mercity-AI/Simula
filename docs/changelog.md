@@ -1,3 +1,2 @@
-# Changelog
-
-Coming soon.
+```{include} ../notes/CHANGELOG.md
+```
