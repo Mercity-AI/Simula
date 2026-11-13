@@ -17,13 +17,17 @@ A and B can be combined. A related setting, `meta_prompts_per_mix`, has one call
 meta-prompts for the *same* mix; it reduces the number of distinct mixes rather than batching different
 ones. See [Situations and meta-prompts](../concepts/situations-and-meta-prompts.md) for the two paths.
 
+The combined path, 5 records per call:
+
 ```yaml
-# combined path, 5 records per call
 generation:
   meta_prompts: false
   record_batch_size: 5
+```
 
-# meta-prompt path, batched at both steps
+The meta-prompt path, batched at both steps:
+
+```yaml
 generation:
   meta_prompts: true
   meta_batch_size: 10
