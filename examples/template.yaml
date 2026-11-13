@@ -1,7 +1,7 @@
 # simula config template. Copy this, edit, and point the CLI at it. Every value shown is the
 # built-in default (defined in simula/data_models.py) unless noted — omit a key to accept its
 # default, override only what you need. Required keys: `description` and a model id per role.
-# Comments here are one-liners; see CONFIG.md for the full per-field reference.
+# Comments here are one-liners; see docs/reference/configuration.md for the full per-field reference.
 
 project:
   name: "pilot"
@@ -66,7 +66,7 @@ generation:
   # A meta-prompt is a short written instruction for one record, built from its whole mix (and its situation, see
   # `subject`). true = one is written per record first and kept in meta_prompts.jsonl, where you can read and
   # edit it; false = the combined path: the writer plans and writes record_batch_size records per call, straight
-  # from their mixes. The combined path is the cheaper one (CONFIG.md, SKILL.md "Pick the generation path").
+  # from their mixes. The combined path is the cheaper one (docs/guides/batching.md).
   meta_prompts: true
   meta_prompts_per_mix: 1      # meta-prompts per sampled mix; each becomes its own attempt sharing the mix
   meta_batch_size: 1           # mixes per meta-prompt call (keep at 10 or under: larger batches copy their inputs)

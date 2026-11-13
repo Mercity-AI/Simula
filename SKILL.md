@@ -7,7 +7,8 @@ description: Use when the user wants to generate a synthetic dataset with this r
 
 You are driving `simula` for a user who wants a dataset, not a config tutorial. Read `AGENTS.md` once
 for the architecture and hard constraints; this file is the process and the judgment on top of it.
-`CONFIG.md` is the field reference and `examples/template.yaml` the copy-me skeleton, so nothing here
+`docs/reference/configuration.md` is the field reference and `examples/template.yaml` the copy-me
+skeleton, so nothing here
 repeats field tables.
 
 ## Words used here
@@ -504,5 +505,5 @@ Work through all of these. Each line says what to look at and what to do when it
 | `support_tickets.yaml` + `support_tickets_prompts.py` | classification with several labels at target shares; the setup from the November 2026 benchmark (combined path, 5 per call, situations, label-pinned tree levels, label-focused critic); about $0.85 per 1K tickets on GLM 5.3 Flash |
 | `ecommerce_search_extraction.yaml` + `ecommerce_search_extraction_prompts.py` | per-row varying schema; the reference for the combined path (5 per call, critic on, about $0.40 per 1K rows in our pilot) |
 
-More: concepts and pipeline in `DOCS.md`, every field in `CONFIG.md`, architecture and constraints in
-`AGENTS.md`.
+More: concepts and pipeline in `docs/concepts/`, batching and cost in `docs/guides/`, every field in
+`docs/reference/configuration.md`, architecture and constraints in `AGENTS.md`.

@@ -20,8 +20,12 @@ The docs below are the source of truth — read them rather than this file.
 
 ## Docs
 
-- [DOCS.md](DOCS.md): concepts, true pipeline flow, the three model roles, overriding defaults, an
-  annotated end-to-end example, the full config reference, and gotchas (incl. the lineage-vs-verified
-  coverage caveat). The concepts + configuration page.
-- [CONFIG.md](CONFIG.md): exhaustive per-field config reference.
+- [docs/index.md](docs/index.md): the documentation site (Sphinx + MyST, built by Read the Docs).
+- [docs/concepts/pipeline.md](docs/concepts/pipeline.md): the stages of a run, attempts, stop/edit/continue,
+  resume. The other `docs/concepts/` pages cover the taxonomy, sampling, situations and meta-prompts, model
+  roles and evaluation (incl. the lineage-vs-verified coverage caveat).
+- [docs/guides/batching.md](docs/guides/batching.md) and [docs/guides/cost.md](docs/guides/cost.md): what
+  batch sizes trade, where the money goes, measured pilot numbers.
+- [docs/reference/configuration.md](docs/reference/configuration.md): exhaustive per-field config reference.
+- [docs/reference/artifacts.md](docs/reference/artifacts.md): every output file and the dataset row shape.
 - [examples/template.yaml](examples/template.yaml): copy-me config skeleton, every key at its default.

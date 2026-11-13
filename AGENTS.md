@@ -120,10 +120,10 @@ Do not run real model calls unless the user explicitly asks. They cost money and
 ## Config Contract
 
 **Source of truth:** the Pydantic models in `simula/data_models.py` (defaults are field defaults).
-`examples/template.yaml` is the copy-me skeleton; `CONFIG.md` is the full per-field human reference;
-`README.md` carries the prose for prompt overrides, strategy guidance, sampling layering, and the
-schema subset. Do not re-list fields here — change them in `data_models.py` and update
-`template.yaml` + `CONFIG.md` to match.
+`examples/template.yaml` is the copy-me skeleton; `docs/reference/configuration.md` is the full per-field
+human reference; the guides and concepts pages in `docs/` carry the prose (prompt overrides, strategy
+guidance, sampling layering, batching). Do not re-list fields here — change them in `data_models.py` and
+update `template.yaml` + `docs/reference/configuration.md` to match.
 
 The invariants an agent must preserve (these are not written down in the field tables):
 
@@ -155,19 +155,20 @@ The invariants an agent must preserve (these are not written down in the field t
   way so it is safe under concurrent workers. Named policies / attempt schedules were intentionally
   not built; run the CLI twice for a temperature spread.
 
-The supported JSON Schema subset is documented in `README.md` (§Schema Support) and enforced in
-`simula/config.py`. If you extend it, update `simula/config.py`, the tests, and `README.md`.
+The supported JSON Schema subset is documented in `docs/reference/configuration.md` (§`schema`) and
+enforced in `simula/config.py`. If you extend it, update `simula/config.py`, the tests, and that page.
 
 ## Artifact Contract
 
-Artifact filenames are defined in `simula/utils.py` and explained for users in `README.md`
-(§Artifacts) — that is the canonical list; do not duplicate it here. The generated dataset row shape
-is also documented in `README.md` (§Artifacts) and written by the generator in `simula/generate.py`.
+Artifact filenames are defined in `simula/utils.py` and explained for users in
+`docs/reference/artifacts.md` — that is the canonical list; do not duplicate it here. The generated
+dataset row shape is documented on the same page and written by the generator in `simula/generate.py`.
 
 The invariant: the row shape (`id`, `attempt_index`, `record`, `output_format`, `taxonomy_mix`,
 `strategy_id`, `meta_prompt`, `complexified`, `generator_model`, `critic_verdicts`, `schema_valid`,
 `accepted`, `rejection_reason`, `created_at`) and the artifact filenames are a contract. If you
-change either, update the tests, `README.md`, and any downstream code that reads the JSONL artifacts.
+change either, update the tests, `docs/reference/artifacts.md`, and any downstream code that reads the
+JSONL artifacts.
 
 ## Important Behaviors
 
@@ -308,6 +309,21 @@ against exhaustive deduplication when optimizing further (`tests/test_evaluate.p
 
 Complexity scoring is optional and makes extra model calls.
 
+## Documentation
+
+User docs live in `docs/`: Markdown pages (MyST) built by Sphinx with the Furo theme, published by Read the
+Docs from `.readthedocs.yaml`. `README.md` is the short front page and links into them. When behavior,
+config or artifacts change, update the page that describes it (the reference pages are the field and
+artifact lists) and build with warnings as errors, which catches broken links:
+
+```bash
+pip install -r docs/requirements.txt
+sphinx-build -W -b html docs docs/_build/html
+```
+
+Example configs are pulled into `docs/examples.md` and the template into the configuration page with
+`literalinclude`, so they never need copying by hand.
+
 ## Testing Expectations
 
 Before finalizing code changes, run:
@@ -373,7 +389,7 @@ Do not paste real API keys into configs. Use `api_key_env`.
 - Many `Record missing from the batch response` rejections: cheap models drop or garble items in batch replies
   (2-5% of attempts on GLM 5.3 Flash). Raise `overgenerate_ratio`; do not raise the batch size.
 - A `strategies skew` warning means a strategy overrides a factor's tree weights; read it before paying for
-  records (see `CONFIG.md`, strategy section).
+  records (see `docs/concepts/sampling.md`, "The skew warning").
 - Labels that disagree with the record text, concentrated in a few factor combinations: see `SKILL.md`,
   "Combinations that pull against a label". The critic does not fix these.
 - Provider `402 Insufficient credits` while the key still has budget: the account behind the key is empty.

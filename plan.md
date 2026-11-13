@@ -6,7 +6,7 @@ Bespoke Curator levels without losing what the taxonomy, lineage and quality gat
 Status (2026-11-10): **phases 0–3 implemented, piloted and committed on this branch** (not pushed, not
 merged); results and follow-ups in §0. Sections 1–4 below are the original design, kept as written; §0 records where the
 implementation deviated and why. Follow `AGENTS.md` (compact code, `pytest -q`, fake-model tests,
-update `CONFIG.md`/`template.yaml`/README when config changes, no real model calls without asking).
+update `docs/reference/configuration.md`/`template.yaml` when config changes, no real model calls without asking).
 
 ---
 
