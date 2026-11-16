@@ -1,12 +1,13 @@
 <p align="center">
-  <img src="assets/hero.png" alt="Simula" width="640">
+  <img src="https://raw.githubusercontent.com/Mercity-AI/Simula/main/assets/hero.png" alt="Simula" width="640">
 </p>
 
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/python-%E2%89%A53.11-blue">
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-blue">
+  <a href="https://github.com/Mercity-AI/Simula/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
+  <a href="https://pypi.org/project/simula-gen/"><img alt="PyPI" src="https://img.shields.io/pypi/v/simula-gen"></a>
   <img alt="Status" src="https://img.shields.io/badge/status-pilot-orange">
+  <a href="https://simula.readthedocs.io/en/latest/"><img alt="Docs" src="https://img.shields.io/readthedocs/simula"></a>
   <a href="https://arxiv.org/abs/2603.29791"><img alt="Paper" src="https://img.shields.io/badge/paper-arXiv%3A2603.29791-b31b1b"></a>
   <a href="https://github.com/Mercity-AI"><img alt="Built by Mercity" src="https://img.shields.io/badge/built%20by-Mercity-1f6feb"></a>
 </p>
@@ -33,7 +34,7 @@ pip install simula-gen
 ```
 
 The command is `simula`. Python 3.11+. For the latest code, install from a checkout with
-`pip install -e .`; see [Installation](docs/installation.md).
+`pip install -e .`; see [Installation](https://simula.readthedocs.io/en/latest/installation.html).
 
 ## Quick start
 
@@ -52,28 +53,35 @@ simula generate my_dataset.yaml                           # write the records
 simula evaluate my_dataset.yaml                           # dedupe, coverage, diversity
 ```
 
-The [Quickstart](docs/quickstart.md) walks through both.
+The [Quickstart](https://simula.readthedocs.io/en/latest/quickstart.html) walks through both.
 
 ## Documentation
 
-The full documentation is in [`docs/`](docs/index.md), built with Sphinx for Read the Docs.
+The full documentation is at **[simula.readthedocs.io](https://simula.readthedocs.io/en/latest/)**.
 
-- **Getting started:** [Installation](docs/installation.md), [Quickstart](docs/quickstart.md)
-- **Concepts:** [How a run works](docs/concepts/pipeline.md), [Taxonomy](docs/concepts/taxonomy.md),
-  [Strategies and sampling](docs/concepts/sampling.md),
-  [Situations and meta-prompts](docs/concepts/situations-and-meta-prompts.md),
-  [Model roles](docs/concepts/model-roles.md), [Evaluation](docs/concepts/evaluation.md)
-- **Guides:** [Writing a config](docs/guides/writing-a-config.md),
-  [Reviewing the design](docs/guides/reviewing-the-design.md), [Batching](docs/guides/batching.md),
-  [Cost](docs/guides/cost.md), [Custom prompts](docs/guides/custom-prompts.md),
-  [Providers and models](docs/guides/providers-and-models.md),
-  [Running a pilot](docs/guides/running-a-pilot.md)
-- **Reference:** [CLI](docs/reference/cli.md), [Configuration](docs/reference/configuration.md),
-  [Artifacts](docs/reference/artifacts.md)
-- [Examples](docs/examples.md), [Troubleshooting](docs/troubleshooting.md)
+- **Getting started:** [Installation](https://simula.readthedocs.io/en/latest/installation.html),
+  [Quickstart](https://simula.readthedocs.io/en/latest/quickstart.html)
+- **Concepts:** [How a run works](https://simula.readthedocs.io/en/latest/concepts/pipeline.html),
+  [Taxonomy](https://simula.readthedocs.io/en/latest/concepts/taxonomy.html),
+  [Strategies and sampling](https://simula.readthedocs.io/en/latest/concepts/sampling.html),
+  [Situations and meta-prompts](https://simula.readthedocs.io/en/latest/concepts/situations-and-meta-prompts.html),
+  [Model roles](https://simula.readthedocs.io/en/latest/concepts/model-roles.html),
+  [Evaluation](https://simula.readthedocs.io/en/latest/concepts/evaluation.html)
+- **Guides:** [Writing a config](https://simula.readthedocs.io/en/latest/guides/writing-a-config.html),
+  [Reviewing the design](https://simula.readthedocs.io/en/latest/guides/reviewing-the-design.html),
+  [Batching](https://simula.readthedocs.io/en/latest/guides/batching.html),
+  [Cost](https://simula.readthedocs.io/en/latest/guides/cost.html),
+  [Custom prompts](https://simula.readthedocs.io/en/latest/guides/custom-prompts.html),
+  [Providers and models](https://simula.readthedocs.io/en/latest/guides/providers-and-models.html),
+  [Running a pilot](https://simula.readthedocs.io/en/latest/guides/running-a-pilot.html)
+- **Reference:** [CLI](https://simula.readthedocs.io/en/latest/reference/cli.html),
+  [Configuration](https://simula.readthedocs.io/en/latest/reference/configuration.html),
+  [Artifacts](https://simula.readthedocs.io/en/latest/reference/artifacts.html)
+- [Examples](https://simula.readthedocs.io/en/latest/examples.html),
+  [Troubleshooting](https://simula.readthedocs.io/en/latest/troubleshooting.html)
 
-For agents: [`SKILL.md`](SKILL.md) is the playbook for generating a dataset with `simula`, and
-[`AGENTS.md`](AGENTS.md) is the guide to changing the code.
+For agents: [`SKILL.md`](https://github.com/Mercity-AI/Simula/blob/main/SKILL.md) is the playbook for generating a dataset with `simula`, and
+[`AGENTS.md`](https://github.com/Mercity-AI/Simula/blob/main/AGENTS.md) is the guide to changing the code.
 
 ## Development
 
@@ -82,7 +90,8 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-To preview the docs locally:
+The docs source is in [`docs/`](https://github.com/Mercity-AI/Simula/tree/main/docs) (Markdown, built with Sphinx); Read the Docs publishes `latest`
+from `main`. To preview locally:
 
 ```bash
 pip install -r docs/requirements.txt sphinx-autobuild
@@ -91,4 +100,4 @@ sphinx-autobuild docs docs/_build/html
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/Mercity-AI/Simula/blob/main/LICENSE).

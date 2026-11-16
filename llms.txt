@@ -20,7 +20,8 @@ The docs below are the source of truth — read them rather than this file.
 
 ## Docs
 
-- [docs/index.md](docs/index.md): the documentation site (Sphinx + MyST, built by Read the Docs).
+- [docs/index.md](docs/index.md): the documentation site (Sphinx + MyST), published at
+  https://simula.readthedocs.io/en/latest/.
 - [docs/concepts/pipeline.md](docs/concepts/pipeline.md): the stages of a run, attempts, stop/edit/continue,
   resume. The other `docs/concepts/` pages cover the taxonomy, sampling, situations and meta-prompts, model
   roles and evaluation (incl. the lineage-vs-verified coverage caveat).

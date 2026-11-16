@@ -312,7 +312,9 @@ Complexity scoring is optional and makes extra model calls.
 ## Documentation
 
 User docs live in `docs/`: Markdown pages (MyST) built by Sphinx with the Furo theme, published by Read the
-Docs from `.readthedocs.yaml`. `README.md` is the short front page and links into them. When behavior,
+Docs from `.readthedocs.yaml` at https://simula.readthedocs.io/en/latest/. `README.md` is the short front
+page and links into the published site with absolute URLs (so they work on GitHub and PyPI); a new page
+needs a link there too. When behavior,
 config or artifacts change, update the page that describes it (the reference pages are the field and
 artifact lists) and build with warnings as errors, which catches broken links:
 

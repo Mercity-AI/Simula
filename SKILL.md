@@ -506,4 +506,5 @@ Work through all of these. Each line says what to look at and what to do when it
 | `ecommerce_search_extraction.yaml` + `ecommerce_search_extraction_prompts.py` | per-row varying schema; the reference for the combined path (5 per call, critic on, about $0.40 per 1K rows in our pilot) |
 
 More: concepts and pipeline in `docs/concepts/`, batching and cost in `docs/guides/`, every field in
-`docs/reference/configuration.md`, architecture and constraints in `AGENTS.md`.
+`docs/reference/configuration.md`, architecture and constraints in `AGENTS.md`. The same docs are
+published at https://simula.readthedocs.io/en/latest/.

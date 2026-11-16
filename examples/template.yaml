@@ -98,7 +98,7 @@ evaluation:
   complexity_samples_per_item: 2  # shuffled batches each record appears in (more = stabler, pricier)
   decontaminate_against: []    # paths to reference/test JSONL to drop overlapping rows against
   diversity:
-    enabled: false             # embedding diversity; needs `pip install 'simula[diversity]'`
+    enabled: false             # embedding diversity; needs `pip install 'simula-gen[diversity]'`
     embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
     k_local: 10                # nearest neighbours for the local-diversity metric
     sample_cap: 1000           # max rows embedded; beyond this a random subset is scored
