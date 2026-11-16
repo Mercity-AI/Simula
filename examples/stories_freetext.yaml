@@ -123,7 +123,7 @@ evaluation:
   coverage_mode: "lineage"
   complexity: false
   # Embedding diversity is genuinely useful for a story set (catches semantic near-dupes n-gram misses),
-  # but needs the extra dep: pip install 'simula[diversity]'. Flip enabled: true to use it.
+  # but needs the extra dep: pip install 'simula-gen[diversity]'. Flip enabled: true to use it.
   diversity:
     enabled: false
     text_field: null           # free-text records are plain strings, so the whole story is embedded

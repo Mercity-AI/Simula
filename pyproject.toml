@@ -1,13 +1,14 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "simula"
-version = "0.1.0"
+name = "simula-gen"
+version = "0.2.0"
 description = "Schema-driven synthetic data generator inspired by reasoning-first taxonomy coverage."
+readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
 dependencies = [
   "jsonschema>=4.22.0",
   "openai>=1.50.0",
@@ -17,6 +18,10 @@ dependencies = [
   "rich>=13.0.0",
 ]
 
+[project.urls]
+Documentation = "https://simula.readthedocs.io/en/latest/"
+Source = "https://github.com/Mercity-AI/Simula"
+
 [project.optional-dependencies]
 diversity = [
   "numpy>=1.26.0",
@@ -24,7 +29,7 @@ diversity = [
   "sentence-transformers>=2.7.0",
 ]
 dev = [
-  "simula[diversity]",
+  "simula-gen[diversity]",
   "pytest>=8.0.0",
   "pytest-asyncio>=0.23.0",
 ]
