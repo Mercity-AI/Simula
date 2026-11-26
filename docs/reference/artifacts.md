@@ -18,6 +18,7 @@ the first four are meant to be edited: a rerun reuses any of them that exist.
 | `llm_calls.jsonl` | every command | One row per model response, appended as soon as it returns. |
 | `cost_summary.json` | every command | Calls, tokens and cost for the last command, per role, task and model. |
 | `embeddings.cache.npz` | `evaluate`, `run` | Cached embeddings for the diversity metrics. |
+| `hub/` | `push` | What `push` uploads: the dataset card `README.md`, `data/train.jsonl` and the plan files. Rebuilt on every push. |
 
 To regenerate a stage, delete its file and rerun. To stop at a stage and edit its file first, use
 `--stop-after` (see [CLI](cli.md)).

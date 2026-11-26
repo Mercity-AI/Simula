@@ -8,6 +8,7 @@ from .config import load_config
 from .console import error, info, phase, set_quiet
 from .evaluate import run_evaluation
 from .generate import generate_dataset
+from .hub import push_to_hub, stage_for_hub
 from .models import ModelRouter
 from .taxonomy import build_taxonomy
 from .utils import artifact_path, summarize_cost, write_json
@@ -50,6 +51,13 @@ async def _main(argv: list[str] | None = None) -> int:
                 choices=["taxonomy", "strategies", "meta_prompts", "none"],
                 help="Halt once this stage's artifact is written, so it can be edited before rerunning. Overrides generation.stop_after; 'none' disables a config-set stop.",
             )
+    push = sub.add_parser("push", help="Upload the run's dataset to the Hugging Face Hub with a dataset card.")
+    push.add_argument("config")
+    push.add_argument("--repo", required=True, help="Hub dataset id, OWNER/NAME.")
+    push.add_argument("--private", action="store_true", help="Create the dataset repo as private.")
+    push.add_argument("--license", dest="license_id", help="License id for the card metadata, e.g. mit or cc-by-4.0.")
+    push.add_argument("--dry-run", action="store_true", help="Write the card and files to <output_dir>/hub/ without uploading.")
+    push.add_argument("--quiet", action="store_true", help=argparse.SUPPRESS)
 
     args = parser.parse_args(argv)
     set_quiet(getattr(args, "quiet", False))
@@ -59,6 +67,25 @@ async def _main(argv: list[str] | None = None) -> int:
         cfg = load_config(args.config)
         if getattr(args, "stop_after", None):
             cfg.generation.stop_after = None if args.stop_after == "none" else args.stop_after
+
+        # Push makes no model calls, so it builds no router and leaves cost_summary.json as the run left it.
+        if args.command == "push":
+            stage = stage_for_hub(
+                output_dir=cfg.output_dir,
+                repo_id=args.repo,
+                pretty_name=cfg.project.name,
+                description=cfg.description,
+                output_format=cfg.output_format,
+                models={role: getattr(cfg.models, role).model for role in ("strategic", "bulk", "critic")},
+                license_id=args.license_id,
+            )
+            if args.dry_run:
+                info(f"Staged the dataset card and files in {stage} (dry run, nothing uploaded)")
+                return 0
+            url = push_to_hub(stage, args.repo, private=args.private)
+            info(f"Pushed to {url}")
+            return 0
+
         router = ModelRouter(cfg.data)
 
         # Validate prints static run information and does not invoke any model calls.

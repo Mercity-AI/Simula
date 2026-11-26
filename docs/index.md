@@ -85,6 +85,7 @@ guides/cost
 guides/custom-prompts
 guides/providers-and-models
 guides/running-a-pilot
+guides/sharing-on-the-hub
 ```
 
 ```{toctree}

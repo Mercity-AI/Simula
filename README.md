@@ -73,7 +73,8 @@ The full documentation is at **[simula.readthedocs.io](https://simula.readthedoc
   [Cost](https://simula.readthedocs.io/en/latest/guides/cost.html),
   [Custom prompts](https://simula.readthedocs.io/en/latest/guides/custom-prompts.html),
   [Providers and models](https://simula.readthedocs.io/en/latest/guides/providers-and-models.html),
-  [Running a pilot](https://simula.readthedocs.io/en/latest/guides/running-a-pilot.html)
+  [Running a pilot](https://simula.readthedocs.io/en/latest/guides/running-a-pilot.html),
+  [Sharing on the Hugging Face Hub](https://simula.readthedocs.io/en/latest/guides/sharing-on-the-hub.html)
 - **Reference:** [CLI](https://simula.readthedocs.io/en/latest/reference/cli.html),
   [Configuration](https://simula.readthedocs.io/en/latest/reference/configuration.html),
   [Artifacts](https://simula.readthedocs.io/en/latest/reference/artifacts.html)

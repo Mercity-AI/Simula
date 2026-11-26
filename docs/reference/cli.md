@@ -17,6 +17,7 @@ package, `python -m simula.cli <command> CONFIG.yaml` does the same from a sourc
 | `generate` | Loads or builds the taxonomy, strategies, situations and meta-prompts, then writes, validates and critiques records and writes the dataset files. Does not evaluate. | all roles |
 | `evaluate` | Reads `dataset.final.jsonl`, runs dedupe, decontamination, coverage and the optional scores, and writes `dataset.evaluated.jsonl` and `eval_report.json`. | only for `reassign` coverage and complexity scoring |
 | `run` | `generate`, then `evaluate`. | all roles |
+| `push` | Uploads the dataset to the Hugging Face Hub with a dataset card tagged `simula`. See [Sharing on the Hugging Face Hub](../guides/sharing-on-the-hub.md). | None |
 
 :::{warning}
 `simula taxonomy` always builds a new tree and overwrites `taxonomy.json`. To build the tree once and
@@ -30,6 +31,10 @@ reuse an existing `taxonomy.json`.
 |---|---|---|
 | `--quiet` | all | Hide live spinners, progress bars and the taxonomy build log. Phase markers and the final summary still print. |
 | `--resume` / `--no-resume` | `generate`, `run` | Resume is the default: attempts already in `dataset.raw.jsonl` are skipped. `--no-resume` empties the dataset files and makes every attempt again; the taxonomy, strategies, situations and meta-prompts are still reused. |
+| `--repo OWNER/NAME` | `push` | The Hub dataset to create or update. Required. |
+| `--private` | `push` | Create the dataset repository as private. |
+| `--license ID` | `push` | Put a license id (`mit`, `cc-by-4.0`, …) in the card metadata. |
+| `--dry-run` | `push` | Write the card and the files to `hub/` in the output directory and upload nothing. |
 | `--stop-after STAGE` | `generate`, `run` | Halt once a stage's artifact is written so you can edit it: `taxonomy`, `strategies` or `meta_prompts`. Overrides `generation.stop_after`; `none` cancels a stop set in the config. |
 
 ## Resuming

@@ -28,6 +28,9 @@ diversity = [
   "scikit-learn>=1.4.0",
   "sentence-transformers>=2.7.0",
 ]
+hub = [
+  "huggingface_hub>=0.25.0",
+]
 dev = [
   "simula-gen[diversity]",
   "pytest>=8.0.0",

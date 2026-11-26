@@ -2,6 +2,17 @@
 
 Completed work, newest first. Forward-looking items live in the root `TODO.md`.
 
+## Unreleased — `simula push` to the Hugging Face Hub
+
+- **`simula push CONFIG --repo OWNER/NAME`** uploads the dataset (`dataset.evaluated.jsonl` when it
+  exists, else `dataset.final.jsonl`) as `data/train.jsonl`, with `taxonomy.json`, `strategies.json`,
+  `eval_report.json` and a generated dataset card. `--dry-run` writes it all to `hub/` in the output
+  directory and uploads nothing. Needs the new `hub` extra (`huggingface_hub`); the token is `HF_TOKEN`
+  in `.env`, else the `hf auth login` session.
+- **The card is tagged `simula`, `simula-<version>` and `synthetic`.** The `simula` tag is the one the
+  Hub matches to a registered dataset library, so pushed datasets name `simula` as the library that
+  made them. `llm_calls.jsonl` and `run_state.json` are never uploaded.
+
 ## 2026-11-11 — Subject and situations, strategy skew warning, pilot rule
 
 Follows a round of benchmarks on support tickets (GLM 5.3 Flash; 1,000-ticket arms, one 10,000-ticket

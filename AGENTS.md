@@ -16,7 +16,7 @@ The project is intentionally small. Prefer clear, boring code over architectural
 
 Core package:
 
-- `simula/cli.py`: CLI command dispatch for `validate`, `taxonomy`, `generate`, `evaluate`, and `run`.
+- `simula/cli.py`: CLI command dispatch for `validate`, `taxonomy`, `generate`, `evaluate`, `run`, and `push`.
 - `simula/data_models.py`: Pydantic config models (the single source of defaults + validation) and the `TaskType` enum naming every model-call site. Import-leaf (no simula imports) so config/models/generate can all use it without cycles.
 - `simula/config.py`: YAML loading, Pydantic validation/defaults, `.env`-only API-key resolution (`resolve_api_key`), JSON Schema subset checks. `load_config` returns the validated `Config`; `cfg.data` is its derived dict view.
 - `simula/console.py`: rich-based human-facing console output — the run header, phase markers (`phase`), indeterminate-phase spinners (`spinner`), the generation progress bar (`track`), and the taxonomy build logger (`taxonomy_logger` returning a `TaxonomyLogger`: a live-growing tree or flat `light` breadcrumbs, chosen by `taxonomy.log_style`), plus warnings and the taxonomy review prompt. This is the single progress system (rich, no tqdm dependency); only one live display runs at a time, so phases stay sequential (e.g. the taxonomy tree closes before the review prompt). On a TTY displays render live; off a TTY the tree prints once on close and spinners/bars fall back to plain lines; `--quiet` keeps phase markers + summary but renders no live display. Separate from the machine-readable `llm_calls.jsonl` audit log.
@@ -26,6 +26,7 @@ Core package:
 - `simula/generate.py`: generation orchestration, the meta-prompt phase (batch-generates `meta_prompts.jsonl` with complexification), JSON generation/repair, critic/refine loop, concurrent workers, stage stops (`generation.stop_after`), final trimming.
 - `simula/evaluate.py`: schema validation, dedupe, coverage reports, coverage-aware trimming, optional complexity scoring.
 - `simula/diversity.py`: optional embedding-based diversity scoring used by evaluation (deps live in the `[diversity]` extra; imported lazily only when diversity is enabled).
+- `simula/hub.py`: `push` support. `stage_for_hub` writes `<output_dir>/hub/` (a dataset card plus the dataset and plan files) with no network; `push_to_hub` uploads it with `huggingface_hub`, an optional extra imported only there. The card's `simula` tag is how the Hub names the generating library: keep it first and unversioned. `llm_calls.jsonl`, `run_state.json` and the raw/accepted files never go in the stage.
 - `simula/utils.py`: artifact names, JSON/JSONL helpers, timestamps, JSON extraction, record-to-text, checkpoint helpers, and `summarize_cost` (written to `cost_summary.json`).
 
 Examples:
@@ -47,6 +48,7 @@ Tests:
 - `tests/test_models.py`
 - `tests/test_taxonomy_sampling.py`
 - `tests/test_diversity.py`
+- `tests/test_hub.py`
 
 Pilot tooling (not part of the package): `analysis/` holds the scripts behind the cost/quality tables in
 `plan.md` (arm configs, stall watcher, cost/shape/diversity analysis, the blind judge) and the experimental

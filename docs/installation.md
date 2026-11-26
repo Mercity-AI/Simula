@@ -31,6 +31,7 @@ from the checkout as `python -m simula.cli`.
 | Extra | Install | For |
 |---|---|---|
 | `diversity` | `pip install "simula-gen[diversity]"` | Embedding-based diversity metrics in `evaluate`. Pulls in numpy, scikit-learn and sentence-transformers (and PyTorch), so it is large. |
+| `hub` | `pip install "simula-gen[hub]"` | `simula push`, which uploads a dataset to the Hugging Face Hub. Pulls in huggingface_hub. |
 | `dev` | `pip install -e ".[dev]"` (source checkout) | Running the test suite: `pytest -q`. |
 
 The base install is light: an OpenAI client, Pydantic, PyYAML, jsonschema, python-dotenv and rich.
